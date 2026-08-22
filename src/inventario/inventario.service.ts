@@ -4,10 +4,12 @@ import { Repository } from 'typeorm';
 import { ClsService } from 'nestjs-cls';
 import { Inventario } from './entities/inventario.entity';
 import { MovimientoInventario } from './entities/movimiento-inventario.entity';
+import { Producto } from '../productos/entities/producto.entity';
 import { TipoMovimientoInventario } from '../common/enums/tipo-movimiento-inventario.enum';
 import { AjustarStockDto } from './dto/ajustar-stock.dto';
 import { SetStockMinimoDto } from './dto/set-stock-minimo.dto';
 import { KardexQueryDto } from './dto/kardex-query.dto';
+import { AlertasService } from '../alertas/alertas.service';
 
 interface AjustarStockInput extends AjustarStockDto {
   ventaId?: string;
@@ -20,6 +22,9 @@ export class InventarioService {
     private readonly inventarioRepository: Repository<Inventario>,
     @InjectRepository(MovimientoInventario)
     private readonly movimientoRepository: Repository<MovimientoInventario>,
+    @InjectRepository(Producto)
+    private readonly productoRepository: Repository<Producto>,
+    private readonly alertasService: AlertasService,
     private readonly cls: ClsService,
   ) {}
 
@@ -78,6 +83,20 @@ export class InventarioService {
     }
 
     return qb.getMany();
+  }
+
+  /** No bloquea la operación de stock si falla — es una notificación, no una regla de negocio. */
+  private async verificarStockPostAjuste(inventario: Inventario): Promise<void> {
+    try {
+      const producto = await this.productoRepository.findOne({
+        where: { id: inventario.productoId },
+      });
+      if (producto) {
+        await this.alertasService.verificarStockItem(inventario, producto.nombre);
+      }
+    } catch {
+      // no crítico — se recupera de todos modos en la próxima corrida del cron
+    }
   }
 
   async setStockMinimo(dto: SetStockMinimoDto): Promise<Inventario> {
@@ -152,6 +171,7 @@ export class InventarioService {
 
     inventario.cantidad = cantidadNueva;
     await this.inventarioRepository.save(inventario);
+    await this.verificarStockPostAjuste(inventario);
 
     await this.movimientoRepository.save(
       this.movimientoRepository.create({

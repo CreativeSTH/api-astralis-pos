@@ -17,6 +17,16 @@ export class Alerta extends BaseEntity {
   @Column({ name: 'referencia_id', nullable: true })
   referenciaId?: string;
 
+  /** Solo poblado en alertas de stock (STOCK_BAJO/PRODUCTO_AGOTADO) — permite
+   * ofrecer acciones directas ("Añadir a lista de pedidos") sin tener que
+   * resolver `referenciaId` (el id del Inventario) de vuelta al producto. */
+  @Column({ name: 'producto_id', nullable: true })
+  productoId?: string;
+
+  /** Solo poblado en alertas tipo REGLA — de qué `ReglaAlerta` salió. */
+  @Column({ name: 'regla_id', nullable: true })
+  reglaId?: string;
+
   @Column()
   mensaje: string;
 
@@ -25,4 +35,9 @@ export class Alerta extends BaseEntity {
 
   @Column({ default: false })
   resuelta: boolean;
+
+  /** Distinto de `resuelta`: permite silenciar una alerta (típicamente una
+   * personalizada) sin marcarla como atendida — el cron nunca la reactiva. */
+  @Column({ default: true })
+  activa: boolean;
 }

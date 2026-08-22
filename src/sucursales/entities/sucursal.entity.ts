@@ -21,6 +21,16 @@ export class Sucursal extends BaseEntity {
   @Column({ nullable: true })
   telefono?: string;
 
+  /** 0/null = sin meta definida — no se evalúa la alerta de meta no alcanzada. */
+  @Column({
+    name: 'meta_ventas_diaria',
+    type: 'numeric',
+    precision: 12,
+    scale: 2,
+    nullable: true,
+  })
+  metaVentasDiaria?: number;
+
   @Column({ default: true })
   activo: boolean;
 }

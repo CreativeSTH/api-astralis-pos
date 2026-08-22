@@ -24,6 +24,7 @@ import { CajaService } from '../caja/caja.service';
 import { ClientesService } from '../clientes/clientes.service';
 import { AuthService } from '../auth/auth.service';
 import { PermisosService } from '../roles/permisos.service';
+import { AlertasService } from '../alertas/alertas.service';
 import { ModuloPermiso } from '../common/enums/modulo-permiso.enum';
 import { AccionPermiso } from '../common/enums/accion-permiso.enum';
 import { CreateVentaDto } from './dto/create-venta.dto';
@@ -38,11 +39,14 @@ export class VentasService {
   constructor(
     @InjectRepository(Venta)
     private readonly ventasRepository: Repository<Venta>,
+    @InjectRepository(Inventario)
+    private readonly inventarioRepository: Repository<Inventario>,
     private readonly dataSource: DataSource,
     private readonly cajaService: CajaService,
     private readonly clientesService: ClientesService,
     private readonly authService: AuthService,
     private readonly permisos: PermisosService,
+    private readonly alertasService: AlertasService,
     private readonly cls: ClsService,
   ) {}
 
@@ -83,10 +87,37 @@ export class VentasService {
 
   /** Punto de entrada único: crea venta CONTADO o CREDITO según `dto.tipoVenta`. */
   async crear(dto: CreateVentaDto): Promise<Venta> {
-    if (dto.tipoVenta === TipoVenta.CREDITO) {
-      return this.crearVentaCredito(dto);
+    const venta =
+      dto.tipoVenta === TipoVenta.CREDITO
+        ? await this.crearVentaCredito(dto)
+        : await this.crearVentaContado(dto);
+    await this.verificarStockPostVenta(venta);
+    return venta;
+  }
+
+  /**
+   * Después de confirmada la venta (fuera de la transacción, para no atar la
+   * venta ya cobrada a que la generación de alertas salga bien), revisa el
+   * inventario de cada producto vendido — si quedó en 0 o por debajo del
+   * mínimo, la alerta aparece de inmediato en vez de esperar al cron.
+   */
+  private async verificarStockPostVenta(venta: Venta): Promise<void> {
+    for (const item of venta.items) {
+      try {
+        const inventario = await this.inventarioRepository.findOne({
+          where: {
+            negocioId: venta.negocioId,
+            productoId: item.productoId,
+            bodegaId: venta.bodegaId,
+          },
+        });
+        if (inventario) {
+          await this.alertasService.verificarStockItem(inventario, item.nombreProducto);
+        }
+      } catch {
+        // no crítico — se recupera de todos modos en la próxima corrida del cron
+      }
     }
-    return this.crearVentaContado(dto);
   }
 
   /**

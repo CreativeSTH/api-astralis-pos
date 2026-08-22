@@ -11,6 +11,8 @@ import { CajaModule } from '../caja/caja.module';
 import { ClientesModule } from '../clientes/clientes.module';
 import { AuthModule } from '../auth/auth.module';
 import { RolesModule } from '../roles/roles.module';
+import { AlertasModule } from '../alertas/alertas.module';
+import { Inventario } from '../inventario/entities/inventario.entity';
 
 @Module({
   imports: [
@@ -20,11 +22,13 @@ import { RolesModule } from '../roles/roles.module';
       VentaPago,
       Cuota,
       RegistroPagoCuota,
+      Inventario,
     ]),
     CajaModule,
     ClientesModule,
     AuthModule,
     RolesModule,
+    AlertasModule,
   ],
   controllers: [VentasController],
   providers: [VentasService],

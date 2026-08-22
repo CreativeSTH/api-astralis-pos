@@ -27,6 +27,7 @@ import { CajaModule } from './caja/caja.module';
 import { VentasModule } from './ventas/ventas.module';
 import { CobrosModule } from './cobros/cobros.module';
 import { AlertasModule } from './alertas/alertas.module';
+import { ListaPedidosModule } from './lista-pedidos/lista-pedidos.module';
 import { ReportesModule } from './reportes/reportes.module';
 import { HealthModule } from './health/health.module';
 
@@ -75,6 +76,7 @@ import { HealthModule } from './health/health.module';
     VentasModule,
     CobrosModule,
     AlertasModule,
+    ListaPedidosModule,
     ReportesModule,
     HealthModule,
   ],
