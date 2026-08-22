@@ -6,6 +6,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
@@ -46,8 +47,8 @@ export class CajaController {
 
   @Get('turnos')
   @RequierePermiso(ModuloPermiso.CAJA, AccionPermiso.VER)
-  findAll() {
-    return this.cajaService.findAll();
+  findAll(@Query('sucursalId') sucursalId?: string) {
+    return this.cajaService.findAll(sucursalId);
   }
 
   @Get('turnos/:id')

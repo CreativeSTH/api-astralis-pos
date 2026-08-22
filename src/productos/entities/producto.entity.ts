@@ -1,4 +1,4 @@
-import { Column, Entity, Index, JoinColumn, ManyToOne } from 'typeorm';
+import { Column, Entity, Index, JoinColumn, JoinTable, ManyToMany, ManyToOne } from 'typeorm';
 import { BaseEntity } from '../../common/entities/base.entity';
 import { Categoria } from '../../categorias/entities/categoria.entity';
 import { Marca } from '../../marcas/entities/marca.entity';
@@ -16,12 +16,13 @@ export class Producto extends BaseEntity {
   @Column({ name: 'negocio_id' })
   negocioId: string;
 
-  @Column({ name: 'categoria_id', nullable: true })
-  categoriaId?: string;
-
-  @ManyToOne(() => Categoria, { onDelete: 'SET NULL', nullable: true })
-  @JoinColumn({ name: 'categoria_id' })
-  categoria?: Categoria;
+  @ManyToMany(() => Categoria)
+  @JoinTable({
+    name: 'producto_categorias',
+    joinColumn: { name: 'producto_id' },
+    inverseJoinColumn: { name: 'categoria_id' },
+  })
+  categorias: Categoria[];
 
   @Column({ name: 'marca_id', nullable: true })
   marcaId?: string;

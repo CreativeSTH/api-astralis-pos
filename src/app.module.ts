@@ -4,6 +4,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { ClsModule } from 'nestjs-cls';
+import { ScheduleModule } from '@nestjs/schedule';
 
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
@@ -36,6 +37,7 @@ import { HealthModule } from './health/health.module';
       global: true,
       middleware: { mount: true },
     }),
+    ScheduleModule.forRoot(),
     ThrottlerModule.forRoot([
       { name: 'short', ttl: 1000, limit: 10 },
       { name: 'medium', ttl: 10000, limit: 50 },

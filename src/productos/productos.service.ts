@@ -4,12 +4,13 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { ClsService } from 'nestjs-cls';
 import { unlink } from 'fs/promises';
 import { join } from 'path';
 import { TenantBaseService } from '../common/services/tenant-base.service';
 import { Producto } from './entities/producto.entity';
+import { Categoria } from '../categorias/entities/categoria.entity';
 import { CreateProductoDto } from './dto/create-producto.dto';
 import { UpdateProductoDto } from './dto/update-producto.dto';
 import { TipoImpuesto } from '../common/enums/tipo-impuesto.enum';
@@ -20,6 +21,8 @@ import { InventarioService } from '../inventario/inventario.service';
 export class ProductosService extends TenantBaseService<Producto> {
   constructor(
     @InjectRepository(Producto) repository: Repository<Producto>,
+    @InjectRepository(Categoria)
+    private readonly categoriasRepository: Repository<Categoria>,
     cls: ClsService,
     private readonly inventarioService: InventarioService,
   ) {
@@ -27,11 +30,22 @@ export class ProductosService extends TenantBaseService<Producto> {
   }
 
   findAll() {
-    return this.findAllForTenant({ activo: true });
+    return this.findAllForTenant({ activo: true }, { categorias: true });
   }
 
   findOne(id: string) {
-    return this.findOneForTenant(id);
+    return this.findOneForTenant(id, { categorias: true });
+  }
+
+  /** Nunca confía en IDs crudos del cliente sin validar que la categoría pertenezca al negocio del tenant. */
+  private async resolverCategorias(
+    categoriaIds?: string[],
+  ): Promise<Categoria[] | undefined> {
+    if (categoriaIds === undefined) return undefined;
+    if (categoriaIds.length === 0) return [];
+    return this.categoriasRepository.find({
+      where: { id: In(categoriaIds), negocioId: this.getNegocioId() },
+    });
   }
 
   /** Usado por el flujo de venta al escanear un código de barras. */
@@ -64,9 +78,12 @@ export class ProductosService extends TenantBaseService<Producto> {
         );
       }
     }
-    const { stockInicial, ...datosProducto } = this.normalizarImpuesto(dto);
+    const { stockInicial, categoriaIds, ...datosProducto } =
+      this.normalizarImpuesto(dto);
+    const categorias = await this.resolverCategorias(categoriaIds);
     const producto = await this.createForTenant({
       ...datosProducto,
+      categorias,
       imagenUrl: imagen ? this.buildImagenUrl(imagen) : undefined,
     });
 
@@ -91,18 +108,27 @@ export class ProductosService extends TenantBaseService<Producto> {
     dto: UpdateProductoDto,
     imagen?: Express.Multer.File,
   ): Promise<Producto> {
-    const datosProducto = this.quitarStockInicial(this.normalizarImpuesto(dto));
-    if (!imagen) {
-      return this.updateForTenant(id, datosProducto);
-    }
+    const { categoriaIds, ...resto } = this.quitarStockInicial(
+      this.normalizarImpuesto(dto),
+    );
+    const categorias = await this.resolverCategorias(categoriaIds);
 
-    const anterior = await this.findOneForTenant(id);
-    const actualizado = await this.updateForTenant(id, {
-      ...datosProducto,
-      imagenUrl: this.buildImagenUrl(imagen),
-    });
-    if (anterior.imagenUrl) {
-      await this.eliminarArchivoImagen(anterior.imagenUrl);
+    // Cargar con `categorias` ya poblado es necesario para que TypeORM pueda
+    // reconciliar la tabla join (quitar los vínculos viejos que ya no aplican),
+    // no solo insertar los nuevos — ver nota de riesgo en el plan de esta fase.
+    const producto = await this.findOneForTenant(id, { categorias: true });
+    const imagenAnterior = producto.imagenUrl;
+    Object.assign(producto, resto);
+    if (categorias !== undefined) {
+      producto.categorias = categorias;
+    }
+    if (imagen) {
+      producto.imagenUrl = this.buildImagenUrl(imagen);
+    }
+    const actualizado = await this.repository.save(producto);
+
+    if (imagen && imagenAnterior) {
+      await this.eliminarArchivoImagen(imagenAnterior);
     }
     return actualizado;
   }

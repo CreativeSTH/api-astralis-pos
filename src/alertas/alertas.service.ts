@@ -37,8 +37,12 @@ export class AlertasService {
       resuelta?: boolean;
     } = {},
   ) {
+    const where: Record<string, unknown> = { negocioId: this.getNegocioId() };
+    if (filtros.tipo !== undefined) where.tipo = filtros.tipo;
+    if (filtros.severidad !== undefined) where.severidad = filtros.severidad;
+    if (filtros.resuelta !== undefined) where.resuelta = filtros.resuelta;
     return this.alertasRepository.find({
-      where: { negocioId: this.getNegocioId(), ...filtros },
+      where,
       order: { createdAt: 'DESC' },
     });
   }
@@ -71,6 +75,17 @@ export class AlertasService {
       throw new NotFoundException(`Alerta con ID ${id} no encontrada`);
     }
     alerta.resuelta = true;
+    return this.alertasRepository.save(alerta);
+  }
+
+  async marcarLeida(id: string): Promise<Alerta> {
+    const alerta = await this.alertasRepository.findOne({
+      where: { id, negocioId: this.getNegocioId() },
+    });
+    if (!alerta) {
+      throw new NotFoundException(`Alerta con ID ${id} no encontrada`);
+    }
+    alerta.leida = true;
     return this.alertasRepository.save(alerta);
   }
 

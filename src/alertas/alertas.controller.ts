@@ -55,4 +55,10 @@ export class AlertasController {
   resolver(@Param('id', ParseUUIDPipe) id: string) {
     return this.alertasService.resolver(id);
   }
+
+  @Patch(':id/leida')
+  @RequierePermiso(ModuloPermiso.ALERTAS, AccionPermiso.EDITAR)
+  marcarLeida(@Param('id', ParseUUIDPipe) id: string) {
+    return this.alertasService.marcarLeida(id);
+  }
 }

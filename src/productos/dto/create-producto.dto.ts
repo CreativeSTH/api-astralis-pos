@@ -33,10 +33,18 @@ export class CreateProductoDto {
   @IsString()
   codigoBarras?: string;
 
-  @ApiProperty({ required: false })
+  @ApiProperty({
+    required: false,
+    type: [String],
+    description: 'IDs de categoría (llega como JSON string en multipart) — un producto puede tener varias.',
+  })
   @IsOptional()
-  @IsUUID()
-  categoriaId?: string;
+  @Transform(({ value }: { value: unknown }): unknown =>
+    typeof value === 'string' ? (JSON.parse(value) as unknown) : value,
+  )
+  @IsArray()
+  @IsUUID('4', { each: true })
+  categoriaIds?: string[];
 
   @ApiProperty({ required: false })
   @IsOptional()

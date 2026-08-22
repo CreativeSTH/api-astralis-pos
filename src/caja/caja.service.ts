@@ -45,9 +45,13 @@ export class CajaService {
     return this.cls.get<string>('usuarioId');
   }
 
-  findAll() {
+  findAll(sucursalId?: string) {
     return this.turnosRepository.find({
-      where: { negocioId: this.getNegocioId() },
+      where: {
+        negocioId: this.getNegocioId(),
+        ...(sucursalId ? { sucursalId } : {}),
+      },
+      relations: { usuarioApertura: true, usuarioCierre: true },
       order: { fechaApertura: 'DESC' },
     });
   }
