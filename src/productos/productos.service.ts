@@ -16,6 +16,7 @@ import { UpdateProductoDto } from './dto/update-producto.dto';
 import { TipoImpuesto } from '../common/enums/tipo-impuesto.enum';
 import { TipoMovimientoInventario } from '../common/enums/tipo-movimiento-inventario.enum';
 import { InventarioService } from '../inventario/inventario.service';
+import { ProveedoresService } from '../proveedores/proveedores.service';
 
 @Injectable()
 export class ProductosService extends TenantBaseService<Producto> {
@@ -25,6 +26,7 @@ export class ProductosService extends TenantBaseService<Producto> {
     private readonly categoriasRepository: Repository<Categoria>,
     cls: ClsService,
     private readonly inventarioService: InventarioService,
+    private readonly proveedoresService: ProveedoresService,
   ) {
     super(repository, cls, 'Producto');
   }
@@ -78,7 +80,7 @@ export class ProductosService extends TenantBaseService<Producto> {
         );
       }
     }
-    const { stockInicial, categoriaIds, ...datosProducto } =
+    const { stockInicial, categoriaIds, proveedores, ...datosProducto } =
       this.normalizarImpuesto(dto);
     const categorias = await this.resolverCategorias(categoriaIds);
     const producto = await this.createForTenant({
@@ -97,6 +99,19 @@ export class ProductosService extends TenantBaseService<Producto> {
           cantidad: Number(item.cantidad),
           motivo: 'Carga inicial',
         });
+      }
+    }
+
+    if (proveedores?.length) {
+      for (const fila of proveedores) {
+        if (
+          !fila ||
+          !(Number(fila.costo) >= 0) ||
+          (!fila.proveedorId && !fila.proveedorNuevo)
+        ) {
+          continue;
+        }
+        await this.proveedoresService.vincularProducto(producto.id, fila);
       }
     }
 
@@ -148,15 +163,20 @@ export class ProductosService extends TenantBaseService<Producto> {
   }
 
   /**
-   * `stockInicial` no es una columna de Producto — solo se usa en create() para
-   * cargar inventario tras guardar. En update() no se actúa sobre stock (eso
-   * sigue el flujo de "Ajustar stock"), así que aquí solo se necesita el tipo
-   * sin ese campo para que updateForTenant lo acepte.
+   * `stockInicial` y `proveedores` no son columnas de Producto — solo se usan en
+   * create() para cargar inventario/vínculos de proveedor tras guardar. En
+   * update() ninguno de los dos se toca (stock sigue el flujo de "Ajustar
+   * stock", proveedores el de los endpoints `/proveedores/producto/:id`), así
+   * que aquí solo se necesita el tipo sin esos campos para que updateForTenant
+   * lo acepte.
    */
-  private quitarStockInicial<T extends { stockInicial?: unknown }>(
-    dto: T,
-  ): Omit<T, 'stockInicial'> {
-    return dto;
+  private quitarStockInicial<
+    T extends { stockInicial?: unknown; proveedores?: unknown },
+  >(dto: T): Omit<T, 'stockInicial' | 'proveedores'> {
+    const resto = { ...dto };
+    delete resto.stockInicial;
+    delete resto.proveedores;
+    return resto;
   }
 
   private buildImagenUrl(imagen: Express.Multer.File): string {

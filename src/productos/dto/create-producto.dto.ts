@@ -12,6 +12,7 @@ import {
 import { UnidadMedida } from '../../common/enums/unidad-medida.enum';
 import { TipoImpuesto } from '../../common/enums/tipo-impuesto.enum';
 import { StockInicialDto } from './stock-inicial.dto';
+import { VincularProveedorDto } from '../../proveedores/dto/vincular-proveedor.dto';
 
 export class CreateProductoDto {
   @ApiProperty()
@@ -36,7 +37,8 @@ export class CreateProductoDto {
   @ApiProperty({
     required: false,
     type: [String],
-    description: 'IDs de categoría (llega como JSON string en multipart) — un producto puede tener varias.',
+    description:
+      'IDs de categoría (llega como JSON string en multipart) — un producto puede tener varias.',
   })
   @IsOptional()
   @Transform(({ value }: { value: unknown }): unknown =>
@@ -103,4 +105,18 @@ export class CreateProductoDto {
   )
   @IsArray()
   stockInicial?: StockInicialDto[];
+
+  @ApiProperty({
+    required: false,
+    type: [VincularProveedorDto],
+    description:
+      'Proveedores a vincular al crear el producto (llega como JSON string en multipart). ' +
+      'Igual que stockInicial, no se valida a nivel de DTO — ProductosService valida cada fila antes de usarla.',
+  })
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }): unknown =>
+    typeof value === 'string' ? (JSON.parse(value) as unknown) : value,
+  )
+  @IsArray()
+  proveedores?: VincularProveedorDto[];
 }

@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { LessThan, Repository } from 'typeorm';
+import { LessThan, Not, Repository } from 'typeorm';
 import { ClsService } from 'nestjs-cls';
 import { Alerta } from './entities/alerta.entity';
 import { ReglaAlerta } from './entities/regla-alerta.entity';
@@ -17,6 +17,8 @@ import { ItemPedido } from '../lista-pedidos/entities/item-pedido.entity';
 import { TurnoCaja } from '../caja/entities/turno-caja.entity';
 import { EstadoVenta } from '../common/enums/venta.enum';
 import { EstadoTurnoCaja } from '../common/enums/caja.enum';
+import { EstadoItemPedido } from '../common/enums/estado-item-pedido.enum';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
 
 @Injectable()
 export class AlertasService {
@@ -40,6 +42,7 @@ export class AlertasService {
     @InjectRepository(TurnoCaja)
     private readonly turnosRepository: Repository<TurnoCaja>,
     private readonly cls: ClsService,
+    private readonly realtimeGateway: RealtimeGateway,
   ) {}
 
   private getNegocioId(): string {
@@ -138,7 +141,10 @@ export class AlertasService {
     );
   }
 
-  async actualizarRegla(id: string, dto: UpdateReglaAlertaDto): Promise<ReglaAlerta> {
+  async actualizarRegla(
+    id: string,
+    dto: UpdateReglaAlertaDto,
+  ): Promise<ReglaAlerta> {
     const regla = await this.reglasRepository.findOne({
       where: { id, negocioId: this.getNegocioId() },
     });
@@ -146,7 +152,8 @@ export class AlertasService {
       throw new NotFoundException(`Regla con ID ${id} no encontrada`);
     }
     if (dto.nombre !== undefined) regla.nombre = dto.nombre;
-    if (dto.tipoCondicion !== undefined) regla.tipoCondicion = dto.tipoCondicion;
+    if (dto.tipoCondicion !== undefined)
+      regla.tipoCondicion = dto.tipoCondicion;
     if (dto.valor !== undefined) regla.parametros = { valor: dto.valor };
     if (dto.severidad !== undefined) regla.severidad = dto.severidad;
     if (dto.activa !== undefined) regla.activa = dto.activa;
@@ -165,7 +172,9 @@ export class AlertasService {
 
   /** Evalúa todas las reglas activas del negocio — parte del mismo barrido que `generar()`. */
   private async evaluarReglas(negocioId: string): Promise<number> {
-    const reglas = await this.reglasRepository.find({ where: { negocioId, activa: true } });
+    const reglas = await this.reglasRepository.find({
+      where: { negocioId, activa: true },
+    });
     let disparadas = 0;
     for (const regla of reglas) {
       const valor = Number(regla.parametros?.['valor'] ?? 0);
@@ -174,7 +183,11 @@ export class AlertasService {
         case TipoCondicionAlerta.LISTA_PEDIDOS_SIN_RESOLVER: {
           const limite = new Date(Date.now() - valor * 60 * 60 * 1000);
           const items = await this.itemsPedidoRepository.find({
-            where: { negocioId, comprado: false, createdAt: LessThan(limite) },
+            where: {
+              negocioId,
+              estado: Not(EstadoItemPedido.INGRESADO),
+              createdAt: LessThan(limite),
+            },
           });
           for (const item of items) {
             await this.upsert(
@@ -193,7 +206,11 @@ export class AlertasService {
         case TipoCondicionAlerta.TURNO_ABIERTO_MUCHO_TIEMPO: {
           const limite = new Date(Date.now() - valor * 60 * 60 * 1000);
           const turnos = await this.turnosRepository.find({
-            where: { negocioId, estado: EstadoTurnoCaja.ABIERTO, fechaApertura: LessThan(limite) },
+            where: {
+              negocioId,
+              estado: EstadoTurnoCaja.ABIERTO,
+              fechaApertura: LessThan(limite),
+            },
           });
           for (const turno of turnos) {
             await this.upsert(
@@ -212,7 +229,9 @@ export class AlertasService {
           const turnos = await this.turnosRepository
             .createQueryBuilder('turno')
             .where('turno.negocio_id = :negocioId', { negocioId })
-            .andWhere('turno.estado = :estado', { estado: EstadoTurnoCaja.CERRADO })
+            .andWhere('turno.estado = :estado', {
+              estado: EstadoTurnoCaja.CERRADO,
+            })
             .andWhere('turno.descuadre_pagado = false')
             .andWhere('turno.diferencia != 0')
             .andWhere('turno.fecha_cierre < :limite', { limite })
@@ -239,7 +258,9 @@ export class AlertasService {
     const HORA_CORTE = 20;
     if (new Date().getHours() < HORA_CORTE) return 0;
 
-    const sucursales = await this.sucursalesRepository.find({ where: { negocioId, activo: true } });
+    const sucursales = await this.sucursalesRepository.find({
+      where: { negocioId, activo: true },
+    });
     const hoyInicio = new Date();
     hoyInicio.setHours(0, 0, 0, 0);
 
@@ -251,9 +272,13 @@ export class AlertasService {
       const ventasHoy = await this.ventasRepository
         .createQueryBuilder('venta')
         .where('venta.negocio_id = :negocioId', { negocioId })
-        .andWhere('venta.sucursal_id = :sucursalId', { sucursalId: sucursal.id })
+        .andWhere('venta.sucursal_id = :sucursalId', {
+          sucursalId: sucursal.id,
+        })
         .andWhere('venta.created_at >= :hoyInicio', { hoyInicio })
-        .andWhere('venta.estado != :cancelada', { cancelada: EstadoVenta.CANCELADA })
+        .andWhere('venta.estado != :cancelada', {
+          cancelada: EstadoVenta.CANCELADA,
+        })
         .getMany();
       const totalHoy = ventasHoy.reduce((sum, v) => sum + Number(v.total), 0);
 
@@ -488,10 +513,15 @@ export class AlertasService {
     if (existente) {
       existente.severidad = severidad;
       existente.mensaje = mensaje;
-      await this.alertasRepository.save(existente);
+      const actualizada = await this.alertasRepository.save(existente);
+      this.realtimeGateway.emitToNegocio(
+        negocioId,
+        'alertas:cambio',
+        actualizada,
+      );
       return;
     }
-    await this.alertasRepository.save(
+    const creada = await this.alertasRepository.save(
       this.alertasRepository.create({
         negocioId,
         tipo,
@@ -502,5 +532,6 @@ export class AlertasService {
         mensaje,
       }),
     );
+    this.realtimeGateway.emitToNegocio(negocioId, 'alertas:cambio', creada);
   }
 }

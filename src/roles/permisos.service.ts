@@ -51,7 +51,13 @@ export class PermisosService {
     return count > 0;
   }
 
-  /** Crea las filas del catálogo (16 módulos × 4 acciones) que falten. Idempotente. */
+  /**
+   * Crea las filas del catálogo (módulos × 4 acciones) que falten, e idempotentemente
+   * las agrega también a los roles "Administrador" ya existentes de cada negocio —
+   * si no se hiciera esto, un módulo agregado después de que un negocio ya tenía su
+   * rol Administrador creado quedaría invisible para ese negocio hasta que alguien
+   * lo tocara a mano desde /roles.
+   */
   async sembrarCatalogo(): Promise<void> {
     const existentes = await this.permisosRepository.find();
     const existeSet = new Set(existentes.map((p) => `${p.modulo}:${p.accion}`));
@@ -66,8 +72,25 @@ export class PermisosService {
         }
       }
     }
-    if (nuevos.length > 0) {
-      await this.permisosRepository.save(nuevos as Permiso[]);
+    if (nuevos.length === 0) return;
+
+    const guardados = await this.permisosRepository.save(nuevos as Permiso[]);
+    const nuevosDeNegocio = guardados.filter((p) => p.tier === RolTier.NEGOCIO);
+    if (nuevosDeNegocio.length === 0) return;
+
+    const administradores = await this.rolesRepository.find({
+      where: {
+        tier: RolTier.NEGOCIO,
+        esDefault: true,
+        nombre: 'Administrador',
+      },
+      relations: { permisos: true },
+    });
+    for (const rol of administradores) {
+      rol.permisos = [...rol.permisos, ...nuevosDeNegocio];
+    }
+    if (administradores.length > 0) {
+      await this.rolesRepository.save(administradores);
     }
   }
 }

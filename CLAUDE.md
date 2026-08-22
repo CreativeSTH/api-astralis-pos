@@ -19,11 +19,19 @@ API en `http://localhost:3000/api`, Swagger en `http://localhost:3000/docs`.
 
 ⚠️ **Punto crítico, no se puede vulnerar sin que el usuario lo pida explícitamente en el momento:** solo se commitea y pushea a la rama `develop`. `main` se mantiene vacía (solo el commit inicial) hasta que el usuario pida explícitamente el merge/release — nunca abrir, aceptar ni sugerir de iniciativa propia un PR `develop → main`, ni pushear directo a `main`. Convención de commits: `feat:`, `fix:`, `test:`, `chore:`, `docs:`, `refactor:`, `style:`. Detalle completo en [`../docs/ARQUITECTURA.md`](../docs/ARQUITECTURA.md) sección 17.
 
-## Estado (Fases 1–4 del roadmap completas)
+## Estado (Fases 1–4 del roadmap completas + extensiones)
 
-Implementado: Auth (JWT, sin OTP), Negocios (creado por un rol de tier SISTEMA, crea el admin inicial del negocio), Sucursales, Usuarios, Categorías, Productos (con búsqueda por código de barras), Bodegas + Inventario multi-bodega con kardex consultable (`GET /inventario/kardex`), Caja (turnos con arqueo), Ventas **CONTADO** y **CRÉDITO** (cuotas, mora automática) con pagos mixtos, Clientes (cupo de crédito), Cobros, Alertas, Reportes (`ventas`, `márgenes`, `cierres-caja`), y **Roles granulares** (módulo `src/roles/` — ver abajo).
+Implementado: Auth (JWT, sin OTP), Negocios (creado por un rol de tier SISTEMA, crea el admin inicial del negocio), Sucursales, Usuarios, Categorías (2 niveles), Marcas/Líneas, **Proveedores** (`src/proveedores/` — datos + documentos RUT/cámara de comercio/certificación bancaria, y `ProductoProveedor` con costo por proveedor), Productos (multi-categoría, búsqueda por código de barras, proveedores vinculados), Bodegas + Inventario multi-bodega con kardex consultable (`GET /inventario/kardex`), **Lista de pedidos** (`src/lista-pedidos/` — flujo de compra PENDIENTE→PEDIDO→INGRESADO, ver abajo), Caja (turnos con arqueo), Ventas **CONTADO** y **CRÉDITO** (cuotas, mora automática) con pagos mixtos, Clientes (cupo de crédito), Cobros, Alertas (+ push en vivo, ver abajo), Reportes (`ventas`, `márgenes`, `cierres-caja`), y **Roles granulares** (módulo `src/roles/` — ver abajo).
 
-Pendiente (ver Roadmap en el doc de arquitectura): devoluciones/facturación electrónica/tienda online (Fase 5).
+Pendiente (ver Roadmap en el doc de arquitectura): devoluciones/facturación electrónica/tienda online, y **Domicilios** (fase futura — el canal de tiempo real de `src/realtime/` ya está pensado para que ese módulo lo reutilice sin cambios).
+
+## Lista de pedidos — flujo de compra
+
+`ItemPedido` (`src/lista-pedidos/`) tiene tres estados: **PENDIENTE** (se agregó desde una alerta de stock) → **PEDIDO** (`PATCH /lista-pedidos/:id/pedir` fija proveedor/costo/cantidad — hace upsert de `ProductoProveedor` con ese costo) → **INGRESADO** (`PATCH /lista-pedidos/:id/confirmar-ingreso` mueve stock vía `InventarioService.ajustarStock`, actualiza `Producto.costo` y, si el frontend ya resolvió que corresponde, `Producto.precioVenta` — la decisión de "¿subió/bajó el costo, actualizás el precio de venta?" se resuelve en el frontend *antes* de llamar a este endpoint, con una sola llamada). Un ítem `INGRESADO` es historial — no se puede borrar.
+
+## Tiempo real (`src/realtime/`)
+
+`RealtimeGateway` (Socket.IO) es un canal push **genérico por negocio**, no acoplado a ningún dominio. Verifica el JWT a mano en `handleConnection` (los guards HTTP de Nest no aplican a WebSockets) y une el socket a la sala `negocio:{id}`. Expone un único método: `emitToNegocio(negocioId, evento, payload)`. Hoy solo `AlertasService.upsert()` lo llama (evento `alertas:cambio`) — cualquier servicio de negocio nuevo que necesite avisar a las sesiones abiertas de un negocio (ej. un futuro `DomiciliosService` con `domicilios:cambio`) lo reutiliza igual, sin tocar el gateway. Registra su propio `JwtModule` (no importa `AuthModule`) para no crear una dependencia circular.
 
 ## Roles y permisos (Fase 4)
 

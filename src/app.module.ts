@@ -19,6 +19,7 @@ import { UsuariosModule } from './usuarios/usuarios.module';
 import { CategoriasModule } from './categorias/categorias.module';
 import { MarcasModule } from './marcas/marcas.module';
 import { LineasModule } from './lineas/lineas.module';
+import { ProveedoresModule } from './proveedores/proveedores.module';
 import { ClientesModule } from './clientes/clientes.module';
 import { ProductosModule } from './productos/productos.module';
 import { BodegasModule } from './bodegas/bodegas.module';
@@ -30,6 +31,7 @@ import { AlertasModule } from './alertas/alertas.module';
 import { ListaPedidosModule } from './lista-pedidos/lista-pedidos.module';
 import { ReportesModule } from './reportes/reportes.module';
 import { HealthModule } from './health/health.module';
+import { RealtimeModule } from './realtime/realtime.module';
 
 @Module({
   imports: [
@@ -68,6 +70,7 @@ import { HealthModule } from './health/health.module';
     CategoriasModule,
     MarcasModule,
     LineasModule,
+    ProveedoresModule,
     ClientesModule,
     ProductosModule,
     BodegasModule,
@@ -79,6 +82,7 @@ import { HealthModule } from './health/health.module';
     ListaPedidosModule,
     ReportesModule,
     HealthModule,
+    RealtimeModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },

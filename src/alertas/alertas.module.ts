@@ -13,6 +13,7 @@ import { Sucursal } from '../sucursales/entities/sucursal.entity';
 import { ItemPedido } from '../lista-pedidos/entities/item-pedido.entity';
 import { TurnoCaja } from '../caja/entities/turno-caja.entity';
 import { NegociosModule } from '../negocios/negocios.module';
+import { RealtimeModule } from '../realtime/realtime.module';
 
 @Module({
   imports: [
@@ -28,6 +29,7 @@ import { NegociosModule } from '../negocios/negocios.module';
       TurnoCaja,
     ]),
     NegociosModule,
+    RealtimeModule,
   ],
   controllers: [AlertasController],
   providers: [AlertasService, AlertasCronService],
