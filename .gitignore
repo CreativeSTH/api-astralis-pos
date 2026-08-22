@@ -1,0 +1,44 @@
+# compiled output
+/dist
+/node_modules
+
+# Archivos subidos por usuarios (imágenes de producto, etc.)
+/uploads/*
+!/uploads/**/.gitkeep
+
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# Env
+.env
+.env.local
+
+# Diagnostic reports
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage
+lib-cov
+coverage
+*.lcov
+.nyc_output
+
+# IDEs and editors
+.idea
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.DS_Store
+
+# Temp
+tmp
+temp
