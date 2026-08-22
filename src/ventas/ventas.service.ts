@@ -27,12 +27,21 @@ import { PermisosService } from '../roles/permisos.service';
 import { AlertasService } from '../alertas/alertas.service';
 import { ModuloPermiso } from '../common/enums/modulo-permiso.enum';
 import { AccionPermiso } from '../common/enums/accion-permiso.enum';
-import { CreateVentaDto } from './dto/create-venta.dto';
+import { CreateVentaDto, DomicilioVentaDto } from './dto/create-venta.dto';
 import { CancelarVentaDto } from './dto/cancelar-venta.dto';
 import { AbonarCuotaDto } from './dto/abonar-cuota.dto';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
+import { Domicilio } from '../domicilios/entities/domicilio.entity';
+import { DireccionCliente } from '../clientes/entities/direccion-cliente.entity';
+import { EstadoDomicilio } from '../common/enums/estado-domicilio.enum';
 
 const TOLERANCIA_REDONDEO = 1;
 const DIAS_MORA_PARA_EN_MORA = 60;
+
+interface VentaConDomicilio {
+  venta: Venta;
+  domicilio: Domicilio | null;
+}
 
 @Injectable()
 export class VentasService {
@@ -47,6 +56,7 @@ export class VentasService {
     private readonly authService: AuthService,
     private readonly permisos: PermisosService,
     private readonly alertasService: AlertasService,
+    private readonly realtimeGateway: RealtimeGateway,
     private readonly cls: ClsService,
   ) {}
 
@@ -87,11 +97,18 @@ export class VentasService {
 
   /** Punto de entrada único: crea venta CONTADO o CREDITO según `dto.tipoVenta`. */
   async crear(dto: CreateVentaDto): Promise<Venta> {
-    const venta =
+    const { venta, domicilio } =
       dto.tipoVenta === TipoVenta.CREDITO
         ? await this.crearVentaCredito(dto)
         : await this.crearVentaContado(dto);
     await this.verificarStockPostVenta(venta);
+    if (domicilio) {
+      this.realtimeGateway.emitToNegocio(
+        venta.negocioId,
+        'domicilios:cambio',
+        domicilio,
+      );
+    }
     return venta;
   }
 
@@ -112,7 +129,10 @@ export class VentasService {
           },
         });
         if (inventario) {
-          await this.alertasService.verificarStockItem(inventario, item.nombreProducto);
+          await this.alertasService.verificarStockItem(
+            inventario,
+            item.nombreProducto,
+          );
         }
       } catch {
         // no crítico — se recupera de todos modos en la próxima corrida del cron
@@ -124,7 +144,9 @@ export class VentasService {
    * Crea una venta de contado: valida turno de caja abierto, descuenta stock
    * y registra los pagos, todo en una sola transacción.
    */
-  private async crearVentaContado(dto: CreateVentaDto): Promise<Venta> {
+  private async crearVentaContado(
+    dto: CreateVentaDto,
+  ): Promise<VentaConDomicilio> {
     if (!dto.pagos || dto.pagos.length === 0) {
       throw new BadRequestException(
         'Una venta de contado requiere al menos un pago',
@@ -209,7 +231,15 @@ export class VentasService {
         );
       }
 
-      return venta;
+      const domicilio = await this.crearDomicilioSiAplica(
+        manager,
+        venta,
+        dto.domicilio,
+        negocioId,
+        usuarioId,
+      );
+
+      return { venta, domicilio };
     });
   }
 
@@ -217,7 +247,9 @@ export class VentasService {
    * Crea una venta a crédito: valida cupo del cliente, genera las cuotas y
    * descuenta stock. No mueve caja — el dinero entra cuando se abonan cuotas.
    */
-  private async crearVentaCredito(dto: CreateVentaDto): Promise<Venta> {
+  private async crearVentaCredito(
+    dto: CreateVentaDto,
+  ): Promise<VentaConDomicilio> {
     if (!dto.clienteId) {
       throw new BadRequestException('Una venta a crédito requiere un cliente');
     }
@@ -318,8 +350,109 @@ export class VentasService {
       );
       await this.clientesService.ajustarDeuda(dto.clienteId!, total);
 
-      return venta;
+      const domicilio = await this.crearDomicilioSiAplica(
+        manager,
+        venta,
+        dto.domicilio,
+        negocioId,
+        usuarioId,
+      );
+
+      return { venta, domicilio };
     });
+  }
+
+  /**
+   * Crea el domicilio (y, si hace falta, la dirección nueva del cliente)
+   * dentro de la misma transacción que la venta — un domicilio nunca queda
+   * huérfano de una venta que no se completó. Reutiliza `manager` en vez de
+   * los repositorios inyectados, mismo patrón que ya usa este método para
+   * `MovimientoCaja`/`Cuota`.
+   */
+  private async crearDomicilioSiAplica(
+    manager: EntityManager,
+    venta: Venta,
+    dto: DomicilioVentaDto | undefined,
+    negocioId: string,
+    usuarioId: string,
+  ): Promise<Domicilio | null> {
+    if (!dto) return null;
+    if (!venta.clienteId) {
+      throw new BadRequestException(
+        'Un domicilio requiere un cliente asociado a la venta — las direcciones dependen de él',
+      );
+    }
+
+    const direccionRepo = manager.getRepository(DireccionCliente);
+    let direccion: DireccionCliente | null = null;
+
+    if (dto.direccionClienteId) {
+      direccion = await direccionRepo.findOne({
+        where: {
+          id: dto.direccionClienteId,
+          clienteId: venta.clienteId,
+          negocioId,
+        },
+      });
+      if (!direccion) {
+        throw new BadRequestException(
+          'La dirección indicada no existe o no pertenece a este cliente',
+        );
+      }
+    } else if (dto.direccionNueva) {
+      // Misma regla que ClientesService.agregarDireccion() — se duplica acá porque esta
+      // creación tiene que vivir dentro de la transacción de la venta (ver manager arriba).
+      const esLaPrimera =
+        (await direccionRepo.count({
+          where: { clienteId: venta.clienteId, activo: true },
+        })) === 0;
+      if (dto.direccionNueva.predeterminada || esLaPrimera) {
+        await direccionRepo.update(
+          { clienteId: venta.clienteId, negocioId },
+          { predeterminada: false },
+        );
+      }
+      direccion = await direccionRepo.save(
+        direccionRepo.create({
+          negocioId,
+          clienteId: venta.clienteId,
+          ...dto.direccionNueva,
+          predeterminada: dto.direccionNueva.predeterminada || esLaPrimera,
+        }),
+      );
+    } else {
+      throw new BadRequestException(
+        'Debe indicarse direccionClienteId o direccionNueva para el domicilio',
+      );
+    }
+
+    const domicilioRepo = manager.getRepository(Domicilio);
+    return domicilioRepo.save(
+      domicilioRepo.create({
+        negocioId,
+        sucursalId: venta.sucursalId,
+        ventaId: venta.id,
+        clienteId: venta.clienteId,
+        nombreCliente: venta.nombreCliente,
+        direccionClienteId: direccion.id,
+        direccionTexto: this.formatearDireccion(direccion),
+        puntoReferencia: direccion.puntoReferencia,
+        telefonoContacto: direccion.telefonoContacto,
+        costoDomicilio: dto.costoDomicilio,
+        estado: EstadoDomicilio.NUEVO,
+        creadoPor: usuarioId,
+      }),
+    );
+  }
+
+  private formatearDireccion(direccion: DireccionCliente): string {
+    return [
+      direccion.direccionLinea1,
+      direccion.direccionLinea2,
+      direccion.barrio,
+    ]
+      .filter(Boolean)
+      .join(', ');
   }
 
   /**

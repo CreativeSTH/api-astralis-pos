@@ -14,6 +14,7 @@ export enum ModuloPermiso {
   CAJA = 'CAJA',
   COBROS = 'COBROS',
   CLIENTES = 'CLIENTES',
+  DOMICILIOS = 'DOMICILIOS',
   ALERTAS = 'ALERTAS',
   REPORTES = 'REPORTES',
 }

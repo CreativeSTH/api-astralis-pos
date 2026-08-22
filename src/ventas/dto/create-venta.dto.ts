@@ -16,6 +16,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { MetodoPago, TipoVenta } from '../../common/enums/venta.enum';
+import { CreateDireccionClienteDto } from '../../clientes/dto/create-direccion-cliente.dto';
 
 export class VentaItemDto {
   @ApiProperty()
@@ -49,6 +50,32 @@ export class VentaPagoDto {
   @IsOptional()
   @IsString()
   referencia?: string;
+}
+
+export class DomicilioVentaDto {
+  @ApiProperty({
+    required: false,
+    description:
+      'Dirección ya guardada del cliente. Si no se envía, debe venir direccionNueva.',
+  })
+  @IsOptional()
+  @IsUUID()
+  direccionClienteId?: string;
+
+  @ApiProperty({ required: false, type: CreateDireccionClienteDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CreateDireccionClienteDto)
+  direccionNueva?: CreateDireccionClienteDto;
+
+  @ApiProperty({
+    required: false,
+    description: 'Informativo — no afecta el total de la venta',
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  costoDomicilio?: number;
 }
 
 export class CreateVentaDto {
@@ -141,4 +168,15 @@ export class CreateVentaDto {
   @ValidateNested({ each: true })
   @Type(() => VentaPagoDto)
   pagos?: VentaPagoDto[];
+
+  @ApiProperty({
+    required: false,
+    type: DomicilioVentaDto,
+    description:
+      'Si se envía, la venta requiere un cliente real (clienteId) — las direcciones dependen de él.',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => DomicilioVentaDto)
+  domicilio?: DomicilioVentaDto;
 }

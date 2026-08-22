@@ -21,6 +21,7 @@ import { MarcasModule } from './marcas/marcas.module';
 import { LineasModule } from './lineas/lineas.module';
 import { ProveedoresModule } from './proveedores/proveedores.module';
 import { ClientesModule } from './clientes/clientes.module';
+import { DomiciliosModule } from './domicilios/domicilios.module';
 import { ProductosModule } from './productos/productos.module';
 import { BodegasModule } from './bodegas/bodegas.module';
 import { InventarioModule } from './inventario/inventario.module';
@@ -72,6 +73,7 @@ import { RealtimeModule } from './realtime/realtime.module';
     LineasModule,
     ProveedoresModule,
     ClientesModule,
+    DomiciliosModule,
     ProductosModule,
     BodegasModule,
     InventarioModule,

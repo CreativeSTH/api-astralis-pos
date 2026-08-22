@@ -37,6 +37,11 @@ const PERMISOS_CAJERO: Partial<Record<ModuloPermiso, AccionPermiso[]>> = {
   ],
   [ModuloPermiso.COBROS]: [AccionPermiso.VER],
   [ModuloPermiso.CLIENTES]: [AccionPermiso.VER, AccionPermiso.CREAR],
+  [ModuloPermiso.DOMICILIOS]: [
+    AccionPermiso.VER,
+    AccionPermiso.CREAR,
+    AccionPermiso.EDITAR,
+  ],
   [ModuloPermiso.ALERTAS]: [AccionPermiso.VER],
 };
 
@@ -82,7 +87,11 @@ export class RolesService {
       where:
         tier === RolTier.SISTEMA
           ? { tier: RolTier.SISTEMA, activo: true }
-          : { tier: RolTier.NEGOCIO, negocioId: this.getNegocioId(), activo: true },
+          : {
+              tier: RolTier.NEGOCIO,
+              negocioId: this.getNegocioId(),
+              activo: true,
+            },
       relations: { permisos: true },
       order: { createdAt: 'DESC' },
     });
@@ -137,7 +146,9 @@ export class RolesService {
     const rol = await this.findOne(id);
     const permisosNuevos = await this.permisos.findByIds(permisoIds);
     if (permisosNuevos.length !== permisoIds.length) {
-      throw new BadRequestException('Alguno de los permisos indicados no existe');
+      throw new BadRequestException(
+        'Alguno de los permisos indicados no existe',
+      );
     }
     const fueraDeTier = permisosNuevos.find((p) => p.tier !== rol.tier);
     if (fueraDeTier) {

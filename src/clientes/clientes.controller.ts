@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseUUIDPipe,
@@ -14,6 +15,8 @@ import { ClientesService } from './clientes.service';
 import { CreateClienteDto } from './dto/create-cliente.dto';
 import { UpdateClienteDto } from './dto/update-cliente.dto';
 import { CreateNotaClienteDto } from './dto/create-nota-cliente.dto';
+import { CreateDireccionClienteDto } from './dto/create-direccion-cliente.dto';
+import { UpdateDireccionClienteDto } from './dto/update-direccion-cliente.dto';
 import { BuscarClientesDto } from './dto/buscar-clientes.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
@@ -84,6 +87,40 @@ export class ClientesController {
     @Body() dto: CreateNotaClienteDto,
   ) {
     return this.clientesService.agregarNota(id, dto);
+  }
+
+  @Get(':id/direcciones')
+  @RequierePermiso(ModuloPermiso.CLIENTES, AccionPermiso.VER)
+  listarDirecciones(@Param('id', ParseUUIDPipe) id: string) {
+    return this.clientesService.listarDirecciones(id);
+  }
+
+  @Post(':id/direcciones')
+  @RequierePermiso(ModuloPermiso.CLIENTES, AccionPermiso.CREAR)
+  agregarDireccion(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CreateDireccionClienteDto,
+  ) {
+    return this.clientesService.agregarDireccion(id, dto);
+  }
+
+  @Patch(':id/direcciones/:direccionId')
+  @RequierePermiso(ModuloPermiso.CLIENTES, AccionPermiso.EDITAR)
+  actualizarDireccion(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('direccionId', ParseUUIDPipe) direccionId: string,
+    @Body() dto: UpdateDireccionClienteDto,
+  ) {
+    return this.clientesService.actualizarDireccion(id, direccionId, dto);
+  }
+
+  @Delete(':id/direcciones/:direccionId')
+  @RequierePermiso(ModuloPermiso.CLIENTES, AccionPermiso.ELIMINAR)
+  eliminarDireccion(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('direccionId', ParseUUIDPipe) direccionId: string,
+  ) {
+    return this.clientesService.eliminarDireccion(id, direccionId);
   }
 
   @Patch(':id')

@@ -13,6 +13,7 @@ import { AuthModule } from '../auth/auth.module';
 import { RolesModule } from '../roles/roles.module';
 import { AlertasModule } from '../alertas/alertas.module';
 import { Inventario } from '../inventario/entities/inventario.entity';
+import { RealtimeModule } from '../realtime/realtime.module';
 
 @Module({
   imports: [
@@ -29,6 +30,7 @@ import { Inventario } from '../inventario/entities/inventario.entity';
     AuthModule,
     RolesModule,
     AlertasModule,
+    RealtimeModule,
   ],
   controllers: [VentasController],
   providers: [VentasService],
