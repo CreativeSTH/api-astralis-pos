@@ -22,20 +22,21 @@ import { ProductosService } from './productos.service';
 import { CreateProductoDto } from './dto/create-producto.dto';
 import { UpdateProductoDto } from './dto/update-producto.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard } from '../common/guards/roles.guard';
-import { Roles } from '../common/decorators/roles.decorator';
-import { RolUsuario } from '../common/enums/rol-usuario.enum';
+import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { RequierePermiso } from '../common/decorators/requiere-permiso.decorator';
+import { ModuloPermiso } from '../common/enums/modulo-permiso.enum';
+import { AccionPermiso } from '../common/enums/accion-permiso.enum';
 import { productoImagenUploadOptions } from '../common/config/upload.config';
 
 @ApiTags('Productos')
 @ApiBearerAuth('JWT-auth')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard)
 @Controller('productos')
 export class ProductosController {
   constructor(private readonly productosService: ProductosService) {}
 
   @Post()
-  @Roles(RolUsuario.ADMIN_NEGOCIO)
+  @RequierePermiso(ModuloPermiso.PRODUCTOS, AccionPermiso.CREAR)
   @ApiConsumes('multipart/form-data')
   @ApiOperation({
     summary: 'Crear producto (campo opcional "imagen" como archivo)',
@@ -49,11 +50,13 @@ export class ProductosController {
   }
 
   @Get()
+  @RequierePermiso(ModuloPermiso.PRODUCTOS, AccionPermiso.VER)
   findAll() {
     return this.productosService.findAll();
   }
 
   @Get('codigo-barras/:codigo')
+  @RequierePermiso(ModuloPermiso.PRODUCTOS, AccionPermiso.VER)
   @ApiOperation({
     summary:
       'Buscar producto por código de barras (usado por el lector en el POS)',
@@ -63,12 +66,13 @@ export class ProductosController {
   }
 
   @Get(':id')
+  @RequierePermiso(ModuloPermiso.PRODUCTOS, AccionPermiso.VER)
   findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.productosService.findOne(id);
   }
 
   @Patch(':id')
-  @Roles(RolUsuario.ADMIN_NEGOCIO)
+  @RequierePermiso(ModuloPermiso.PRODUCTOS, AccionPermiso.EDITAR)
   @ApiConsumes('multipart/form-data')
   @ApiOperation({
     summary: 'Actualizar producto (campo opcional "imagen" como archivo)',
@@ -83,7 +87,7 @@ export class ProductosController {
   }
 
   @Delete(':id')
-  @Roles(RolUsuario.ADMIN_NEGOCIO)
+  @RequierePermiso(ModuloPermiso.PRODUCTOS, AccionPermiso.ELIMINAR)
   remove(@Param('id', ParseUUIDPipe) id: string) {
     return this.productosService.remove(id);
   }

@@ -14,35 +14,38 @@ import { CategoriasService } from './categorias.service';
 import { CreateCategoriaDto } from './dto/create-categoria.dto';
 import { UpdateCategoriaDto } from './dto/update-categoria.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard } from '../common/guards/roles.guard';
-import { Roles } from '../common/decorators/roles.decorator';
-import { RolUsuario } from '../common/enums/rol-usuario.enum';
+import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { RequierePermiso } from '../common/decorators/requiere-permiso.decorator';
+import { ModuloPermiso } from '../common/enums/modulo-permiso.enum';
+import { AccionPermiso } from '../common/enums/accion-permiso.enum';
 
 @ApiTags('Categorias')
 @ApiBearerAuth('JWT-auth')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard)
 @Controller('categorias')
 export class CategoriasController {
   constructor(private readonly categoriasService: CategoriasService) {}
 
   @Post()
-  @Roles(RolUsuario.ADMIN_NEGOCIO)
+  @RequierePermiso(ModuloPermiso.CATEGORIAS, AccionPermiso.CREAR)
   create(@Body() dto: CreateCategoriaDto) {
     return this.categoriasService.create(dto);
   }
 
   @Get()
+  @RequierePermiso(ModuloPermiso.CATEGORIAS, AccionPermiso.VER)
   findAll() {
     return this.categoriasService.findAll();
   }
 
   @Get(':id')
+  @RequierePermiso(ModuloPermiso.CATEGORIAS, AccionPermiso.VER)
   findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.categoriasService.findOne(id);
   }
 
   @Patch(':id')
-  @Roles(RolUsuario.ADMIN_NEGOCIO)
+  @RequierePermiso(ModuloPermiso.CATEGORIAS, AccionPermiso.EDITAR)
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateCategoriaDto,
@@ -51,7 +54,7 @@ export class CategoriasController {
   }
 
   @Delete(':id')
-  @Roles(RolUsuario.ADMIN_NEGOCIO)
+  @RequierePermiso(ModuloPermiso.CATEGORIAS, AccionPermiso.ELIMINAR)
   remove(@Param('id', ParseUUIDPipe) id: string) {
     return this.categoriasService.remove(id);
   }

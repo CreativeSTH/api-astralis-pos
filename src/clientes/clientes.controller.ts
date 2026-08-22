@@ -16,44 +16,50 @@ import { UpdateClienteDto } from './dto/update-cliente.dto';
 import { CreateNotaClienteDto } from './dto/create-nota-cliente.dto';
 import { BuscarClientesDto } from './dto/buscar-clientes.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard } from '../common/guards/roles.guard';
-import { Roles } from '../common/decorators/roles.decorator';
-import { RolUsuario } from '../common/enums/rol-usuario.enum';
+import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { RequierePermiso } from '../common/decorators/requiere-permiso.decorator';
+import { ModuloPermiso } from '../common/enums/modulo-permiso.enum';
+import { AccionPermiso } from '../common/enums/accion-permiso.enum';
 
 @ApiTags('Clientes')
 @ApiBearerAuth('JWT-auth')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard)
 @Controller('clientes')
 export class ClientesController {
   constructor(private readonly clientesService: ClientesService) {}
 
   @Post()
-  @Roles(RolUsuario.ADMIN_NEGOCIO)
+  @RequierePermiso(ModuloPermiso.CLIENTES, AccionPermiso.CREAR)
   create(@Body() dto: CreateClienteDto) {
     return this.clientesService.create(dto);
   }
 
   @Get()
+  @RequierePermiso(ModuloPermiso.CLIENTES, AccionPermiso.VER)
   findAll() {
     return this.clientesService.findAll();
   }
 
   @Get('buscar')
+  @RequierePermiso(ModuloPermiso.CLIENTES, AccionPermiso.VER)
   buscar(@Query() filtros: BuscarClientesDto) {
     return this.clientesService.buscar(filtros);
   }
 
   @Get('estadisticas')
+  @RequierePermiso(ModuloPermiso.CLIENTES, AccionPermiso.VER)
   estadisticas() {
     return this.clientesService.estadisticas();
   }
 
   @Get(':id')
+  @RequierePermiso(ModuloPermiso.CLIENTES, AccionPermiso.VER)
   findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.clientesService.findOne(id);
   }
 
   @Get(':id/credito')
+  @RequierePermiso(ModuloPermiso.CLIENTES, AccionPermiso.VER)
   @ApiOperation({
     summary:
       'Verificar si el cliente puede tomar un crédito por el monto indicado',
@@ -66,11 +72,13 @@ export class ClientesController {
   }
 
   @Get(':id/notas')
+  @RequierePermiso(ModuloPermiso.CLIENTES, AccionPermiso.VER)
   listarNotas(@Param('id', ParseUUIDPipe) id: string) {
     return this.clientesService.listarNotas(id);
   }
 
   @Post(':id/notas')
+  @RequierePermiso(ModuloPermiso.CLIENTES, AccionPermiso.CREAR)
   agregarNota(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: CreateNotaClienteDto,
@@ -79,7 +87,7 @@ export class ClientesController {
   }
 
   @Patch(':id')
-  @Roles(RolUsuario.ADMIN_NEGOCIO)
+  @RequierePermiso(ModuloPermiso.CLIENTES, AccionPermiso.EDITAR)
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateClienteDto,
@@ -88,7 +96,7 @@ export class ClientesController {
   }
 
   @Post(':id/bloquear')
-  @Roles(RolUsuario.ADMIN_NEGOCIO)
+  @RequierePermiso(ModuloPermiso.CLIENTES, AccionPermiso.ELIMINAR)
   bloquear(
     @Param('id', ParseUUIDPipe) id: string,
     @Body('motivo') motivo: string,
@@ -97,7 +105,7 @@ export class ClientesController {
   }
 
   @Post(':id/desbloquear')
-  @Roles(RolUsuario.ADMIN_NEGOCIO)
+  @RequierePermiso(ModuloPermiso.CLIENTES, AccionPermiso.ELIMINAR)
   desbloquear(@Param('id', ParseUUIDPipe) id: string) {
     return this.clientesService.desbloquear(id);
   }

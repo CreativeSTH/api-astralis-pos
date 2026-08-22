@@ -3,14 +3,15 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ReportesService } from './reportes.service';
 import { ReportesQueryDto } from './dto/reportes-query.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard } from '../common/guards/roles.guard';
-import { Roles } from '../common/decorators/roles.decorator';
-import { RolUsuario } from '../common/enums/rol-usuario.enum';
+import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { RequierePermiso } from '../common/decorators/requiere-permiso.decorator';
+import { ModuloPermiso } from '../common/enums/modulo-permiso.enum';
+import { AccionPermiso } from '../common/enums/accion-permiso.enum';
 
 @ApiTags('Reportes')
 @ApiBearerAuth('JWT-auth')
-@UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(RolUsuario.ADMIN_NEGOCIO)
+@UseGuards(JwtAuthGuard, PermissionsGuard)
+@RequierePermiso(ModuloPermiso.REPORTES, AccionPermiso.VER)
 @Controller('reportes')
 export class ReportesController {
   constructor(private readonly reportesService: ReportesService) {}

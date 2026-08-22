@@ -15,41 +15,44 @@ import { LineasService } from './lineas.service';
 import { CreateLineaDto } from './dto/create-linea.dto';
 import { UpdateLineaDto } from './dto/update-linea.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard } from '../common/guards/roles.guard';
-import { Roles } from '../common/decorators/roles.decorator';
-import { RolUsuario } from '../common/enums/rol-usuario.enum';
+import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { RequierePermiso } from '../common/decorators/requiere-permiso.decorator';
+import { ModuloPermiso } from '../common/enums/modulo-permiso.enum';
+import { AccionPermiso } from '../common/enums/accion-permiso.enum';
 
 @ApiTags('Lineas')
 @ApiBearerAuth('JWT-auth')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard)
 @Controller('lineas')
 export class LineasController {
   constructor(private readonly lineasService: LineasService) {}
 
   @Post()
-  @Roles(RolUsuario.ADMIN_NEGOCIO)
+  @RequierePermiso(ModuloPermiso.LINEAS, AccionPermiso.CREAR)
   create(@Body() dto: CreateLineaDto) {
     return this.lineasService.create(dto);
   }
 
   @Get()
+  @RequierePermiso(ModuloPermiso.LINEAS, AccionPermiso.VER)
   findAll(@Query('marcaId') marcaId?: string) {
     return this.lineasService.findAll(marcaId);
   }
 
   @Get(':id')
+  @RequierePermiso(ModuloPermiso.LINEAS, AccionPermiso.VER)
   findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.lineasService.findOne(id);
   }
 
   @Patch(':id')
-  @Roles(RolUsuario.ADMIN_NEGOCIO)
+  @RequierePermiso(ModuloPermiso.LINEAS, AccionPermiso.EDITAR)
   update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateLineaDto) {
     return this.lineasService.update(id, dto);
   }
 
   @Delete(':id')
-  @Roles(RolUsuario.ADMIN_NEGOCIO)
+  @RequierePermiso(ModuloPermiso.LINEAS, AccionPermiso.ELIMINAR)
   remove(@Param('id', ParseUUIDPipe) id: string) {
     return this.lineasService.remove(id);
   }

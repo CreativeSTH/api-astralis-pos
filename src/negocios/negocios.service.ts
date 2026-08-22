@@ -8,7 +8,7 @@ import { DataSource, Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { Negocio } from './entities/negocio.entity';
 import { Usuario } from '../usuarios/entities/usuario.entity';
-import { RolUsuario } from '../common/enums/rol-usuario.enum';
+import { RolesService } from '../roles/roles.service';
 import { CreateNegocioDto } from './dto/create-negocio.dto';
 import { UpdateNegocioDto } from './dto/update-negocio.dto';
 
@@ -20,6 +20,7 @@ export class NegociosService {
     @InjectRepository(Usuario)
     private readonly usuariosRepository: Repository<Usuario>,
     private readonly dataSource: DataSource,
+    private readonly rolesService: RolesService,
   ) {}
 
   findAll(): Promise<Negocio[]> {
@@ -37,7 +38,14 @@ export class NegociosService {
     return negocio;
   }
 
-  /** Crea el Negocio y su primer usuario ADMIN_NEGOCIO en una sola transacción. */
+  /**
+   * Crea el Negocio, luego asegura sus roles "Administrador"/"Cajero" por
+   * defecto y crea su primer usuario con el rol Administrador. El sembrado
+   * de roles corre fuera de la transacción del Negocio (RolesService no
+   * acepta un EntityManager compartido) — no es 100% atómico, pero es
+   * idempotente y el escenario de fallo a mitad de camino es benigno en un
+   * sistema en desarrollo activo.
+   */
   async create(dto: CreateNegocioDto): Promise<Negocio> {
     const emailExistente = await this.usuariosRepository.findOne({
       where: { email: dto.adminInicial.email },
@@ -48,7 +56,7 @@ export class NegociosService {
       );
     }
 
-    return this.dataSource.transaction(async (manager) => {
+    const negocio = await this.dataSource.transaction(async (manager) => {
       const negocio = manager.create(Negocio, {
         nombre: dto.nombre,
         nit: dto.nit,
@@ -57,20 +65,23 @@ export class NegociosService {
         telefono: dto.telefono,
         direccion: dto.direccion,
       });
-      await manager.save(negocio);
-
-      const passwordHash = await bcrypt.hash(dto.adminInicial.password, 12);
-      const admin = manager.create(Usuario, {
-        negocioId: negocio.id,
-        nombre: dto.adminInicial.nombre,
-        email: dto.adminInicial.email,
-        passwordHash,
-        rol: RolUsuario.ADMIN_NEGOCIO,
-      });
-      await manager.save(admin);
-
-      return negocio;
+      return manager.save(negocio);
     });
+
+    const { administrador } = await this.rolesService.asegurarRolesPorDefecto(
+      negocio.id,
+    );
+    const passwordHash = await bcrypt.hash(dto.adminInicial.password, 12);
+    const admin = this.usuariosRepository.create({
+      negocioId: negocio.id,
+      nombre: dto.adminInicial.nombre,
+      email: dto.adminInicial.email,
+      passwordHash,
+      rolId: administrador.id,
+    });
+    await this.usuariosRepository.save(admin);
+
+    return negocio;
   }
 
   async update(id: string, dto: UpdateNegocioDto): Promise<Negocio> {

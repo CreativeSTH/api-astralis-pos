@@ -1,5 +1,0 @@
-export enum RolUsuario {
-  SUPER_ADMIN = 'SUPER_ADMIN',
-  ADMIN_NEGOCIO = 'ADMIN_NEGOCIO',
-  CAJERO = 'CAJERO',
-}

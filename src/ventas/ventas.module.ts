@@ -10,6 +10,7 @@ import { RegistroPagoCuota } from './entities/registro-pago-cuota.entity';
 import { CajaModule } from '../caja/caja.module';
 import { ClientesModule } from '../clientes/clientes.module';
 import { AuthModule } from '../auth/auth.module';
+import { RolesModule } from '../roles/roles.module';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { AuthModule } from '../auth/auth.module';
     CajaModule,
     ClientesModule,
     AuthModule,
+    RolesModule,
   ],
   controllers: [VentasController],
   providers: [VentasService],

@@ -23,7 +23,9 @@ import { TipoVenta, EstadoVenta } from '../common/enums/venta.enum';
 import { CajaService } from '../caja/caja.service';
 import { ClientesService } from '../clientes/clientes.service';
 import { AuthService } from '../auth/auth.service';
-import { RolUsuario } from '../common/enums/rol-usuario.enum';
+import { PermisosService } from '../roles/permisos.service';
+import { ModuloPermiso } from '../common/enums/modulo-permiso.enum';
+import { AccionPermiso } from '../common/enums/accion-permiso.enum';
 import { CreateVentaDto } from './dto/create-venta.dto';
 import { CancelarVentaDto } from './dto/cancelar-venta.dto';
 import { AbonarCuotaDto } from './dto/abonar-cuota.dto';
@@ -40,6 +42,7 @@ export class VentasService {
     private readonly cajaService: CajaService,
     private readonly clientesService: ClientesService,
     private readonly authService: AuthService,
+    private readonly permisos: PermisosService,
     private readonly cls: ClsService,
   ) {}
 
@@ -647,26 +650,31 @@ export class VentasService {
   async cancelar(id: string, dto: CancelarVentaDto): Promise<Venta> {
     const negocioId = this.getNegocioId();
     const usuarioId = this.getUsuarioId();
+    const rolId = this.cls.get<string>('rolId');
 
-    // Solo ADMIN_NEGOCIO puede cancelar directamente. Cualquier otro rol
-    // (típicamente el cajero del turno) necesita el PIN de un admin como
-    // aprobación puntual — sin cambiar la sesión activa, a diferencia del
-    // "cambio de cajero" del sidebar (ver AuthService.verificarPin).
+    // Quien tiene VENTAS:ELIMINAR puede cancelar directamente. Cualquier otro
+    // rol (típicamente el cajero del turno) necesita el PIN de alguien con
+    // ese permiso como aprobación puntual — sin cambiar la sesión activa, a
+    // diferencia del "cambio de cajero" del sidebar (ver AuthService.verificarPin).
     let autorizadoPor = usuarioId;
-    if (this.cls.get<string>('rol') !== RolUsuario.ADMIN_NEGOCIO) {
+    const puedeCancelar = await this.permisos.rolTienePermiso(
+      rolId,
+      ModuloPermiso.VENTAS,
+      AccionPermiso.ELIMINAR,
+    );
+    if (!puedeCancelar) {
       if (!dto.pinAutorizacion) {
         throw new ForbiddenException(
-          'Se requiere el PIN de un administrador para cancelar esta venta',
+          'Se requiere el PIN de un usuario autorizado para cancelar esta venta',
         );
       }
-      const admin = await this.authService.verificarPin(
+      const autorizador = await this.authService.autorizarConPin(
         negocioId,
         dto.pinAutorizacion,
+        ModuloPermiso.VENTAS,
+        AccionPermiso.ELIMINAR,
       );
-      if (admin.rol !== RolUsuario.ADMIN_NEGOCIO) {
-        throw new ForbiddenException('Ese PIN no tiene permisos de administrador');
-      }
-      autorizadoPor = admin.id;
+      autorizadoPor = autorizador.id;
     }
 
     const venta = await this.dataSource.transaction(async (manager) => {

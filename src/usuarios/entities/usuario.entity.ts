@@ -2,7 +2,7 @@ import { Column, Entity, Index, JoinColumn, ManyToOne } from 'typeorm';
 import { BaseEntity } from '../../common/entities/base.entity';
 import { Negocio } from '../../negocios/entities/negocio.entity';
 import { Sucursal } from '../../sucursales/entities/sucursal.entity';
-import { RolUsuario } from '../../common/enums/rol-usuario.enum';
+import { Rol } from '../../roles/entities/rol.entity';
 
 @Entity('usuarios')
 export class Usuario extends BaseEntity {
@@ -35,8 +35,13 @@ export class Usuario extends BaseEntity {
   @Column({ name: 'pin_hash', nullable: true })
   pinHash?: string;
 
-  @Column({ type: 'enum', enum: RolUsuario, default: RolUsuario.CAJERO })
-  rol: RolUsuario;
+  @Index()
+  @Column({ name: 'rol_id' })
+  rolId: string;
+
+  @ManyToOne(() => Rol, { onDelete: 'RESTRICT' })
+  @JoinColumn({ name: 'rol_id' })
+  rol?: Rol;
 
   @Column({ default: true })
   activo: boolean;

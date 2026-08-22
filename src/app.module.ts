@@ -8,9 +8,10 @@ import { ClsModule } from 'nestjs-cls';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { TenantGuard } from './common/guards/tenant.guard';
-import { RolesGuard } from './common/guards/roles.guard';
+import { PermissionsGuard } from './common/guards/permissions.guard';
 
 import { AuthModule } from './auth/auth.module';
+import { RolesModule } from './roles/roles.module';
 import { NegociosModule } from './negocios/negocios.module';
 import { SucursalesModule } from './sucursales/sucursales.module';
 import { UsuariosModule } from './usuarios/usuarios.module';
@@ -57,6 +58,7 @@ import { HealthModule } from './health/health.module';
     }),
 
     AuthModule,
+    RolesModule,
     NegociosModule,
     SucursalesModule,
     UsuariosModule,
@@ -77,7 +79,7 @@ import { HealthModule } from './health/health.module';
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: TenantGuard },
-    { provide: APP_GUARD, useClass: RolesGuard },
+    { provide: APP_GUARD, useClass: PermissionsGuard },
     { provide: APP_GUARD, useClass: ThrottlerGuard },
     { provide: APP_FILTER, useClass: HttpExceptionFilter },
   ],

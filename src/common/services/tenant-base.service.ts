@@ -3,6 +3,7 @@ import { ClsService } from 'nestjs-cls';
 import {
   DeepPartial,
   FindOptionsOrder,
+  FindOptionsRelations,
   FindOptionsWhere,
   ObjectLiteral,
   Repository,
@@ -34,19 +35,27 @@ export abstract class TenantBaseService<
     return negocioId;
   }
 
-  async findAllForTenant(where: FindOptionsWhere<T> = {}): Promise<T[]> {
+  async findAllForTenant(
+    where: FindOptionsWhere<T> = {},
+    relations?: FindOptionsRelations<T>,
+  ): Promise<T[]> {
     return this.repository.find({
       where: {
         ...where,
         negocioId: this.getNegocioId(),
       } as FindOptionsWhere<T>,
+      relations,
       order: { createdAt: 'DESC' } as unknown as FindOptionsOrder<T>,
     });
   }
 
-  async findOneForTenant(id: string): Promise<T> {
+  async findOneForTenant(
+    id: string,
+    relations?: FindOptionsRelations<T>,
+  ): Promise<T> {
     const entity = await this.repository.findOne({
       where: { id, negocioId: this.getNegocioId() } as FindOptionsWhere<T>,
+      relations,
     });
     if (!entity) {
       throw new NotFoundException(

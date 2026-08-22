@@ -5,9 +5,9 @@ import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 import { JwtUserPayload } from '../decorators/current-user.decorator';
 
 /**
- * Copia negocioId/sucursalId/rol del JWT ya validado al contexto CLS de la
- * request, para que TenantBaseService pueda aislar cada query sin que cada
- * servicio tenga que recibirlos explícitamente.
+ * Copia negocioId/sucursalId/rolId/rolTier del JWT ya validado al contexto
+ * CLS de la request, para que TenantBaseService pueda aislar cada query sin
+ * que cada servicio tenga que recibirlos explícitamente.
  */
 @Injectable()
 export class TenantGuard {
@@ -31,7 +31,8 @@ export class TenantGuard {
       this.cls.set('negocioId', user.negocioId);
       this.cls.set('sucursalId', user.sucursalId);
       this.cls.set('usuarioId', user.sub);
-      this.cls.set('rol', user.rol);
+      this.cls.set('rolId', user.rolId);
+      this.cls.set('rolTier', user.rolTier);
     }
     return true;
   }

@@ -8,11 +8,15 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CobrosService } from './cobros.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard } from '../common/guards/roles.guard';
+import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { RequierePermiso } from '../common/decorators/requiere-permiso.decorator';
+import { ModuloPermiso } from '../common/enums/modulo-permiso.enum';
+import { AccionPermiso } from '../common/enums/accion-permiso.enum';
 
 @ApiTags('Cobros')
 @ApiBearerAuth('JWT-auth')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard)
+@RequierePermiso(ModuloPermiso.COBROS, AccionPermiso.VER)
 @Controller('cobros')
 export class CobrosController {
   constructor(private readonly cobrosService: CobrosService) {}

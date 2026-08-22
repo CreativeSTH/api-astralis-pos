@@ -14,41 +14,44 @@ import { MarcasService } from './marcas.service';
 import { CreateMarcaDto } from './dto/create-marca.dto';
 import { UpdateMarcaDto } from './dto/update-marca.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard } from '../common/guards/roles.guard';
-import { Roles } from '../common/decorators/roles.decorator';
-import { RolUsuario } from '../common/enums/rol-usuario.enum';
+import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { RequierePermiso } from '../common/decorators/requiere-permiso.decorator';
+import { ModuloPermiso } from '../common/enums/modulo-permiso.enum';
+import { AccionPermiso } from '../common/enums/accion-permiso.enum';
 
 @ApiTags('Marcas')
 @ApiBearerAuth('JWT-auth')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard)
 @Controller('marcas')
 export class MarcasController {
   constructor(private readonly marcasService: MarcasService) {}
 
   @Post()
-  @Roles(RolUsuario.ADMIN_NEGOCIO)
+  @RequierePermiso(ModuloPermiso.MARCAS, AccionPermiso.CREAR)
   create(@Body() dto: CreateMarcaDto) {
     return this.marcasService.create(dto);
   }
 
   @Get()
+  @RequierePermiso(ModuloPermiso.MARCAS, AccionPermiso.VER)
   findAll() {
     return this.marcasService.findAll();
   }
 
   @Get(':id')
+  @RequierePermiso(ModuloPermiso.MARCAS, AccionPermiso.VER)
   findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.marcasService.findOne(id);
   }
 
   @Patch(':id')
-  @Roles(RolUsuario.ADMIN_NEGOCIO)
+  @RequierePermiso(ModuloPermiso.MARCAS, AccionPermiso.EDITAR)
   update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateMarcaDto) {
     return this.marcasService.update(id, dto);
   }
 
   @Delete(':id')
-  @Roles(RolUsuario.ADMIN_NEGOCIO)
+  @RequierePermiso(ModuloPermiso.MARCAS, AccionPermiso.ELIMINAR)
   remove(@Param('id', ParseUUIDPipe) id: string) {
     return this.marcasService.remove(id);
   }

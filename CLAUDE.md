@@ -19,15 +19,24 @@ API en `http://localhost:3000/api`, Swagger en `http://localhost:3000/docs`.
 
 ⚠️ **Punto crítico, no se puede vulnerar sin que el usuario lo pida explícitamente en el momento:** solo se commitea y pushea a la rama `develop`. `main` se mantiene vacía (solo el commit inicial) hasta que el usuario pida explícitamente el merge/release — nunca abrir, aceptar ni sugerir de iniciativa propia un PR `develop → main`, ni pushear directo a `main`. Convención de commits: `feat:`, `fix:`, `test:`, `chore:`, `docs:`, `refactor:`, `style:`. Detalle completo en [`../docs/ARQUITECTURA.md`](../docs/ARQUITECTURA.md) sección 17.
 
-## Estado (Fases 1–3 del roadmap completas)
+## Estado (Fases 1–4 del roadmap completas)
 
-Implementado: Auth (JWT, sin OTP), Negocios (SUPER_ADMIN, crea el admin inicial del negocio), Sucursales, Usuarios, Categorías, Productos (con búsqueda por código de barras), Bodegas + Inventario multi-bodega con kardex consultable (`GET /inventario/kardex`), Caja (turnos con arqueo), Ventas **CONTADO** y **CRÉDITO** (cuotas, mora automática) con pagos mixtos, Clientes (cupo de crédito), Cobros, Alertas, y Reportes (`ventas`, `márgenes`, `cierres-caja`).
+Implementado: Auth (JWT, sin OTP), Negocios (creado por un rol de tier SISTEMA, crea el admin inicial del negocio), Sucursales, Usuarios, Categorías, Productos (con búsqueda por código de barras), Bodegas + Inventario multi-bodega con kardex consultable (`GET /inventario/kardex`), Caja (turnos con arqueo), Ventas **CONTADO** y **CRÉDITO** (cuotas, mora automática) con pagos mixtos, Clientes (cupo de crédito), Cobros, Alertas, Reportes (`ventas`, `márgenes`, `cierres-caja`), y **Roles granulares** (módulo `src/roles/` — ver abajo).
 
-Pendiente (ver Roadmap en el doc de arquitectura): permisos granulares (Fase 4), devoluciones/facturación electrónica/tienda online (Fase 5).
+Pendiente (ver Roadmap en el doc de arquitectura): devoluciones/facturación electrónica/tienda online (Fase 5).
+
+## Roles y permisos (Fase 4)
+
+Reemplaza el viejo enum fijo `RolUsuario` (SUPER_ADMIN/ADMIN_NEGOCIO/CAJERO). Ahora `Usuario.rolId` apunta a un `Rol` (`src/roles/entities/rol.entity.ts`) con un set editable de `Permiso` (módulo × acción Ver/Crear/Editar/Eliminar, catálogo fijo de 16 módulos en `common/enums/modulo-permiso.enum.ts`).
+
+- **Dos tiers de rol**: `SISTEMA` (`negocioId: null`, gestiona el módulo `NEGOCIOS` — reemplaza a SUPER_ADMIN) y `NEGOCIO` (propio de un negocio, editable por su Administrador — reemplaza ADMIN_NEGOCIO/CAJERO). Cada negocio nuevo recibe automáticamente los roles por defecto "Administrador" (todos los permisos) y "Cajero" (subset operativo) — ver `RolesService.asegurarRolesPorDefecto`, también usado por `src/database/seed.ts`.
+- **Guard**: `@RequierePermiso(ModuloPermiso, AccionPermiso)` + `PermissionsGuard` (reemplaza `@Roles()`/`RolesGuard`) — chequea `PermisosService.rolTienePermiso()` **contra la DB en cada request** (no confía en el JWT), así que editar los permisos de un rol tiene efecto inmediato para todos los que lo tienen, sin esperar a que vuelvan a loguearse.
+- **Step-up por PIN**: `AuthService.autorizarConPin(negocioId, pin, modulo, accion)` generaliza el patrón "requiere el PIN de alguien con permiso X" — usado hoy por `VentasService.cancelar()` (antes hardcodeado a `rol === ADMIN_NEGOCIO`).
+- `RolesModule` es `@Global()` porque `PermissionsGuard` (registrado como `APP_GUARD`) y cada controller necesitan inyectar `PermisosService` sin que cada módulo de feature tenga que importarlo.
 
 ## Multi-tenant
 
-Todo dato de negocio lleva `negocioId`. Nunca uses el repositorio de TypeORM directamente en un servicio de negocio — extiende `TenantBaseService` (ver `src/common/services/tenant-base.service.ts`), que mezcla `negocioId` automáticamente desde el contexto CLS (poblado por `TenantGuard` a partir del JWT). Ver sección 6 del documento de arquitectura para el porqué.
+Todo dato de negocio lleva `negocioId`. Nunca uses el repositorio de TypeORM directamente en un servicio de negocio — extiende `TenantBaseService` (ver `src/common/services/tenant-base.service.ts`), que mezcla `negocioId` automáticamente desde el contexto CLS (poblado por `TenantGuard` a partir del JWT). Ver sección 6 del documento de arquitectura para el porqué. La única excepción documentada es `NegociosService` (y ahora `RolesService` para roles de tier SISTEMA) — operan por encima del nivel de tenant.
 
 ## Convenciones de Código
 

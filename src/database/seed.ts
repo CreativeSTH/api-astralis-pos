@@ -4,12 +4,15 @@ import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { AppModule } from '../app.module';
 import { Usuario } from '../usuarios/entities/usuario.entity';
-import { RolUsuario } from '../common/enums/rol-usuario.enum';
+import { Negocio } from '../negocios/entities/negocio.entity';
+import { RolesService } from '../roles/roles.service';
+import { PermisosService } from '../roles/permisos.service';
 
 /**
- * Crea el primer usuario SUPER_ADMIN de la plataforma si no existe ninguno.
- * Es la única forma de arrancar: los endpoints de /negocios requieren
- * SUPER_ADMIN y no hay auto-registro para ese rol.
+ * Bootstrap idempotente — seguro de correr múltiples veces:
+ * 1. Siembra el catálogo de Permiso (16 módulos × 4 acciones).
+ * 2. Asegura el rol de sistema "Super Administrador" y el primer usuario SUPER_ADMIN.
+ * 3. Para cada Negocio existente, asegura sus roles "Administrador"/"Cajero" por defecto.
  *
  * Uso: npm run seed
  */
@@ -18,37 +21,50 @@ async function seed() {
   const usuariosRepository = app.get<Repository<Usuario>>(
     getRepositoryToken(Usuario),
   );
+  const negociosRepository = app.get<Repository<Negocio>>(
+    getRepositoryToken(Negocio),
+  );
+  const rolesService = app.get(RolesService, { strict: false });
+  const permisosService = app.get(PermisosService, { strict: false });
 
-  const existente = await usuariosRepository.findOne({
-    where: { rol: RolUsuario.SUPER_ADMIN },
+  console.log('Sembrando catálogo de permisos...');
+  await permisosService.sembrarCatalogo();
+
+  console.log('Asegurando rol de sistema "Super Administrador"...');
+  const rolSistema = await rolesService.asegurarRolSistema();
+
+  const superAdminExistente = await usuariosRepository.findOne({
+    where: { rolId: rolSistema.id },
   });
-  if (existente) {
-    console.log(
-      `Ya existe un SUPER_ADMIN: ${existente.email}. No se crea otro.`,
-    );
-    await app.close();
-    return;
+  if (!superAdminExistente) {
+    const email = process.env.SEED_SUPER_ADMIN_EMAIL ?? 'admin@pos-system.local';
+    const password = process.env.SEED_SUPER_ADMIN_PASSWORD ?? 'changeme123';
+    const passwordHash = await bcrypt.hash(password, 12);
+    const superAdmin = usuariosRepository.create({
+      nombre: 'Super Admin',
+      email,
+      passwordHash,
+      rolId: rolSistema.id,
+      negocioId: null,
+      sucursalId: null,
+    });
+    await usuariosRepository.save(superAdmin);
+    console.log(`SUPER_ADMIN creado: ${email}`);
+  } else {
+    console.log(`Ya existe un SUPER_ADMIN: ${superAdminExistente.email}.`);
   }
 
-  const email = process.env.SEED_SUPER_ADMIN_EMAIL ?? 'admin@pos-system.local';
-  const password = process.env.SEED_SUPER_ADMIN_PASSWORD ?? 'changeme123';
-  const passwordHash = await bcrypt.hash(password, 12);
+  console.log('Asegurando roles por defecto (Administrador/Cajero) de cada negocio...');
+  const negocios = await negociosRepository.find();
+  for (const negocio of negocios) {
+    await rolesService.asegurarRolesPorDefecto(negocio.id);
+  }
+  console.log(`Roles por defecto verificados para ${negocios.length} negocio(s).`);
 
-  const superAdmin = usuariosRepository.create({
-    nombre: 'Super Admin',
-    email,
-    passwordHash,
-    rol: RolUsuario.SUPER_ADMIN,
-    negocioId: null,
-    sucursalId: null,
-  });
-  await usuariosRepository.save(superAdmin);
-
-  console.log(`SUPER_ADMIN creado: ${email}`);
   await app.close();
 }
 
 seed().catch((err) => {
-  console.error('Error al crear el seed:', err);
+  console.error('Error al correr el seed:', err);
   process.exit(1);
 });

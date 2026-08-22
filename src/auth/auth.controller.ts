@@ -3,6 +3,8 @@ import {
   Controller,
   HttpCode,
   HttpStatus,
+  Param,
+  ParseUUIDPipe,
   Post,
   UseGuards,
 } from '@nestjs/common';
@@ -12,6 +14,10 @@ import { LoginDto } from './dto/login.dto';
 import { PinLoginDto } from './dto/pin-login.dto';
 import { Public } from '../common/decorators/public.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { RequierePermiso } from '../common/decorators/requiere-permiso.decorator';
+import { ModuloPermiso } from '../common/enums/modulo-permiso.enum';
+import { AccionPermiso } from '../common/enums/accion-permiso.enum';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { JwtUserPayload } from '../common/decorators/current-user.decorator';
 
@@ -41,5 +47,18 @@ export class AuthController {
     @Body() dto: PinLoginDto,
   ) {
     return this.authService.loginConPin(usuarioActual.negocioId, dto);
+  }
+
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequierePermiso(ModuloPermiso.NEGOCIOS, AccionPermiso.EDITAR)
+  @ApiBearerAuth('JWT-auth')
+  @Post('entrar-negocio/:negocioId')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary:
+      'Emite una sesión como el Administrador de un negocio (solo tier SISTEMA) — soporte/configuración sin necesitar sus credenciales',
+  })
+  entrarComoNegocio(@Param('negocioId', ParseUUIDPipe) negocioId: string) {
+    return this.authService.entrarComoNegocio(negocioId);
   }
 }
