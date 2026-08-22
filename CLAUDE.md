@@ -15,6 +15,10 @@ npm run lint                    # ESLint con auto-fix
 
 API en `http://localhost:3000/api`, Swagger en `http://localhost:3000/docs`.
 
+## Git
+
+⚠️ **Punto crítico, no se puede vulnerar sin que el usuario lo pida explícitamente en el momento:** solo se commitea y pushea a la rama `develop`. `main` se mantiene vacía (solo el commit inicial) hasta que el usuario pida explícitamente el merge/release — nunca abrir, aceptar ni sugerir de iniciativa propia un PR `develop → main`, ni pushear directo a `main`. Convención de commits: `feat:`, `fix:`, `test:`, `chore:`, `docs:`, `refactor:`, `style:`. Detalle completo en [`../docs/ARQUITECTURA.md`](../docs/ARQUITECTURA.md) sección 17.
+
 ## Estado (Fases 1–3 del roadmap completas)
 
 Implementado: Auth (JWT, sin OTP), Negocios (SUPER_ADMIN, crea el admin inicial del negocio), Sucursales, Usuarios, Categorías, Productos (con búsqueda por código de barras), Bodegas + Inventario multi-bodega con kardex consultable (`GET /inventario/kardex`), Caja (turnos con arqueo), Ventas **CONTADO** y **CRÉDITO** (cuotas, mora automática) con pagos mixtos, Clientes (cupo de crédito), Cobros, Alertas, y Reportes (`ventas`, `márgenes`, `cierres-caja`).
