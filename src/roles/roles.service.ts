@@ -15,37 +15,7 @@ import { UpdateRolDto } from './dto/update-rol.dto';
 import { ModuloPermiso } from '../common/enums/modulo-permiso.enum';
 import { AccionPermiso } from '../common/enums/accion-permiso.enum';
 import { RolTier } from '../common/enums/rol-tier.enum';
-
-/** Módulo → acciones que el Cajero por defecto recibe sembrado. Todo lo demás no listado aquí queda sin marcar. */
-const PERMISOS_CAJERO: Partial<Record<ModuloPermiso, AccionPermiso[]>> = {
-  [ModuloPermiso.SUCURSALES]: [AccionPermiso.VER],
-  [ModuloPermiso.PRODUCTOS]: [AccionPermiso.VER],
-  [ModuloPermiso.CATEGORIAS]: [AccionPermiso.VER],
-  [ModuloPermiso.MARCAS]: [AccionPermiso.VER],
-  [ModuloPermiso.LINEAS]: [AccionPermiso.VER],
-  [ModuloPermiso.BODEGAS]: [AccionPermiso.VER],
-  [ModuloPermiso.INVENTARIO]: [AccionPermiso.VER],
-  [ModuloPermiso.PROVEEDORES]: [AccionPermiso.VER],
-  [ModuloPermiso.VENTAS]: [
-    AccionPermiso.VER,
-    AccionPermiso.CREAR,
-    AccionPermiso.EDITAR,
-  ],
-  [ModuloPermiso.CAJA]: [
-    AccionPermiso.VER,
-    AccionPermiso.CREAR,
-    AccionPermiso.EDITAR,
-  ],
-  [ModuloPermiso.COBROS]: [AccionPermiso.VER],
-  [ModuloPermiso.CLIENTES]: [AccionPermiso.VER, AccionPermiso.CREAR],
-  [ModuloPermiso.DOMICILIOS]: [
-    AccionPermiso.VER,
-    AccionPermiso.CREAR,
-    AccionPermiso.EDITAR,
-  ],
-  [ModuloPermiso.ALERTAS]: [AccionPermiso.VER],
-  [ModuloPermiso.METODOS_PAGO]: [AccionPermiso.VER],
-};
+import { PERMISOS_CAJERO } from './permisos-cajero.constant';
 
 /**
  * A diferencia del resto de servicios de negocio, Rol no puede extender
