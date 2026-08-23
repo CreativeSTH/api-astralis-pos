@@ -11,9 +11,15 @@ npm run start:dev               # Desarrollo con hot-reload
 npm run build                   # Compilar para producción
 npm test                        # Tests unitarios
 npm run lint                    # ESLint con auto-fix
+npm run migration:generate -- src/database/migrations/NombreMigracion   # Genera una migración a partir del diff de entidades
+npm run migration:run           # Aplica las migraciones pendientes
 ```
 
 API en `http://localhost:3000/api`, Swagger en `http://localhost:3000/docs`.
+
+## Migraciones
+
+En desarrollo se sigue usando `synchronize` (activo salvo `NODE_ENV=production`, `app.module.ts`) — no hace falta correr migraciones a mano día a día. `src/database/data-source.ts` es una instancia standalone de `DataSource` (misma config de conexión que `app.module.ts`, pero sin pasar por el contenedor de Nest) que usa el CLI de TypeORM para generar/correr migraciones — necesaria porque el CLI evalúa este archivo directo con ts-node, sin `TypeOrmModule.forRootAsync`/`autoLoadEntities`. **Antes del primer arranque contra una base de datos de producción nueva, hay que correr `npm run migration:run` una vez** — si no, el backend arranca pero no existe ni una tabla.
 
 ## Git
 
