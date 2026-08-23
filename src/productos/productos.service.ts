@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
@@ -17,6 +18,7 @@ import { TipoImpuesto } from '../common/enums/tipo-impuesto.enum';
 import { TipoMovimientoInventario } from '../common/enums/tipo-movimiento-inventario.enum';
 import { InventarioService } from '../inventario/inventario.service';
 import { ProveedoresService } from '../proveedores/proveedores.service';
+import { tieneFirmaValida } from '../common/utils/file-signature.util';
 
 @Injectable()
 export class ProductosService extends TenantBaseService<Producto> {
@@ -67,6 +69,9 @@ export class ProductosService extends TenantBaseService<Producto> {
     dto: CreateProductoDto,
     imagen?: Express.Multer.File,
   ): Promise<Producto> {
+    if (imagen) {
+      await this.validarImagenSubida(imagen);
+    }
     if (dto.codigoBarras) {
       const existente = await this.repository.findOne({
         where: {
@@ -133,6 +138,9 @@ export class ProductosService extends TenantBaseService<Producto> {
     dto: UpdateProductoDto,
     imagen?: Express.Multer.File,
   ): Promise<Producto> {
+    if (imagen) {
+      await this.validarImagenSubida(imagen);
+    }
     const { categoriaIds, ...resto } = this.quitarStockInicial(
       this.normalizarImpuesto(dto),
     );
@@ -187,6 +195,18 @@ export class ProductosService extends TenantBaseService<Producto> {
     delete resto.stockInicial;
     delete resto.proveedores;
     return resto;
+  }
+
+  /** La extensión del nombre no prueba nada — valida el contenido real ya escrito en disco. */
+  private async validarImagenSubida(
+    imagen: Express.Multer.File,
+  ): Promise<void> {
+    if (!(await tieneFirmaValida(imagen.path))) {
+      await unlink(imagen.path).catch(() => {});
+      throw new BadRequestException(
+        'El archivo no es una imagen JPG, PNG o WEBP válida',
+      );
+    }
   }
 
   private buildImagenUrl(imagen: Express.Multer.File): string {

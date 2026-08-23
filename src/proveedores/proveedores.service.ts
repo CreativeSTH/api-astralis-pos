@@ -14,6 +14,7 @@ import { ProductoProveedor } from './entities/producto-proveedor.entity';
 import { CreateProveedorDto } from './dto/create-proveedor.dto';
 import { UpdateProveedorDto } from './dto/update-proveedor.dto';
 import { VincularProveedorDto } from './dto/vincular-proveedor.dto';
+import { tieneFirmaValida } from '../common/utils/file-signature.util';
 
 export interface DocumentosProveedor {
   rutDocumento?: Express.Multer.File[];
@@ -44,6 +45,7 @@ export class ProveedoresService extends TenantBaseService<Proveedor> {
     dto: CreateProveedorDto,
     documentos?: DocumentosProveedor,
   ): Promise<Proveedor> {
+    await this.validarDocumentosSubidos(documentos);
     return this.createForTenant({
       ...dto,
       ...this.buildDocumentoUrls(documentos),
@@ -55,6 +57,7 @@ export class ProveedoresService extends TenantBaseService<Proveedor> {
     dto: UpdateProveedorDto,
     documentos?: DocumentosProveedor,
   ): Promise<Proveedor> {
+    await this.validarDocumentosSubidos(documentos);
     const proveedor = await this.findOneForTenant(id);
     const urls = this.buildDocumentoUrls(documentos);
     const anteriores = {
@@ -145,6 +148,26 @@ export class ProveedoresService extends TenantBaseService<Proveedor> {
       );
     }
     await this.productoProveedorRepository.remove(vinculo);
+  }
+
+  /** La extensión del nombre no prueba nada — valida el contenido real ya escrito en disco. */
+  private async validarDocumentosSubidos(
+    documentos?: DocumentosProveedor,
+  ): Promise<void> {
+    if (!documentos) return;
+    const archivos = [
+      ...(documentos.rutDocumento ?? []),
+      ...(documentos.camaraComercioDocumento ?? []),
+      ...(documentos.certificacionBancariaDocumento ?? []),
+    ];
+    for (const archivo of archivos) {
+      if (!(await tieneFirmaValida(archivo.path))) {
+        await unlink(archivo.path).catch(() => {});
+        throw new BadRequestException(
+          `"${archivo.originalname}" no es un PDF, JPG, PNG o WEBP válido`,
+        );
+      }
+    }
   }
 
   private buildDocumentoUrls(

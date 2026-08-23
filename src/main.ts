@@ -18,6 +18,7 @@ async function bootstrap() {
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
+      forbidNonWhitelisted: true,
       transform: true,
       transformOptions: { enableImplicitConversion: true },
     }),
@@ -26,17 +27,20 @@ async function bootstrap() {
   // Imágenes de producto servidas como estáticas — fuera del prefijo /api.
   app.useStaticAssets(join(process.cwd(), 'uploads'), { prefix: '/uploads' });
 
-  const config = new DocumentBuilder()
-    .setTitle('POS System API')
-    .setDescription('API de punto de venta multi-negocio')
-    .setVersion('1.0')
-    .addBearerAuth(
-      { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
-      'JWT-auth',
-    )
-    .build();
-  const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('docs', app, document);
+  // Fuera de producción solamente — no exponer el esquema completo de la API públicamente.
+  if (process.env.NODE_ENV !== 'production') {
+    const config = new DocumentBuilder()
+      .setTitle('POS System API')
+      .setDescription('API de punto de venta multi-negocio')
+      .setVersion('1.0')
+      .addBearerAuth(
+        { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
+        'JWT-auth',
+      )
+      .build();
+    const document = SwaggerModule.createDocument(app, config);
+    SwaggerModule.setup('docs', app, document);
+  }
 
   const port = process.env.PORT ?? 3000;
   await app.listen(port);
