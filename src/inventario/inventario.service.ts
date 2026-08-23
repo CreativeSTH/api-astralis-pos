@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { ClsService } from 'nestjs-cls';
 import { Inventario } from './entities/inventario.entity';
 import { MovimientoInventario } from './entities/movimiento-inventario.entity';
@@ -26,6 +26,7 @@ export class InventarioService {
     private readonly productoRepository: Repository<Producto>,
     private readonly alertasService: AlertasService,
     private readonly cls: ClsService,
+    private readonly dataSource: DataSource,
   ) {}
 
   private getNegocioId(): string {
@@ -86,13 +87,18 @@ export class InventarioService {
   }
 
   /** No bloquea la operación de stock si falla — es una notificación, no una regla de negocio. */
-  private async verificarStockPostAjuste(inventario: Inventario): Promise<void> {
+  private async verificarStockPostAjuste(
+    inventario: Inventario,
+  ): Promise<void> {
     try {
       const producto = await this.productoRepository.findOne({
         where: { id: inventario.productoId },
       });
       if (producto) {
-        await this.alertasService.verificarStockItem(inventario, producto.nombre);
+        await this.alertasService.verificarStockItem(
+          inventario,
+          producto.nombre,
+        );
       }
     } catch {
       // no crítico — se recupera de todos modos en la próxima corrida del cron
@@ -122,70 +128,85 @@ export class InventarioService {
    */
   async ajustarStock(input: AjustarStockInput): Promise<Inventario> {
     const negocioId = this.getNegocioId();
-    let inventario = await this.inventarioRepository.findOne({
-      where: {
-        negocioId,
-        productoId: input.productoId,
-        bodegaId: input.bodegaId,
-      },
-    });
-    if (!inventario) {
-      inventario = this.inventarioRepository.create({
-        negocioId,
-        productoId: input.productoId,
-        bodegaId: input.bodegaId,
-        cantidad: 0,
-        stockMinimo: 0,
+    const usuarioId = this.getUsuarioId();
+
+    const inventario = await this.dataSource.transaction(async (manager) => {
+      const inventarioRepo = manager.getRepository(Inventario);
+
+      // Lock pesimista: sin esto, dos ajustes concurrentes sobre el mismo producto/bodega pueden
+      // leer el mismo stock antes de que ninguno confirme y los dos "ganan" (sobreventa o kardex
+      // inconsistente) — no alcanza con la transacción sola bajo el aislamiento por defecto de
+      // Postgres. Solo aplica a una fila ya existente: si es la primera vez que se registra stock
+      // para este producto/bodega, el índice único (producto_id, bodega_id) sigue protegiendo
+      // contra una inserción duplicada concurrente.
+      let inventarioActual = await inventarioRepo.findOne({
+        where: {
+          negocioId,
+          productoId: input.productoId,
+          bodegaId: input.bodegaId,
+        },
+        lock: { mode: 'pessimistic_write' },
       });
-    }
+      if (!inventarioActual) {
+        inventarioActual = inventarioRepo.create({
+          negocioId,
+          productoId: input.productoId,
+          bodegaId: input.bodegaId,
+          cantidad: 0,
+          stockMinimo: 0,
+        });
+      }
 
-    const cantidadAnterior = Number(inventario.cantidad);
-    let cantidadNueva: number;
-    let deltaRegistrado: number;
+      const cantidadAnterior = Number(inventarioActual.cantidad);
+      let cantidadNueva: number;
+      let deltaRegistrado: number;
 
-    switch (input.tipo) {
-      case TipoMovimientoInventario.ENTRADA:
-      case TipoMovimientoInventario.DEVOLUCION:
-        cantidadNueva = cantidadAnterior + input.cantidad;
-        deltaRegistrado = input.cantidad;
-        break;
-      case TipoMovimientoInventario.SALIDA:
-      case TipoMovimientoInventario.VENTA:
-        cantidadNueva = cantidadAnterior - input.cantidad;
-        if (cantidadNueva < 0) {
+      switch (input.tipo) {
+        case TipoMovimientoInventario.ENTRADA:
+        case TipoMovimientoInventario.DEVOLUCION:
+          cantidadNueva = cantidadAnterior + input.cantidad;
+          deltaRegistrado = input.cantidad;
+          break;
+        case TipoMovimientoInventario.SALIDA:
+        case TipoMovimientoInventario.VENTA:
+          cantidadNueva = cantidadAnterior - input.cantidad;
+          if (cantidadNueva < 0) {
+            throw new BadRequestException(
+              'Stock insuficiente para completar la operación',
+            );
+          }
+          deltaRegistrado = input.cantidad;
+          break;
+        case TipoMovimientoInventario.AJUSTE:
+          cantidadNueva = input.cantidad;
+          deltaRegistrado = input.cantidad - cantidadAnterior;
+          break;
+        default:
           throw new BadRequestException(
-            'Stock insuficiente para completar la operación',
+            'Tipo de movimiento de inventario no soportado',
           );
-        }
-        deltaRegistrado = input.cantidad;
-        break;
-      case TipoMovimientoInventario.AJUSTE:
-        cantidadNueva = input.cantidad;
-        deltaRegistrado = input.cantidad - cantidadAnterior;
-        break;
-      default:
-        throw new BadRequestException(
-          'Tipo de movimiento de inventario no soportado',
-        );
-    }
+      }
 
-    inventario.cantidad = cantidadNueva;
-    await this.inventarioRepository.save(inventario);
+      inventarioActual.cantidad = cantidadNueva;
+      await inventarioRepo.save(inventarioActual);
+
+      await manager.getRepository(MovimientoInventario).save(
+        manager.getRepository(MovimientoInventario).create({
+          negocioId,
+          productoId: input.productoId,
+          bodegaId: input.bodegaId,
+          tipo: input.tipo,
+          cantidad: deltaRegistrado,
+          motivo: input.motivo,
+          ventaId: input.ventaId,
+          creadoPor: usuarioId,
+        }),
+      );
+
+      return inventarioActual;
+    });
+
     await this.verificarStockPostAjuste(inventario);
-
-    await this.movimientoRepository.save(
-      this.movimientoRepository.create({
-        negocioId,
-        productoId: input.productoId,
-        bodegaId: input.bodegaId,
-        tipo: input.tipo,
-        cantidad: deltaRegistrado,
-        motivo: input.motivo,
-        ventaId: input.ventaId,
-        creadoPor: this.getUsuarioId(),
-      }),
-    );
-
     return inventario;
   }
 }

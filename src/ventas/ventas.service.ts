@@ -73,10 +73,14 @@ export class VentasService {
   /** Reemplaza la garantía que antes daba `@IsEnum(MetodoPago)` — confirma que cada nombre recibido sea un método activo del negocio. */
   private async validarMetodosPago(nombres: string[]): Promise<void> {
     if (nombres.length === 0) return;
-    const activos = new Set((await this.metodosPagoService.findAll()).map((m) => m.nombre));
+    const activos = new Set(
+      (await this.metodosPagoService.findAll()).map((m) => m.nombre),
+    );
     const invalido = nombres.find((n) => !activos.has(n));
     if (invalido) {
-      throw new BadRequestException(`"${invalido}" no es un método de pago activo de este negocio`);
+      throw new BadRequestException(
+        `"${invalido}" no es un método de pago activo de este negocio`,
+      );
     }
   }
 
@@ -540,8 +544,12 @@ export class VentasService {
         }),
       );
 
+      // Lock pesimista: sin esto, dos ventas concurrentes del mismo producto pueden leer el mismo
+      // stock antes de que ninguna confirme y las dos "ganan" (sobreventa) — la transacción sola no
+      // lo evita bajo el nivel de aislamiento por defecto de Postgres.
       const inventario = await inventarioRepo.findOne({
         where: { negocioId, productoId: producto.id, bodegaId: dto.bodegaId },
+        lock: { mode: 'pessimistic_write' },
       });
       if (!inventario) {
         throw new BadRequestException(
@@ -898,6 +906,7 @@ export class VentasService {
               productoId: item.productoId,
               bodegaId: ventaActual.bodegaId,
             },
+            lock: { mode: 'pessimistic_write' },
           });
           if (inventario) {
             inventario.cantidad =
