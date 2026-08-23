@@ -25,6 +25,7 @@ const PERMISOS_CAJERO: Partial<Record<ModuloPermiso, AccionPermiso[]>> = {
   [ModuloPermiso.LINEAS]: [AccionPermiso.VER],
   [ModuloPermiso.BODEGAS]: [AccionPermiso.VER],
   [ModuloPermiso.INVENTARIO]: [AccionPermiso.VER],
+  [ModuloPermiso.PROVEEDORES]: [AccionPermiso.VER],
   [ModuloPermiso.VENTAS]: [
     AccionPermiso.VER,
     AccionPermiso.CREAR,
@@ -43,6 +44,7 @@ const PERMISOS_CAJERO: Partial<Record<ModuloPermiso, AccionPermiso[]>> = {
     AccionPermiso.EDITAR,
   ],
   [ModuloPermiso.ALERTAS]: [AccionPermiso.VER],
+  [ModuloPermiso.METODOS_PAGO]: [AccionPermiso.VER],
 };
 
 /**

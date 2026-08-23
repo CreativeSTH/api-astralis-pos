@@ -1,14 +1,13 @@
 import { ApiProperty } from '@nestjs/swagger';
 import {
   IsBoolean,
-  IsEnum,
   IsInt,
+  IsNotEmpty,
   IsOptional,
   IsPositive,
   IsString,
   Min,
 } from 'class-validator';
-import { MetodoPago } from '../../common/enums/venta.enum';
 
 export class AbonarCuotaDto {
   @ApiProperty()
@@ -20,9 +19,10 @@ export class AbonarCuotaDto {
   @IsPositive()
   montoAbono: number;
 
-  @ApiProperty({ enum: MetodoPago })
-  @IsEnum(MetodoPago)
-  metodoPago: MetodoPago;
+  @ApiProperty({ description: 'Nombre de un método de pago activo del negocio' })
+  @IsString()
+  @IsNotEmpty()
+  metodoPago: string;
 
   @ApiProperty({ required: false })
   @IsOptional()

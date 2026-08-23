@@ -7,7 +7,6 @@ import {
   PrimaryGeneratedColumn,
 } from 'typeorm';
 import { Cuota } from './cuota.entity';
-import { MetodoPago } from '../../common/enums/venta.enum';
 
 @Entity('registros_pago_cuota')
 export class RegistroPagoCuota {
@@ -26,8 +25,9 @@ export class RegistroPagoCuota {
   @Column({ type: 'numeric', precision: 12, scale: 2 })
   monto: number;
 
-  @Column({ name: 'metodo_pago', type: 'enum', enum: MetodoPago })
-  metodoPago: MetodoPago;
+  /** Nombre del método de pago tal cual estaba en el catálogo del negocio al momento del abono (denormalizado). */
+  @Column({ name: 'metodo_pago' })
+  metodoPago: string;
 
   @Column({ name: 'referencia_pago', nullable: true })
   referenciaPago?: string;

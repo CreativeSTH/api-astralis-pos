@@ -9,7 +9,6 @@ import {
 } from 'typeorm';
 import { TurnoCaja } from './turno-caja.entity';
 import { TipoMovimientoCaja } from '../../common/enums/caja.enum';
-import { MetodoPago } from '../../common/enums/venta.enum';
 
 @Entity('movimientos_caja')
 export class MovimientoCaja {
@@ -36,13 +35,9 @@ export class MovimientoCaja {
   @Column({ nullable: true })
   concepto?: string;
 
-  @Column({
-    name: 'metodo_pago',
-    type: 'enum',
-    enum: MetodoPago,
-    nullable: true,
-  })
-  metodoPago?: MetodoPago;
+  /** Nombre del método de pago tal cual estaba en el catálogo del negocio al momento del movimiento (denormalizado). */
+  @Column({ name: 'metodo_pago', nullable: true })
+  metodoPago?: string;
 
   @Column({ name: 'venta_id', nullable: true })
   ventaId?: string;

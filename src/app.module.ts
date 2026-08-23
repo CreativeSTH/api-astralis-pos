@@ -27,6 +27,7 @@ import { BodegasModule } from './bodegas/bodegas.module';
 import { InventarioModule } from './inventario/inventario.module';
 import { CajaModule } from './caja/caja.module';
 import { VentasModule } from './ventas/ventas.module';
+import { MetodosPagoModule } from './metodos-pago/metodos-pago.module';
 import { CobrosModule } from './cobros/cobros.module';
 import { AlertasModule } from './alertas/alertas.module';
 import { ListaPedidosModule } from './lista-pedidos/lista-pedidos.module';
@@ -79,6 +80,7 @@ import { RealtimeModule } from './realtime/realtime.module';
     InventarioModule,
     CajaModule,
     VentasModule,
+    MetodosPagoModule,
     CobrosModule,
     AlertasModule,
     ListaPedidosModule,

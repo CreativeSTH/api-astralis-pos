@@ -11,12 +11,3 @@ export enum EstadoVenta {
   EN_MORA = 'EN_MORA',
   CANCELADA = 'CANCELADA',
 }
-
-export enum MetodoPago {
-  EFECTIVO = 'EFECTIVO',
-  TARJETA = 'TARJETA',
-  TRANSFERENCIA = 'TRANSFERENCIA',
-  NEQUI = 'NEQUI',
-  DAVIPLATA = 'DAVIPLATA',
-  OTRO = 'OTRO',
-}

@@ -14,6 +14,7 @@ import { RolesModule } from '../roles/roles.module';
 import { AlertasModule } from '../alertas/alertas.module';
 import { Inventario } from '../inventario/entities/inventario.entity';
 import { RealtimeModule } from '../realtime/realtime.module';
+import { MetodosPagoModule } from '../metodos-pago/metodos-pago.module';
 
 @Module({
   imports: [
@@ -31,6 +32,7 @@ import { RealtimeModule } from '../realtime/realtime.module';
     RolesModule,
     AlertasModule,
     RealtimeModule,
+    MetodosPagoModule,
   ],
   controllers: [VentasController],
   providers: [VentasService],

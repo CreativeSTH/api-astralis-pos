@@ -17,4 +17,5 @@ export enum ModuloPermiso {
   DOMICILIOS = 'DOMICILIOS',
   ALERTAS = 'ALERTAS',
   REPORTES = 'REPORTES',
+  METODOS_PAGO = 'METODOS_PAGO',
 }

@@ -52,15 +52,17 @@ export class UsuariosService extends TenantBaseService<Usuario> {
   }
 
   async update(id: string, dto: UpdateUsuarioDto) {
-    const { pin, rolId, ...resto } = dto;
+    const { pin, password, rolId, ...resto } = dto;
     if (rolId) {
       await this.rolesService.findOne(rolId);
     }
     const pinHash = pin ? await bcrypt.hash(pin, 10) : undefined;
+    const passwordHash = password ? await bcrypt.hash(password, 12) : undefined;
     return this.updateForTenant(id, {
       ...resto,
       ...(rolId && { rolId }),
       ...(pinHash && { pinHash }),
+      ...(passwordHash && { passwordHash }),
     });
   }
 

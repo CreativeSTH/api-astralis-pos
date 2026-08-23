@@ -3,10 +3,9 @@ import { BaseEntity } from '../../common/entities/base.entity';
 import { Sucursal } from '../../sucursales/entities/sucursal.entity';
 import { Usuario } from '../../usuarios/entities/usuario.entity';
 import { EstadoTurnoCaja } from '../../common/enums/caja.enum';
-import { MetodoPago } from '../../common/enums/venta.enum';
 
 export interface ArqueoMetodoPago {
-  metodoPago: MetodoPago;
+  metodoPago: string;
   montoEsperado: number;
   montoContado: number;
   diferencia: number;

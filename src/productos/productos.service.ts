@@ -80,6 +80,16 @@ export class ProductosService extends TenantBaseService<Producto> {
         );
       }
     }
+    if (dto.sku) {
+      const existente = await this.repository.findOne({
+        where: { sku: dto.sku, negocioId: this.getNegocioId() },
+      });
+      if (existente) {
+        throw new ConflictException(
+          `Ya existe un producto con código de producto ${dto.sku}`,
+        );
+      }
+    }
     const { stockInicial, categoriaIds, proveedores, ...datosProducto } =
       this.normalizarImpuesto(dto);
     const categorias = await this.resolverCategorias(categoriaIds);

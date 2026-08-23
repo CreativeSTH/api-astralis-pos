@@ -7,6 +7,7 @@ import {
   IsDateString,
   IsEnum,
   IsInt,
+  IsNotEmpty,
   IsNumber,
   IsOptional,
   IsPositive,
@@ -15,7 +16,7 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
-import { MetodoPago, TipoVenta } from '../../common/enums/venta.enum';
+import { TipoVenta } from '../../common/enums/venta.enum';
 import { CreateDireccionClienteDto } from '../../clientes/dto/create-direccion-cliente.dto';
 
 export class VentaItemDto {
@@ -35,9 +36,10 @@ export class VentaItemDto {
 }
 
 export class VentaPagoDto {
-  @ApiProperty({ enum: MetodoPago })
-  @IsEnum(MetodoPago)
-  metodoPago: MetodoPago;
+  @ApiProperty({ description: 'Nombre de un método de pago activo del negocio' })
+  @IsString()
+  @IsNotEmpty()
+  metodoPago: string;
 
   @ApiProperty({
     description:

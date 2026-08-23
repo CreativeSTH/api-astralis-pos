@@ -7,12 +7,14 @@ import { Usuario } from '../usuarios/entities/usuario.entity';
 import { Negocio } from '../negocios/entities/negocio.entity';
 import { RolesService } from '../roles/roles.service';
 import { PermisosService } from '../roles/permisos.service';
+import { MetodosPagoService } from '../metodos-pago/metodos-pago.service';
 
 /**
  * Bootstrap idempotente — seguro de correr múltiples veces:
- * 1. Siembra el catálogo de Permiso (16 módulos × 4 acciones).
+ * 1. Siembra el catálogo de Permiso (19 módulos × 4 acciones).
  * 2. Asegura el rol de sistema "Super Administrador" y el primer usuario SUPER_ADMIN.
  * 3. Para cada Negocio existente, asegura sus roles "Administrador"/"Cajero" por defecto.
+ * 4. Para cada Negocio existente, asegura sus métodos de pago por defecto.
  *
  * Uso: npm run seed
  */
@@ -26,6 +28,7 @@ async function seed() {
   );
   const rolesService = app.get(RolesService, { strict: false });
   const permisosService = app.get(PermisosService, { strict: false });
+  const metodosPagoService = app.get(MetodosPagoService, { strict: false });
 
   console.log('Sembrando catálogo de permisos...');
   await permisosService.sembrarCatalogo();
@@ -60,6 +63,12 @@ async function seed() {
     await rolesService.asegurarRolesPorDefecto(negocio.id);
   }
   console.log(`Roles por defecto verificados para ${negocios.length} negocio(s).`);
+
+  console.log('Asegurando métodos de pago por defecto de cada negocio...');
+  for (const negocio of negocios) {
+    await metodosPagoService.asegurarMetodosPorDefecto(negocio.id);
+  }
+  console.log(`Métodos de pago por defecto verificados para ${negocios.length} negocio(s).`);
 
   await app.close();
 }

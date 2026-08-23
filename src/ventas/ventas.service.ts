@@ -25,6 +25,7 @@ import { ClientesService } from '../clientes/clientes.service';
 import { AuthService } from '../auth/auth.service';
 import { PermisosService } from '../roles/permisos.service';
 import { AlertasService } from '../alertas/alertas.service';
+import { MetodosPagoService } from '../metodos-pago/metodos-pago.service';
 import { ModuloPermiso } from '../common/enums/modulo-permiso.enum';
 import { AccionPermiso } from '../common/enums/accion-permiso.enum';
 import { CreateVentaDto, DomicilioVentaDto } from './dto/create-venta.dto';
@@ -57,6 +58,7 @@ export class VentasService {
     private readonly permisos: PermisosService,
     private readonly alertasService: AlertasService,
     private readonly realtimeGateway: RealtimeGateway,
+    private readonly metodosPagoService: MetodosPagoService,
     private readonly cls: ClsService,
   ) {}
 
@@ -66,6 +68,16 @@ export class VentasService {
 
   private getUsuarioId(): string {
     return this.cls.get<string>('usuarioId');
+  }
+
+  /** Reemplaza la garantía que antes daba `@IsEnum(MetodoPago)` — confirma que cada nombre recibido sea un método activo del negocio. */
+  private async validarMetodosPago(nombres: string[]): Promise<void> {
+    if (nombres.length === 0) return;
+    const activos = new Set((await this.metodosPagoService.findAll()).map((m) => m.nombre));
+    const invalido = nombres.find((n) => !activos.has(n));
+    if (invalido) {
+      throw new BadRequestException(`"${invalido}" no es un método de pago activo de este negocio`);
+    }
   }
 
   findAll() {
@@ -97,6 +109,7 @@ export class VentasService {
 
   /** Punto de entrada único: crea venta CONTADO o CREDITO según `dto.tipoVenta`. */
   async crear(dto: CreateVentaDto): Promise<Venta> {
+    await this.validarMetodosPago((dto.pagos ?? []).map((p) => p.metodoPago));
     const { venta, domicilio } =
       dto.tipoVenta === TipoVenta.CREDITO
         ? await this.crearVentaCredito(dto)
@@ -591,6 +604,7 @@ export class VentasService {
   ): Promise<{ venta: Venta; cuotaAfectada: Cuota; mensaje: string }> {
     const negocioId = this.getNegocioId();
     const usuarioId = this.getUsuarioId();
+    await this.validarMetodosPago([dto.metodoPago]);
 
     return this.dataSource.transaction(async (manager) => {
       const ventaRepo = manager.getRepository(Venta);

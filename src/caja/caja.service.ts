@@ -9,7 +9,7 @@ import { ClsService } from 'nestjs-cls';
 import { ArqueoMetodoPago, TurnoCaja } from './entities/turno-caja.entity';
 import { MovimientoCaja } from './entities/movimiento-caja.entity';
 import { EstadoTurnoCaja, TipoMovimientoCaja } from '../common/enums/caja.enum';
-import { MetodoPago } from '../common/enums/venta.enum';
+import { MetodosPagoService } from '../metodos-pago/metodos-pago.service';
 import { AbrirTurnoDto } from './dto/abrir-turno.dto';
 import { CerrarTurnoDto } from './dto/cerrar-turno.dto';
 import { RegistrarMovimientoDto } from './dto/registrar-movimiento.dto';
@@ -18,7 +18,9 @@ import { PagarDescuadreDto } from './dto/pagar-descuadre.dto';
 export interface ResumenTurno {
   montoInicial: number;
   ventasEfectivo: number;
-  ventasDigitales: { metodoPago: MetodoPago; total: number }[];
+  /** Nombre del método marcado esEfectivo en el catálogo del negocio — puede no haber ninguno. */
+  nombreMetodoEfectivo?: string;
+  ventasDigitales: { metodoPago: string; total: number }[];
   totalVentasDigitales: number;
   ingresos: number;
   egresos: number;
@@ -34,6 +36,7 @@ export class CajaService {
     private readonly turnosRepository: Repository<TurnoCaja>,
     @InjectRepository(MovimientoCaja)
     private readonly movimientosRepository: Repository<MovimientoCaja>,
+    private readonly metodosPagoService: MetodosPagoService,
     private readonly cls: ClsService,
   ) {}
 
@@ -124,16 +127,17 @@ export class CajaService {
         .filter(predicate)
         .reduce((acc, m) => acc + Number(m.monto), 0);
 
+    const metodos = await this.metodosPagoService.findAll();
+    const metodoEfectivo = metodos.find((m) => m.esEfectivo);
+
     const ventasEfectivo = sumaPor(
       (m) =>
         m.tipo === TipoMovimientoCaja.VENTA &&
-        m.metodoPago === MetodoPago.EFECTIVO,
+        m.metodoPago === metodoEfectivo?.nombre,
     );
 
-    const metodosDigitales = Object.values(MetodoPago).filter(
-      (m) => m !== MetodoPago.EFECTIVO,
-    );
-    const ventasDigitales = metodosDigitales
+    const nombresDigitales = metodos.filter((m) => !m.esEfectivo).map((m) => m.nombre);
+    const ventasDigitales = nombresDigitales
       .map((metodoPago) => ({
         metodoPago,
         total: sumaPor(
@@ -154,6 +158,7 @@ export class CajaService {
     return {
       montoInicial: Number(turno.montoInicial),
       ventasEfectivo,
+      nombreMetodoEfectivo: metodoEfectivo?.nombre,
       ventasDigitales,
       totalVentasDigitales,
       ingresos,
@@ -177,8 +182,10 @@ export class CajaService {
 
     const resumen = await this.resumen(id);
 
-    const esperadoPorMetodo = new Map<MetodoPago, number>();
-    esperadoPorMetodo.set(MetodoPago.EFECTIVO, resumen.efectivoEsperado);
+    const esperadoPorMetodo = new Map<string, number>();
+    if (resumen.nombreMetodoEfectivo) {
+      esperadoPorMetodo.set(resumen.nombreMetodoEfectivo, resumen.efectivoEsperado);
+    }
     for (const digital of resumen.ventasDigitales) {
       esperadoPorMetodo.set(digital.metodoPago, digital.total);
     }
@@ -260,7 +267,7 @@ export class CajaService {
     tipo: TipoMovimientoCaja;
     monto: number;
     concepto?: string;
-    metodoPago?: MetodoPago;
+    metodoPago?: string;
     ventaId?: string;
   }): Promise<MovimientoCaja> {
     const movimiento = this.movimientosRepository.create({

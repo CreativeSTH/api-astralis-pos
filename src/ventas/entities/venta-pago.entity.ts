@@ -7,7 +7,6 @@ import {
   PrimaryGeneratedColumn,
 } from 'typeorm';
 import { Venta } from './venta.entity';
-import { MetodoPago } from '../../common/enums/venta.enum';
 
 @Entity('venta_pagos')
 export class VentaPago {
@@ -21,8 +20,9 @@ export class VentaPago {
   @JoinColumn({ name: 'venta_id' })
   venta: Venta;
 
-  @Column({ name: 'metodo_pago', type: 'enum', enum: MetodoPago })
-  metodoPago: MetodoPago;
+  /** Nombre del método de pago tal cual estaba en el catálogo del negocio al momento de la venta (denormalizado). */
+  @Column({ name: 'metodo_pago' })
+  metodoPago: string;
 
   @Column({ type: 'numeric', precision: 12, scale: 2 })
   monto: number;

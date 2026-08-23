@@ -9,6 +9,7 @@ import * as bcrypt from 'bcrypt';
 import { Negocio } from './entities/negocio.entity';
 import { Usuario } from '../usuarios/entities/usuario.entity';
 import { RolesService } from '../roles/roles.service';
+import { MetodosPagoService } from '../metodos-pago/metodos-pago.service';
 import { CreateNegocioDto } from './dto/create-negocio.dto';
 import { UpdateNegocioDto } from './dto/update-negocio.dto';
 
@@ -21,6 +22,7 @@ export class NegociosService {
     private readonly usuariosRepository: Repository<Usuario>,
     private readonly dataSource: DataSource,
     private readonly rolesService: RolesService,
+    private readonly metodosPagoService: MetodosPagoService,
   ) {}
 
   findAll(): Promise<Negocio[]> {
@@ -39,12 +41,12 @@ export class NegociosService {
   }
 
   /**
-   * Crea el Negocio, luego asegura sus roles "Administrador"/"Cajero" por
-   * defecto y crea su primer usuario con el rol Administrador. El sembrado
-   * de roles corre fuera de la transacción del Negocio (RolesService no
-   * acepta un EntityManager compartido) — no es 100% atómico, pero es
-   * idempotente y el escenario de fallo a mitad de camino es benigno en un
-   * sistema en desarrollo activo.
+   * Crea el Negocio, luego asegura sus roles "Administrador"/"Cajero" y sus
+   * métodos de pago por defecto, y crea su primer usuario con el rol
+   * Administrador. Ese sembrado corre fuera de la transacción del Negocio
+   * (los services involucrados no aceptan un EntityManager compartido) — no
+   * es 100% atómico, pero es idempotente y el escenario de fallo a mitad de
+   * camino es benigno en un sistema en desarrollo activo.
    */
   async create(dto: CreateNegocioDto): Promise<Negocio> {
     const emailExistente = await this.usuariosRepository.findOne({
@@ -71,6 +73,7 @@ export class NegociosService {
     const { administrador } = await this.rolesService.asegurarRolesPorDefecto(
       negocio.id,
     );
+    await this.metodosPagoService.asegurarMetodosPorDefecto(negocio.id);
     const passwordHash = await bcrypt.hash(dto.adminInicial.password, 12);
     const admin = this.usuariosRepository.create({
       negocioId: negocio.id,

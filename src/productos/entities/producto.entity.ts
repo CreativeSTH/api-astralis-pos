@@ -11,6 +11,10 @@ import { TipoImpuesto } from '../../common/enums/tipo-impuesto.enum';
   unique: true,
   where: '"codigo_barras" IS NOT NULL',
 })
+@Index(['negocioId', 'sku'], {
+  unique: true,
+  where: '"sku" IS NOT NULL',
+})
 export class Producto extends BaseEntity {
   @Index()
   @Column({ name: 'negocio_id' })
