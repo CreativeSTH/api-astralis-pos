@@ -6,8 +6,10 @@ export class StockInicialDto {
   @IsUUID()
   bodegaId: string;
 
-  @ApiProperty()
+  @ApiProperty({
+    description: '0 es válido — registra el producto en esta bodega aunque todavía no tenga stock.',
+  })
   @IsNumber()
-  @Min(0.01)
+  @Min(0)
   cantidad: number;
 }

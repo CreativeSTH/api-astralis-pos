@@ -97,6 +97,20 @@ export class ProductosService extends TenantBaseService<Producto> {
     }
     const { stockInicial, categoriaIds, proveedores, ...datosProducto } =
       this.normalizarImpuesto(dto);
+
+    // Validado acá (no en el DTO) por el mismo conflicto ya documentado en CreateProductoDto
+    // entre @Transform y @Type con arrays anidados enviados como string en multipart. Un producto
+    // sin ninguna bodega asignada quedaría invisible en el punto de venta de todas las sedes hasta
+    // que alguien le ajuste stock a mano — mejor no dejarlo nacer así.
+    const filasStockValidas = (stockInicial ?? []).filter(
+      (item) => item?.bodegaId && Number(item.cantidad) >= 0,
+    );
+    if (filasStockValidas.length === 0) {
+      throw new BadRequestException(
+        'Asigná al menos una bodega con stock inicial (puede ser 0)',
+      );
+    }
+
     const categorias = await this.resolverCategorias(categoriaIds);
     const producto = await this.createForTenant({
       ...datosProducto,
@@ -104,17 +118,17 @@ export class ProductosService extends TenantBaseService<Producto> {
       imagenUrl: imagen ? this.buildImagenUrl(imagen) : undefined,
     });
 
-    if (stockInicial?.length) {
-      for (const item of stockInicial) {
-        if (!item?.bodegaId || !(Number(item.cantidad) > 0)) continue;
-        await this.inventarioService.ajustarStock({
-          productoId: producto.id,
-          bodegaId: item.bodegaId,
-          tipo: TipoMovimientoInventario.ENTRADA,
-          cantidad: Number(item.cantidad),
-          motivo: 'Carga inicial',
-        });
-      }
+    for (const item of filasStockValidas) {
+      const cantidad = Number(item.cantidad);
+      await this.inventarioService.ajustarStock({
+        productoId: producto.id,
+        bodegaId: item.bodegaId,
+        // AJUSTE para cantidad 0: ENTRADA de 0 no tiene sentido como movimiento y no crearía la
+        // fila — AJUSTE fija el valor absoluto, así queda registrada la bodega igual en cero.
+        tipo: cantidad > 0 ? TipoMovimientoInventario.ENTRADA : TipoMovimientoInventario.AJUSTE,
+        cantidad,
+        motivo: 'Carga inicial',
+      });
     }
 
     if (proveedores?.length) {
