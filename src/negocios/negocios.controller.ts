@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -18,6 +19,8 @@ import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { RequierePermiso } from '../common/decorators/requiere-permiso.decorator';
 import { ModuloPermiso } from '../common/enums/modulo-permiso.enum';
 import { AccionPermiso } from '../common/enums/accion-permiso.enum';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import type { JwtUserPayload } from '../common/decorators/current-user.decorator';
 
 @ApiTags('Negocios')
 @ApiBearerAuth('JWT-auth')
@@ -42,6 +45,22 @@ export class NegociosController {
     return this.negociosService.findAll();
   }
 
+  @Get('mi-negocio')
+  @RequierePermiso(ModuloPermiso.NEGOCIO, AccionPermiso.VER)
+  @ApiOperation({
+    summary: 'Datos del negocio del usuario autenticado (para Administradores — distinto del catálogo de plataforma NEGOCIOS)',
+  })
+  miNegocio(@CurrentUser() usuario: JwtUserPayload) {
+    return this.negociosService.findOne(this.exigirNegocioId(usuario));
+  }
+
+  @Patch('mi-negocio')
+  @RequierePermiso(ModuloPermiso.NEGOCIO, AccionPermiso.EDITAR)
+  @ApiOperation({ summary: 'Editar los datos del propio negocio (nombre, NIT, contacto)' })
+  actualizarMiNegocio(@CurrentUser() usuario: JwtUserPayload, @Body() dto: UpdateNegocioDto) {
+    return this.negociosService.update(this.exigirNegocioId(usuario), dto);
+  }
+
   @Get(':id')
   @RequierePermiso(ModuloPermiso.NEGOCIOS, AccionPermiso.VER)
   findOne(@Param('id', ParseUUIDPipe) id: string) {
@@ -62,5 +81,13 @@ export class NegociosController {
   @ApiOperation({ summary: 'Desactivar negocio (soft delete)' })
   remove(@Param('id', ParseUUIDPipe) id: string) {
     return this.negociosService.remove(id);
+  }
+
+  /** Un usuario de tier SISTEMA no pertenece a ningún negocio — `/mi-negocio` no aplica para esa cuenta. */
+  private exigirNegocioId(usuario: JwtUserPayload): string {
+    if (!usuario.negocioId) {
+      throw new BadRequestException('Tu usuario no pertenece a un negocio');
+    }
+    return usuario.negocioId;
   }
 }

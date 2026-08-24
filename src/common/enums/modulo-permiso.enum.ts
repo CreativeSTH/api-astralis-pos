@@ -1,5 +1,7 @@
 export enum ModuloPermiso {
   NEGOCIOS = 'NEGOCIOS',
+  /** Distinto de NEGOCIOS (tier SISTEMA, catálogo de la plataforma) — este es tier NEGOCIO: editar los datos del propio negocio. */
+  NEGOCIO = 'NEGOCIO',
   SUCURSALES = 'SUCURSALES',
   USUARIOS = 'USUARIOS',
   ROLES = 'ROLES',
