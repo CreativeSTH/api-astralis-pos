@@ -17,6 +17,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { TipoVenta } from '../../common/enums/venta.enum';
+import { TipoComprobante } from '../../common/enums/tipo-comprobante.enum';
 import { CreateDireccionClienteDto } from '../../clientes/dto/create-direccion-cliente.dto';
 
 export class VentaItemDto {
@@ -108,6 +109,15 @@ export class CreateVentaDto {
   @IsOptional()
   @IsEnum(TipoVenta)
   tipoVenta?: TipoVenta;
+
+  @ApiProperty({
+    enum: TipoComprobante,
+    required: false,
+    description: 'Si no se envía, se usa el tipo por defecto configurado en la sucursal (recibo por default)',
+  })
+  @IsOptional()
+  @IsEnum(TipoComprobante)
+  tipoComprobante?: TipoComprobante;
 
   @ApiProperty({
     required: false,

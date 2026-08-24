@@ -35,6 +35,9 @@ import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { Domicilio } from '../domicilios/entities/domicilio.entity';
 import { DireccionCliente } from '../clientes/entities/direccion-cliente.entity';
 import { EstadoDomicilio } from '../common/enums/estado-domicilio.enum';
+import { Sucursal } from '../sucursales/entities/sucursal.entity';
+import { TipoComprobante } from '../common/enums/tipo-comprobante.enum';
+import { NumeracionComprobanteService } from '../facturacion/numeracion-comprobante.service';
 
 const TOLERANCIA_REDONDEO = 1;
 const DIAS_MORA_PARA_EN_MORA = 60;
@@ -59,6 +62,7 @@ export class VentasService {
     private readonly alertasService: AlertasService,
     private readonly realtimeGateway: RealtimeGateway,
     private readonly metodosPagoService: MetodosPagoService,
+    private readonly numeracionComprobanteService: NumeracionComprobanteService,
     private readonly cls: ClsService,
   ) {}
 
@@ -195,6 +199,13 @@ export class VentasService {
         );
       }
 
+      const comprobante = await this.resolverComprobante(
+        manager,
+        negocioId,
+        dto.sucursalId,
+        dto.tipoComprobante,
+      );
+
       const ventaRepo = manager.getRepository(Venta);
       let venta = ventaRepo.create({
         negocioId,
@@ -213,6 +224,7 @@ export class VentasService {
         margenBruto: total - costoTotal,
         numeroCuotas: 0,
         creadaPor: usuarioId,
+        ...comprobante,
         items: itemsEntities,
         pagos: dto.pagos!.map((p) =>
           manager.getRepository(VentaPago).create({
@@ -334,6 +346,13 @@ export class VentasService {
         );
       }
 
+      const comprobante = await this.resolverComprobante(
+        manager,
+        negocioId,
+        dto.sucursalId,
+        dto.tipoComprobante,
+      );
+
       const ventaRepo = manager.getRepository(Venta);
       let venta = ventaRepo.create({
         negocioId,
@@ -353,6 +372,7 @@ export class VentasService {
         numeroCuotas,
         tasaInteresMora,
         creadaPor: usuarioId,
+        ...comprobante,
         items: itemsEntities,
         cuotas: cuotasEntities,
       });
@@ -377,6 +397,41 @@ export class VentasService {
 
       return { venta, domicilio };
     });
+  }
+
+  /**
+   * Asigna tipo + número de comprobante dentro de la misma transacción de la
+   * venta — nunca bloquea la venta por falta de configuración: si la
+   * sucursal no tiene plantilla/rango configurado, igual numera
+   * secuencialmente desde 1 (ver `NumeracionComprobanteService`).
+   */
+  private async resolverComprobante(
+    manager: EntityManager,
+    negocioId: string,
+    sucursalId: string,
+    tipoSolicitado?: TipoComprobante,
+  ): Promise<{
+    numeroComprobante: string;
+    tipoComprobanteEmitido: TipoComprobante;
+    plantillaComprobanteId?: string;
+  }> {
+    const sucursal = await manager
+      .getRepository(Sucursal)
+      .findOneOrFail({ where: { id: sucursalId } });
+    const tipo = tipoSolicitado ?? sucursal.tipoComprobanteDefecto;
+    const plantillaComprobanteId =
+      tipo === TipoComprobante.FACTURA
+        ? sucursal.plantillaFacturaDefectoId
+        : sucursal.plantillaReciboDefectoId;
+
+    const { numeroFormateado } = await this.numeracionComprobanteService.siguienteNumero(
+      manager,
+      negocioId,
+      sucursalId,
+      tipo,
+    );
+
+    return { numeroComprobante: numeroFormateado, tipoComprobanteEmitido: tipo, plantillaComprobanteId };
   }
 
   /**

@@ -1,0 +1,12 @@
+/** Catálogo fijo de datos del negocio que se pueden graficar — ver `GraficosDataService`. */
+export enum FuenteDatoGrafico {
+  VENTAS_TOTAL = 'VENTAS_TOTAL',
+  VENTAS_CONTADO = 'VENTAS_CONTADO',
+  VENTAS_CREDITO = 'VENTAS_CREDITO',
+  INGRESOS = 'INGRESOS',
+  EGRESOS = 'EGRESOS',
+  MARGEN_BRUTO = 'MARGEN_BRUTO',
+  METODOS_PAGO = 'METODOS_PAGO',
+  PRODUCTOS_TOP = 'PRODUCTOS_TOP',
+  CIERRES_CAJA_DIFERENCIA = 'CIERRES_CAJA_DIFERENCIA',
+}

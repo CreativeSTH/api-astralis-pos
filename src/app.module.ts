@@ -32,6 +32,8 @@ import { CobrosModule } from './cobros/cobros.module';
 import { AlertasModule } from './alertas/alertas.module';
 import { ListaPedidosModule } from './lista-pedidos/lista-pedidos.module';
 import { ReportesModule } from './reportes/reportes.module';
+import { GraficosModule } from './graficos/graficos.module';
+import { FacturacionModule } from './facturacion/facturacion.module';
 import { HealthModule } from './health/health.module';
 import { RealtimeModule } from './realtime/realtime.module';
 
@@ -85,6 +87,8 @@ import { RealtimeModule } from './realtime/realtime.module';
     AlertasModule,
     ListaPedidosModule,
     ReportesModule,
+    GraficosModule,
+    FacturacionModule,
     HealthModule,
     RealtimeModule,
   ],

@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { VentasService } from './ventas.service';
+import { ComprobantesService } from './comprobantes.service';
 import { CreateVentaDto } from './dto/create-venta.dto';
 import { CancelarVentaDto } from './dto/cancelar-venta.dto';
 import { AbonarCuotaDto } from './dto/abonar-cuota.dto';
@@ -24,7 +25,10 @@ import { AccionPermiso } from '../common/enums/accion-permiso.enum';
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @Controller('ventas')
 export class VentasController {
-  constructor(private readonly ventasService: VentasService) {}
+  constructor(
+    private readonly ventasService: VentasService,
+    private readonly comprobantesService: ComprobantesService,
+  ) {}
 
   @Post()
   @RequierePermiso(ModuloPermiso.VENTAS, AccionPermiso.CREAR)
@@ -52,6 +56,15 @@ export class VentasController {
   @RequierePermiso(ModuloPermiso.VENTAS, AccionPermiso.VER)
   findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.ventasService.findOne(id);
+  }
+
+  @Get(':id/comprobante')
+  @RequierePermiso(ModuloPermiso.VENTAS, AccionPermiso.VER)
+  @ApiOperation({
+    summary: 'Contenido resuelto para imprimir el recibo/factura de una venta (plantilla + datos, listo para el print-agent)',
+  })
+  obtenerComprobante(@Param('id', ParseUUIDPipe) id: string) {
+    return this.comprobantesService.obtenerContenido(id);
   }
 
   @Patch(':id/abonar-cuota')

@@ -10,6 +10,7 @@ import { BaseEntity } from '../../common/entities/base.entity';
 import { Sucursal } from '../../sucursales/entities/sucursal.entity';
 import { TurnoCaja } from '../../caja/entities/turno-caja.entity';
 import { TipoVenta, EstadoVenta } from '../../common/enums/venta.enum';
+import { TipoComprobante } from '../../common/enums/tipo-comprobante.enum';
 import { VentaItem } from './venta-item.entity';
 import { VentaPago } from './venta-pago.entity';
 import { Cuota } from './cuota.entity';
@@ -112,6 +113,21 @@ export class Venta extends BaseEntity {
 
   @Column({ name: 'creada_por' })
   creadaPor: string;
+
+  /** Denormalizados al momento de la venta — una reimpresión siempre muestra lo realmente emitido, aunque los defaults de la sucursal cambien después. */
+  @Column({ name: 'numero_comprobante', nullable: true })
+  numeroComprobante?: string;
+
+  @Column({
+    name: 'tipo_comprobante_emitido',
+    type: 'enum',
+    enum: TipoComprobante,
+    nullable: true,
+  })
+  tipoComprobanteEmitido?: TipoComprobante;
+
+  @Column({ name: 'plantilla_comprobante_id', nullable: true })
+  plantillaComprobanteId?: string;
 
   @OneToMany(() => VentaItem, (item) => item.venta, { cascade: true })
   items: VentaItem[];

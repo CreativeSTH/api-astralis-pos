@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { VentasService } from './ventas.service';
+import { ComprobantesService } from './comprobantes.service';
 import { VentasController } from './ventas.controller';
 import { Venta } from './entities/venta.entity';
 import { VentaItem } from './entities/venta-item.entity';
@@ -15,6 +16,10 @@ import { AlertasModule } from '../alertas/alertas.module';
 import { Inventario } from '../inventario/entities/inventario.entity';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { MetodosPagoModule } from '../metodos-pago/metodos-pago.module';
+import { FacturacionModule } from '../facturacion/facturacion.module';
+import { Sucursal } from '../sucursales/entities/sucursal.entity';
+import { Negocio } from '../negocios/entities/negocio.entity';
+import { PlantillaComprobante } from '../facturacion/entities/plantilla-comprobante.entity';
 
 @Module({
   imports: [
@@ -25,6 +30,9 @@ import { MetodosPagoModule } from '../metodos-pago/metodos-pago.module';
       Cuota,
       RegistroPagoCuota,
       Inventario,
+      Sucursal,
+      Negocio,
+      PlantillaComprobante,
     ]),
     CajaModule,
     ClientesModule,
@@ -33,9 +41,10 @@ import { MetodosPagoModule } from '../metodos-pago/metodos-pago.module';
     AlertasModule,
     RealtimeModule,
     MetodosPagoModule,
+    FacturacionModule,
   ],
   controllers: [VentasController],
-  providers: [VentasService],
+  providers: [VentasService, ComprobantesService],
   exports: [VentasService],
 })
 export class VentasModule {}

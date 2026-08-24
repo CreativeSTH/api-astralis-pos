@@ -31,6 +31,30 @@ export const productoImagenUploadOptions: MulterOptions = {
   limits: { fileSize: 3 * 1024 * 1024 },
 };
 
+/** Config de multer para el logo de una plantilla de recibo/factura. Tope más chico que productos/proveedores — es solo un logo. */
+export const plantillaLogoUploadOptions: MulterOptions = {
+  storage: diskStorage({
+    destination: join(process.cwd(), 'uploads', 'plantillas'),
+    filename: (_req, file, callback) => {
+      callback(
+        null,
+        `${randomUUID()}${extname(file.originalname).toLowerCase()}`,
+      );
+    },
+  }),
+  fileFilter: (_req, file, callback) => {
+    if (!TIPOS_PERMITIDOS.test(extname(file.originalname))) {
+      callback(
+        new BadRequestException('Solo se permiten imágenes JPG, PNG o WEBP'),
+        false,
+      );
+      return;
+    }
+    callback(null, true);
+  },
+  limits: { fileSize: 2 * 1024 * 1024 },
+};
+
 /** Config de multer para los documentos de proveedor (RUT, cámara de comercio, certificación bancaria). */
 export const proveedorDocumentoUploadOptions: MulterOptions = {
   storage: diskStorage({
