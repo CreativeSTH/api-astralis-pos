@@ -34,6 +34,7 @@ import { ListaPedidosModule } from './lista-pedidos/lista-pedidos.module';
 import { ReportesModule } from './reportes/reportes.module';
 import { GraficosModule } from './graficos/graficos.module';
 import { FacturacionModule } from './facturacion/facturacion.module';
+import { CuponesModule } from './cupones/cupones.module';
 import { HealthModule } from './health/health.module';
 import { RealtimeModule } from './realtime/realtime.module';
 
@@ -89,6 +90,7 @@ import { RealtimeModule } from './realtime/realtime.module';
     ReportesModule,
     GraficosModule,
     FacturacionModule,
+    CuponesModule,
     HealthModule,
     RealtimeModule,
   ],

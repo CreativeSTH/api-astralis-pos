@@ -44,4 +44,8 @@ export class VentaItem {
 
   @Column({ name: 'costo_unitario', type: 'numeric', precision: 12, scale: 2 })
   costoUnitario: number;
+
+  /** Promoción automática (tipo=PROMOCION) que fijó `precioUnitario`, si aplicó alguna. */
+  @Column({ name: 'promocion_id', nullable: true })
+  promocionId?: string;
 }

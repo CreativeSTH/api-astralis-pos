@@ -129,6 +129,19 @@ export class Venta extends BaseEntity {
   @Column({ name: 'plantilla_comprobante_id', nullable: true })
   plantillaComprobanteId?: string;
 
+  /** Cupón redimido en esta venta (tipo=CUPON), si el cajero ingresó uno. Denormalizado para reportes/histórico. */
+  @Column({ name: 'cupon_id', nullable: true })
+  cuponId?: string;
+
+  @Column({
+    name: 'descuento_cupon',
+    type: 'numeric',
+    precision: 12,
+    scale: 2,
+    default: 0,
+  })
+  descuentoCupon: number;
+
   @OneToMany(() => VentaItem, (item) => item.venta, { cascade: true })
   items: VentaItem[];
 

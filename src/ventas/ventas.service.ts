@@ -38,6 +38,9 @@ import { EstadoDomicilio } from '../common/enums/estado-domicilio.enum';
 import { Sucursal } from '../sucursales/entities/sucursal.entity';
 import { TipoComprobante } from '../common/enums/tipo-comprobante.enum';
 import { NumeracionComprobanteService } from '../facturacion/numeracion-comprobante.service';
+import { PromocionesPricingService } from '../cupones/promociones-pricing.service';
+import { CuponValidacionService } from '../cupones/cupon-validacion.service';
+import { Promocion } from '../cupones/entities/promocion.entity';
 
 const TOLERANCIA_REDONDEO = 1;
 const DIAS_MORA_PARA_EN_MORA = 60;
@@ -63,6 +66,8 @@ export class VentasService {
     private readonly realtimeGateway: RealtimeGateway,
     private readonly metodosPagoService: MetodosPagoService,
     private readonly numeracionComprobanteService: NumeracionComprobanteService,
+    private readonly promocionesPricingService: PromocionesPricingService,
+    private readonly cuponValidacionService: CuponValidacionService,
     private readonly cls: ClsService,
   ) {}
 
@@ -118,6 +123,7 @@ export class VentasService {
   /** Punto de entrada único: crea venta CONTADO o CREDITO según `dto.tipoVenta`. */
   async crear(dto: CreateVentaDto): Promise<Venta> {
     await this.validarMetodosPago((dto.pagos ?? []).map((p) => p.metodoPago));
+    await this.autorizarDescuentoSiAplica(dto);
     const { venta, domicilio } =
       dto.tipoVenta === TipoVenta.CREDITO
         ? await this.crearVentaCredito(dto)
@@ -185,12 +191,14 @@ export class VentasService {
         descuentoTotal: descuentoItems,
         impuestoTotal,
         costoTotal,
+        promocionesAplicadas,
       } = await this.procesarItemsYStock(manager, dto, negocioId);
-      const { descuentoTotal, total } = this.aplicarDescuentoVenta(dto, {
-        subtotal,
-        descuentoTotal: descuentoItems,
-        impuestoTotal,
-      });
+      const cupon = await this.resolverCupon(manager, negocioId, dto, itemsEntities);
+      const { descuentoTotal, total } = this.aplicarDescuentoVenta(
+        dto,
+        { subtotal, descuentoTotal: descuentoItems, impuestoTotal },
+        cupon?.descuento ?? 0,
+      );
 
       const totalPagos = dto.pagos!.reduce((acc, p) => acc + p.monto, 0);
       if (Math.abs(totalPagos - total) > TOLERANCIA_REDONDEO) {
@@ -225,6 +233,8 @@ export class VentasService {
         numeroCuotas: 0,
         creadaPor: usuarioId,
         ...comprobante,
+        cuponId: cupon?.promocion.id,
+        descuentoCupon: cupon?.descuento ?? 0,
         items: itemsEntities,
         pagos: dto.pagos!.map((p) =>
           manager.getRepository(VentaPago).create({
@@ -235,6 +245,15 @@ export class VentasService {
         ),
       });
       venta = await ventaRepo.save(venta);
+
+      await this.registrarUsosDePromociones(
+        manager,
+        negocioId,
+        dto.sucursalId,
+        venta.id,
+        promocionesAplicadas,
+        cupon,
+      );
 
       await this.registrarMovimientosInventario(
         manager,
@@ -299,12 +318,14 @@ export class VentasService {
         descuentoTotal: descuentoItems,
         impuestoTotal,
         costoTotal,
+        promocionesAplicadas,
       } = await this.procesarItemsYStock(manager, dto, negocioId);
-      const { descuentoTotal, total } = this.aplicarDescuentoVenta(dto, {
-        subtotal,
-        descuentoTotal: descuentoItems,
-        impuestoTotal,
-      });
+      const cupon = await this.resolverCupon(manager, negocioId, dto, itemsEntities);
+      const { descuentoTotal, total } = this.aplicarDescuentoVenta(
+        dto,
+        { subtotal, descuentoTotal: descuentoItems, impuestoTotal },
+        cupon?.descuento ?? 0,
+      );
 
       if (!dto.omitirValidacionCredito) {
         const verificacion = await this.clientesService.verificarCredito(
@@ -373,10 +394,21 @@ export class VentasService {
         tasaInteresMora,
         creadaPor: usuarioId,
         ...comprobante,
+        cuponId: cupon?.promocion.id,
+        descuentoCupon: cupon?.descuento ?? 0,
         items: itemsEntities,
         cuotas: cuotasEntities,
       });
       venta = await ventaRepo.save(venta);
+
+      await this.registrarUsosDePromociones(
+        manager,
+        negocioId,
+        dto.sucursalId,
+        venta.id,
+        promocionesAplicadas,
+        cupon,
+      );
 
       await this.registrarMovimientosInventario(
         manager,
@@ -533,11 +565,42 @@ export class VentasService {
    * recalcula el IVA por línea— igual que el botón de "descuento" de un POS
    * físico: una rebaja final sobre el total, no una repricing de cada ítem.
    */
+  /**
+   * Un descuento manual (dto.descuentoVenta) requiere el PIN de alguien con VENTAS:ELIMINAR si
+   * quien está cobrando no lo tiene — mismo mecanismo de step-up que `cancelar()`, reutilizando
+   * el mismo permiso como "puede saltarse controles sensibles de una venta sin pedir aprobación"
+   * en vez de sumar un AccionPermiso nuevo solo para esto.
+   */
+  private async autorizarDescuentoSiAplica(dto: CreateVentaDto): Promise<void> {
+    if (!dto.descuentoVenta || dto.descuentoVenta <= 0) return;
+    const negocioId = this.getNegocioId();
+    const rolId = this.cls.get<string>('rolId');
+    const puedeSinPin = await this.permisos.rolTienePermiso(
+      rolId,
+      ModuloPermiso.VENTAS,
+      AccionPermiso.ELIMINAR,
+    );
+    if (puedeSinPin) return;
+    if (!dto.pinAutorizacionDescuento) {
+      throw new ForbiddenException(
+        'Se requiere el PIN de un administrador para aplicar un descuento manual',
+      );
+    }
+    await this.authService.autorizarConPin(
+      negocioId,
+      dto.pinAutorizacionDescuento,
+      ModuloPermiso.VENTAS,
+      AccionPermiso.ELIMINAR,
+    );
+  }
+
   private aplicarDescuentoVenta(
     dto: CreateVentaDto,
     base: { subtotal: number; descuentoTotal: number; impuestoTotal: number },
+    descuentoCupon = 0,
   ): { descuentoTotal: number; total: number } {
-    const descuentoTotal = base.descuentoTotal + (dto.descuentoVenta ?? 0);
+    const descuentoTotal =
+      base.descuentoTotal + (dto.descuentoVenta ?? 0) + descuentoCupon;
     const total = base.subtotal - descuentoTotal + base.impuestoTotal;
     if (total < 0) {
       throw new BadRequestException('El descuento supera el total de la venta');
@@ -545,7 +608,7 @@ export class VentasService {
     return { descuentoTotal, total };
   }
 
-  /** Procesa items de venta: calcula totales por línea y descuenta stock. Común a CONTADO/CREDITO. */
+  /** Procesa items de venta: calcula totales por línea (aplicando promociones automáticas vigentes) y descuenta stock. Común a CONTADO/CREDITO. */
   private async procesarItemsYStock(
     manager: EntityManager,
     dto: CreateVentaDto,
@@ -559,10 +622,14 @@ export class VentasService {
     let impuestoTotal = 0;
     let costoTotal = 0;
     const itemsEntities: VentaItem[] = [];
+    // Suma del descuento otorgado por cada promoción automática, para registrar un solo
+    // PromocionUso por promoción al final (no uno por línea).
+    const promocionesAplicadas = new Map<string, number>();
 
     for (const itemDto of dto.items) {
       const producto = await productoRepo.findOne({
         where: { id: itemDto.productoId, negocioId, activo: true },
+        relations: { categorias: true },
       });
       if (!producto) {
         throw new NotFoundException(
@@ -570,8 +637,19 @@ export class VentasService {
         );
       }
 
+      // El precio nunca se confía del cliente: se recalcula acá, aplicando la promoción
+      // automática vigente para este producto/sucursal/bodega si hay alguna.
+      const { precio: precioEfectivo, promocionId } =
+        await this.promocionesPricingService.precioEfectivo(
+          negocioId,
+          dto.sucursalId,
+          dto.bodegaId,
+          producto,
+          manager,
+        );
+
       const descuento = itemDto.descuento ?? 0;
-      const bruto = Number(producto.precioVenta) * itemDto.cantidad;
+      const bruto = precioEfectivo * itemDto.cantidad;
       const baseImponible = bruto - descuento;
       if (baseImponible < 0) {
         throw new BadRequestException(
@@ -587,15 +665,25 @@ export class VentasService {
       impuestoTotal += impuesto;
       costoTotal += costoItem;
 
+      if (promocionId) {
+        const montoPromocion =
+          (Number(producto.precioVenta) - precioEfectivo) * itemDto.cantidad;
+        promocionesAplicadas.set(
+          promocionId,
+          (promocionesAplicadas.get(promocionId) ?? 0) + montoPromocion,
+        );
+      }
+
       itemsEntities.push(
         manager.getRepository(VentaItem).create({
           productoId: producto.id,
           nombreProducto: producto.nombre,
           cantidad: itemDto.cantidad,
-          precioUnitario: producto.precioVenta,
+          precioUnitario: precioEfectivo,
           descuento,
           subtotal: baseImponible + impuesto,
           costoUnitario: producto.costo,
+          promocionId,
         }),
       );
 
@@ -627,7 +715,63 @@ export class VentasService {
       descuentoTotal,
       impuestoTotal,
       costoTotal,
+      promocionesAplicadas,
     };
+  }
+
+  /** Valida (con lock) el cupón de la venta si se envió uno — nunca confía en el descuento calculado por el cliente. */
+  private async resolverCupon(
+    manager: EntityManager,
+    negocioId: string,
+    dto: CreateVentaDto,
+    itemsEntities: VentaItem[],
+  ): Promise<{ promocion: Promocion; descuento: number } | undefined> {
+    if (!dto.cuponCodigo) return undefined;
+    return this.cuponValidacionService.bloquearYValidar(
+      manager,
+      negocioId,
+      dto.cuponCodigo,
+      {
+        sucursalId: dto.sucursalId,
+        bodegaId: dto.bodegaId,
+        items: itemsEntities.map((item) => ({
+          productoId: item.productoId,
+          cantidad: Number(item.cantidad),
+          precioUnitario: Number(item.precioUnitario),
+        })),
+      },
+    );
+  }
+
+  /** Registra en `promociones_uso` cada promoción automática que afectó la venta, más el cupón si se redimió uno. Se llama después de guardar la venta (necesita venta.id). */
+  private async registrarUsosDePromociones(
+    manager: EntityManager,
+    negocioId: string,
+    sucursalId: string,
+    ventaId: string,
+    promocionesAplicadas: Map<string, number>,
+    cupon?: { promocion: Promocion; descuento: number },
+  ): Promise<void> {
+    for (const [promocionId, monto] of promocionesAplicadas) {
+      await this.cuponValidacionService.registrarUso(
+        manager,
+        promocionId,
+        ventaId,
+        negocioId,
+        sucursalId,
+        monto,
+      );
+    }
+    if (cupon) {
+      await this.cuponValidacionService.registrarUso(
+        manager,
+        cupon.promocion.id,
+        ventaId,
+        negocioId,
+        sucursalId,
+        cupon.descuento,
+      );
+    }
   }
 
   private async registrarMovimientosInventario(

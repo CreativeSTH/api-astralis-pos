@@ -13,6 +13,7 @@ import {
   IsPositive,
   IsString,
   IsUUID,
+  Matches,
   Min,
   ValidateNested,
 } from 'class-validator';
@@ -161,6 +162,25 @@ export class CreateVentaDto {
   @IsNumber()
   @Min(0)
   descuentoVenta?: number;
+
+  @ApiProperty({
+    required: false,
+    description:
+      'PIN de un usuario con VENTAS:ELIMINAR — requerido cuando hay descuentoVenta y quien cobra no tiene ese permiso (ej. un cajero pidiendo aprobación sin cambiar de sesión)',
+  })
+  @IsOptional()
+  @Matches(/^\d{4,6}$/, {
+    message: 'El PIN debe tener entre 4 y 6 dígitos numéricos',
+  })
+  pinAutorizacionDescuento?: string;
+
+  @ApiProperty({
+    required: false,
+    description: 'Código de cupón a redimir en esta venta — se valida y aplica de forma autoritativa en el servidor',
+  })
+  @IsOptional()
+  @IsString()
+  cuponCodigo?: string;
 
   @ApiProperty({ type: [VentaItemDto] })
   @IsArray()
