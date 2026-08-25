@@ -1,6 +1,13 @@
 import { encriptar, desencriptar } from './cifrado';
 
 describe('cifrado', () => {
+  // Valor fijo de prueba: 32 bytes en hex para AES-256
+  const CLAVE_MAESTRA_TEST = '00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff';
+
+  beforeAll(() => {
+    process.env.CIFRADO_CLAVE_MAESTRA = CLAVE_MAESTRA_TEST;
+  });
+
   const original = 'clave-privada-super-secreta-de-wompi';
 
   it('desencripta lo que encriptó', () => {
