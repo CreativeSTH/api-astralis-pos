@@ -370,4 +370,87 @@ describe('PagosService — webhook', () => {
     expect(transaccionRepo.save).not.toHaveBeenCalled();
     expect(realtimeGateway.emitToNegocio).not.toHaveBeenCalled();
   });
+
+  it('descarta el evento si signature.properties no viene en el payload', async () => {
+    const data = { transaction: { id: 'txn-1', status: 'APPROVED', reference: 'ref-abc' } };
+    const timestamp = 1234567890;
+    const checksum = firmarEvento(['transaction.id', 'transaction.status'], data, timestamp, SECRETO);
+    const payload: any = {
+      event: 'transaction.updated',
+      data,
+      signature: { checksum }, // properties ausente
+      timestamp,
+    };
+    await service.procesarWebhook(payload);
+    expect(transaccionRepo.save).not.toHaveBeenCalled();
+    expect(realtimeGateway.emitToNegocio).not.toHaveBeenCalled();
+  });
+
+  it('descarta el evento si signature.properties no calza EXACTO con ["transaction.id", "transaction.status"]', async () => {
+    const data = { transaction: { id: 'txn-1', status: 'APPROVED', reference: 'ref-abc' } };
+    const timestamp = 1234567890;
+    // Firma calculada (y válida) sobre una lista más corta que la esperada.
+    const checksum = firmarEvento(['transaction.id'], data, timestamp, SECRETO);
+    await service.procesarWebhook({
+      event: 'transaction.updated',
+      data,
+      signature: { properties: ['transaction.id'], checksum },
+      timestamp,
+    });
+    expect(transaccionRepo.save).not.toHaveBeenCalled();
+    expect(realtimeGateway.emitToNegocio).not.toHaveBeenCalled();
+  });
+
+  it('descarta el evento (ataque de swap de reference) si transaction.id no coincide con el wompiTransactionId ya registrado para esa referencia', async () => {
+    // La transacción en DB fue creada por iniciarPago contra el wompiTransactionId 'txn-legitima'.
+    transaccionRepo.findOne.mockResolvedValue({
+      referencia: 'ref-abc',
+      negocioId: 'n1',
+      estado: 'PENDIENTE',
+      wompiTransactionId: 'txn-legitima',
+    });
+    // El atacante reusa un checksum válido capturado para OTRA transacción (txn-1),
+    // apuntándolo a 'ref-abc' vía el campo `reference` (no firmado).
+    const data = { transaction: { id: 'txn-1', status: 'APPROVED', reference: 'ref-abc' } };
+    const timestamp = 1234567890;
+    const checksum = firmarEvento(['transaction.id', 'transaction.status'], data, timestamp, SECRETO);
+    await service.procesarWebhook({
+      event: 'transaction.updated',
+      data,
+      signature: { properties: ['transaction.id', 'transaction.status'], checksum },
+      timestamp,
+    });
+    expect(transaccionRepo.save).not.toHaveBeenCalled();
+    expect(realtimeGateway.emitToNegocio).not.toHaveBeenCalled();
+  });
+
+  it('reenviar el mismo evento válido dos veces es un no-op la segunda vez (no re-save, no re-emit)', async () => {
+    // El mock de findOne devuelve la MISMA referencia de objeto en ambas llamadas —
+    // el service la muta in-place, así que tras la 1ª pasada estado deja de ser PENDIENTE.
+    const transaccionMutable = {
+      referencia: 'ref-abc',
+      negocioId: 'n1',
+      estado: 'PENDIENTE',
+      wompiTransactionId: 'txn-1',
+    };
+    transaccionRepo.findOne.mockResolvedValue(transaccionMutable);
+
+    const data = { transaction: { id: 'txn-1', status: 'APPROVED', reference: 'ref-abc' } };
+    const timestamp = 1234567890;
+    const checksum = firmarEvento(['transaction.id', 'transaction.status'], data, timestamp, SECRETO);
+    const payload = {
+      event: 'transaction.updated' as const,
+      data,
+      signature: { properties: ['transaction.id', 'transaction.status'], checksum },
+      timestamp,
+    };
+
+    await service.procesarWebhook(payload);
+    expect(transaccionRepo.save).toHaveBeenCalledTimes(1);
+    expect(realtimeGateway.emitToNegocio).toHaveBeenCalledTimes(1);
+
+    await service.procesarWebhook(payload);
+    expect(transaccionRepo.save).toHaveBeenCalledTimes(1);
+    expect(realtimeGateway.emitToNegocio).toHaveBeenCalledTimes(1);
+  });
 });

@@ -158,9 +158,10 @@ export class PagosService extends TenantBaseService<ConfiguracionPagoWompi> {
    * (Task 7 lo expone como @Public()) — la firma SHA256 es la ÚNICA defensa
    * contra un payload forjado, así que se verifica ANTES de tocar cualquier
    * dato y CUALQUIER fallo (firma inválida, payload malformado, transacción
-   * desconocida) descarta el evento en silencio: sin lanzar excepción, sin
-   * tocar la DB, sin darle a un posible atacante ninguna señal de por qué
-   * falló.
+   * desconocida, propiedades firmadas inesperadas, transaction.id que no
+   * coincide con el de la transacción, transacción que ya no está PENDIENTE)
+   * descarta el evento en silencio: sin lanzar excepción, sin tocar la DB,
+   * sin darle a un posible atacante ninguna señal de por qué falló.
    *
    * negocioId NO viene de this.getNegocioId() (no hay contexto CLS en un
    * webhook sin JWT) — se resuelve de la TransaccionPago encontrada por
@@ -180,6 +181,12 @@ export class PagosService extends TenantBaseService<ConfiguracionPagoWompi> {
     });
     if (!transaccion) return; // evento de una transacción que no es nuestra o ya no existe
 
+    // Guard de replay / orden: una transacción solo transiciona una vez desde
+    // PENDIENTE. Si ya fue procesada (este mismo evento reenviado por Wompi,
+    // o un evento fuera de orden llegando después de uno más reciente), no
+    // hay nada que hacer — no-op silencioso, no un error.
+    if (transaccion.estado !== 'PENDIENTE') return;
+
     const config = await this.configRepo.findOne({
       where: { negocioId: transaccion.negocioId },
     });
@@ -187,8 +194,26 @@ export class PagosService extends TenantBaseService<ConfiguracionPagoWompi> {
 
     const secreto = desencriptar(config.llaveSecretaEventosCifrada);
 
-    // Concatena, EN ORDEN, los valores que Wompi declara haber firmado
-    // (payload.signature.properties, ej. "transaction.id") + el timestamp +
+    // El set de propiedades que Wompi firma para transaction.updated está
+    // fijo y documentado: ["transaction.id", "transaction.status"].
+    // `payload.signature.properties` es, en cambio, un campo que llega en el
+    // body y por lo tanto es controlado por quien envía el request — no basta
+    // con exigir que no esté vacío. Como `valores.join('')` concatena sin
+    // delimitador y los NOMBRES de propiedad no se hashean, aceptar una lista
+    // distinta permitiría reparticionar un checksum ya capturado sobre otro
+    // conjunto de campos, desacoplando la firma de `status`. Se exige un calce
+    // EXACTO (orden y contenido) con el set documentado.
+    const PROPIEDADES_ESPERADAS = ['transaction.id', 'transaction.status'];
+    const properties = payload.signature?.properties;
+    if (
+      !Array.isArray(properties) ||
+      properties.length !== PROPIEDADES_ESPERADAS.length ||
+      properties.some((prop, i) => prop !== PROPIEDADES_ESPERADAS[i])
+    ) {
+      return;
+    }
+
+    // Concatena, EN ORDEN, los valores de esas propiedades + el timestamp +
     // el secreto del negocio, y compara el SHA256 contra el checksum
     // recibido. Acceso con optional chaining a propósito: un payload
     // malformado (entidad/campo inexistente) produce `undefined` en vez de
@@ -197,7 +222,7 @@ export class PagosService extends TenantBaseService<ConfiguracionPagoWompi> {
     // sin distinguir el motivo hacia afuera.
     let checksumEsperado: string;
     try {
-      const valores = (payload.signature?.properties ?? []).map((prop) => {
+      const valores = properties.map((prop) => {
         const [entidad, campo] = prop.split('.');
         return payload.data?.[entidad]?.[campo];
       });
@@ -211,6 +236,22 @@ export class PagosService extends TenantBaseService<ConfiguracionPagoWompi> {
       return; // firma inválida — descartar en silencio, no darle información a un posible atacante
     }
 
+    // `reference` (usada arriba para ubicar la transacción) NUNCA forma parte
+    // del set firmado por Wompi, así que una firma válida no prueba nada
+    // sobre ella. Si ya conocemos el wompiTransactionId real de esta
+    // transacción (siempre lo conocemos: Task 5 lo graba en iniciarPago),
+    // exigimos que coincida con `transaction.id`, que SÍ está firmado. Esto
+    // cierra el ataque de "swap de reference": un checksum válido capturado
+    // para OTRA transacción PENDIENTE del mismo negocio no puede reusarse
+    // apuntándolo, vía `reference`, a esta transacción.
+    const transactionId = payload.data.transaction.id as string;
+    if (
+      transaccion.wompiTransactionId &&
+      transactionId !== transaccion.wompiTransactionId
+    ) {
+      return;
+    }
+
     const status = payload.data.transaction.status as string;
     transaccion.estado =
       status === 'APPROVED'
@@ -218,7 +259,7 @@ export class PagosService extends TenantBaseService<ConfiguracionPagoWompi> {
         : status === 'DECLINED'
           ? 'DECLINADA'
           : 'ERROR';
-    transaccion.wompiTransactionId = payload.data.transaction.id as string;
+    transaccion.wompiTransactionId = transactionId;
     transaccion.confirmedAt = new Date();
     await this.transaccionRepo.save(transaccion);
 
