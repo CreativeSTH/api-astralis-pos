@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -86,7 +87,7 @@ export class AuthService {
       }
     }
 
-    throw new UnauthorizedException('PIN inválido');
+    throw new BadRequestException('PIN inválido');
   }
 
   /**
