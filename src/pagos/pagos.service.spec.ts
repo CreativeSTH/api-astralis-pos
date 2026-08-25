@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { BadRequestException } from '@nestjs/common';
@@ -6,7 +7,23 @@ import { PagosService } from './pagos.service';
 import { ConfiguracionPagoWompi } from './entities/configuracion-pago-wompi.entity';
 import { TransaccionPago } from './entities/transaccion-pago.entity';
 import { WompiClientService } from './wompi-client.service';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { encriptar } from '../common/utils/cifrado';
+
+// El checksum de Wompi es SHA256 simple sobre valores concatenados + timestamp + secreto (no HMAC).
+function firmarEvento(
+  properties: string[],
+  data: any,
+  timestamp: number,
+  secreto: string,
+): string {
+  const valores = properties.map((p) => {
+    const [entidad, campo] = p.split('.');
+    return data[entidad][campo];
+  });
+  const cadena = valores.join('') + timestamp + secreto;
+  return createHash('sha256').update(cadena).digest('hex');
+}
 
 describe('PagosService — configuración', () => {
   let service: PagosService;
@@ -33,6 +50,7 @@ describe('PagosService — configuración', () => {
             crearTransaccion: jest.fn(),
           },
         },
+        { provide: RealtimeGateway, useValue: { emitToNegocio: jest.fn() } },
         {
           provide: ClsService,
           useValue: { get: jest.fn().mockReturnValue('n1') },
@@ -133,6 +151,7 @@ describe('PagosService — iniciar pago', () => {
           useValue: transaccionRepo,
         },
         { provide: WompiClientService, useValue: wompiClient },
+        { provide: RealtimeGateway, useValue: { emitToNegocio: jest.fn() } },
         {
           provide: ClsService,
           useValue: { get: jest.fn().mockReturnValue('n1') },
@@ -180,5 +199,175 @@ describe('PagosService — iniciar pago', () => {
         metodoPago: 'NEQUI',
       }),
     );
+  });
+});
+
+describe('PagosService — webhook', () => {
+  let service: PagosService;
+  let configRepo: { findOne: jest.Mock };
+  let transaccionRepo: { findOne: jest.Mock; save: jest.Mock };
+  let realtimeGateway: { emitToNegocio: jest.Mock };
+
+  const SECRETO = 'secreto-real';
+
+  beforeAll(() => {
+    process.env.CIFRADO_CLAVE_MAESTRA =
+      '00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff';
+  });
+
+  beforeEach(async () => {
+    configRepo = {
+      findOne: jest.fn().mockResolvedValue({
+        negocioId: 'n1',
+        llaveSecretaEventosCifrada: encriptar(SECRETO),
+      }),
+    };
+    transaccionRepo = {
+      findOne: jest.fn().mockResolvedValue({
+        referencia: 'ref-abc',
+        negocioId: 'n1',
+        estado: 'PENDIENTE',
+      }),
+      save: jest.fn((x: Partial<TransaccionPago>) => x),
+    };
+    realtimeGateway = { emitToNegocio: jest.fn() };
+
+    const moduleRef = await Test.createTestingModule({
+      providers: [
+        PagosService,
+        { provide: getRepositoryToken(ConfiguracionPagoWompi), useValue: configRepo },
+        { provide: getRepositoryToken(TransaccionPago), useValue: transaccionRepo },
+        { provide: WompiClientService, useValue: {} },
+        { provide: RealtimeGateway, useValue: realtimeGateway },
+        { provide: ClsService, useValue: { get: jest.fn() } },
+      ],
+    }).compile();
+    service = moduleRef.get(PagosService);
+  });
+
+  it('descarta el evento si la firma no coincide', async () => {
+    const payload = {
+      event: 'transaction.updated',
+      data: { transaction: { id: 'txn-1', status: 'APPROVED', reference: 'ref-abc' } },
+      signature: { properties: ['transaction.id', 'transaction.status'], checksum: 'firma-invalida' },
+      timestamp: 1234567890,
+    };
+    await service.procesarWebhook(payload);
+    expect(transaccionRepo.save).not.toHaveBeenCalled();
+    expect(realtimeGateway.emitToNegocio).not.toHaveBeenCalled();
+  });
+
+  it('descarta el evento si la firma fue calculada con un secreto distinto (firma trucada de otro negocio)', async () => {
+    const data = { transaction: { id: 'txn-1', status: 'APPROVED', reference: 'ref-abc' } };
+    const timestamp = 1234567890;
+    const checksum = firmarEvento(
+      ['transaction.id', 'transaction.status'],
+      data,
+      timestamp,
+      'secreto-equivocado',
+    );
+    await service.procesarWebhook({
+      event: 'transaction.updated',
+      data,
+      signature: { properties: ['transaction.id', 'transaction.status'], checksum },
+      timestamp,
+    });
+    expect(transaccionRepo.save).not.toHaveBeenCalled();
+    expect(realtimeGateway.emitToNegocio).not.toHaveBeenCalled();
+  });
+
+  it('descarta el evento si el payload fue alterado después de firmarlo (status distinto al firmado)', async () => {
+    const data = { transaction: { id: 'txn-1', status: 'APPROVED', reference: 'ref-abc' } };
+    const timestamp = 1234567890;
+    // Firma calculada con el status real (APPROVED)...
+    const checksum = firmarEvento(['transaction.id', 'transaction.status'], data, timestamp, SECRETO);
+    // ...pero el atacante intenta colar un status distinto sin volver a firmar.
+    const dataAlterada = { transaction: { ...data.transaction, status: 'DECLINED' } };
+    await service.procesarWebhook({
+      event: 'transaction.updated',
+      data: dataAlterada,
+      signature: { properties: ['transaction.id', 'transaction.status'], checksum },
+      timestamp,
+    });
+    expect(transaccionRepo.save).not.toHaveBeenCalled();
+    expect(realtimeGateway.emitToNegocio).not.toHaveBeenCalled();
+  });
+
+  it('actualiza la transacción a APROBADA y emite el evento realtime cuando la firma es válida', async () => {
+    const data = { transaction: { id: 'txn-1', status: 'APPROVED', reference: 'ref-abc' } };
+    const timestamp = 1234567890;
+    const checksum = firmarEvento(['transaction.id', 'transaction.status'], data, timestamp, SECRETO);
+
+    await service.procesarWebhook({
+      event: 'transaction.updated',
+      data,
+      signature: { properties: ['transaction.id', 'transaction.status'], checksum },
+      timestamp,
+    });
+
+    expect(transaccionRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ estado: 'APROBADA', wompiTransactionId: 'txn-1' }),
+    );
+    expect(realtimeGateway.emitToNegocio).toHaveBeenCalledWith('n1', 'pago-wompi:confirmado', {
+      referencia: 'ref-abc',
+    });
+  });
+
+  it('actualiza la transacción a DECLINADA y NO emite el evento realtime cuando Wompi declina el pago', async () => {
+    const data = { transaction: { id: 'txn-1', status: 'DECLINED', reference: 'ref-abc' } };
+    const timestamp = 1234567890;
+    const checksum = firmarEvento(['transaction.id', 'transaction.status'], data, timestamp, SECRETO);
+
+    await service.procesarWebhook({
+      event: 'transaction.updated',
+      data,
+      signature: { properties: ['transaction.id', 'transaction.status'], checksum },
+      timestamp,
+    });
+
+    expect(transaccionRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ estado: 'DECLINADA' }),
+    );
+    expect(realtimeGateway.emitToNegocio).not.toHaveBeenCalled();
+  });
+
+  it('ignora eventos que no son transaction.updated', async () => {
+    await service.procesarWebhook({
+      event: 'transaction.created',
+      data: { transaction: { id: 'txn-1', status: 'APPROVED', reference: 'ref-abc' } },
+      signature: { properties: ['transaction.id'], checksum: 'lo-que-sea' },
+      timestamp: 1234567890,
+    });
+    expect(transaccionRepo.findOne).not.toHaveBeenCalled();
+    expect(transaccionRepo.save).not.toHaveBeenCalled();
+  });
+
+  it('descarta el evento en silencio (sin lanzar) si signature.properties está mal formado', async () => {
+    const payload = {
+      event: 'transaction.updated',
+      data: { transaction: { id: 'txn-1', status: 'APPROVED', reference: 'ref-abc' } },
+      // properties no es un array — no debe tirar una excepción sin manejar.
+      signature: { properties: 'transaction.id' as unknown as string[], checksum: 'lo-que-sea' },
+      timestamp: 1234567890,
+    };
+    await expect(service.procesarWebhook(payload)).resolves.toBeUndefined();
+    expect(transaccionRepo.save).not.toHaveBeenCalled();
+    expect(realtimeGateway.emitToNegocio).not.toHaveBeenCalled();
+  });
+
+  it('descarta el evento si no encuentra ninguna transacción con esa referencia', async () => {
+    transaccionRepo.findOne.mockResolvedValue(null);
+    const data = { transaction: { id: 'txn-1', status: 'APPROVED', reference: 'ref-inexistente' } };
+    const timestamp = 1234567890;
+    const checksum = firmarEvento(['transaction.id', 'transaction.status'], data, timestamp, SECRETO);
+    await service.procesarWebhook({
+      event: 'transaction.updated',
+      data,
+      signature: { properties: ['transaction.id', 'transaction.status'], checksum },
+      timestamp,
+    });
+    expect(configRepo.findOne).not.toHaveBeenCalled();
+    expect(transaccionRepo.save).not.toHaveBeenCalled();
+    expect(realtimeGateway.emitToNegocio).not.toHaveBeenCalled();
   });
 });
