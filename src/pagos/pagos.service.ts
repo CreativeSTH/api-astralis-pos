@@ -6,15 +6,24 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ClsService } from 'nestjs-cls';
+import { randomUUID } from 'crypto';
 import { TenantBaseService } from '../common/services/tenant-base.service';
 import { ConfiguracionPagoWompi } from './entities/configuracion-pago-wompi.entity';
-import { encriptar } from '../common/utils/cifrado';
+import {
+  MetodoPagoWompi,
+  TransaccionPago,
+} from './entities/transaccion-pago.entity';
+import { WompiClientService } from './wompi-client.service';
+import { encriptar, desencriptar } from '../common/utils/cifrado';
 
 @Injectable()
 export class PagosService extends TenantBaseService<ConfiguracionPagoWompi> {
   constructor(
     @InjectRepository(ConfiguracionPagoWompi)
     private readonly configRepo: Repository<ConfiguracionPagoWompi>,
+    @InjectRepository(TransaccionPago)
+    private readonly transaccionRepo: Repository<TransaccionPago>,
+    private readonly wompiClient: WompiClientService,
     cls: ClsService,
   ) {
     super(configRepo, cls, 'Configuración de pago Wompi');
@@ -89,5 +98,48 @@ export class PagosService extends TenantBaseService<ConfiguracionPagoWompi> {
         config?.llaveSecretaEventosCifrada
       ),
     };
+  }
+
+  async iniciarPago(dto: {
+    montoEnCentavos: number;
+    metodo: MetodoPagoWompi;
+    datosMetodo: Record<string, unknown>;
+  }): Promise<{ referencia: string; wompiTransactionId: string }> {
+    const negocioId = this.getNegocioId();
+    const config = await this.configRepo.findOne({ where: { negocioId } });
+    if (!config?.activo) {
+      throw new BadRequestException('Wompi no está activo para este negocio');
+    }
+
+    const llavePrivada = desencriptar(config.llavePrivadaCifrada);
+    const { acceptanceToken, acceptPersonalAuth } =
+      await this.wompiClient.obtenerTokensAceptacion(config.llavePublica);
+
+    const referencia = randomUUID();
+    const { wompiTransactionId, status } =
+      await this.wompiClient.crearTransaccion({
+        llavePrivada,
+        amountInCents: dto.montoEnCentavos,
+        reference: referencia,
+        acceptanceToken,
+        acceptPersonalAuth,
+        paymentMethod: { type: dto.metodo, ...dto.datosMetodo },
+        // Placeholder aceptable para venta de mostrador sin cliente identificado.
+        // TODO: usar el email real del cliente cuando el POS lo resuelva.
+        customerEmail: 'ventas@negocio.local',
+      });
+
+    await this.transaccionRepo.save(
+      this.transaccionRepo.create({
+        negocioId,
+        referencia,
+        wompiTransactionId,
+        metodoPago: dto.metodo,
+        estado: status === 'APPROVED' ? 'APROBADA' : 'PENDIENTE',
+        montoEnCentavos: dto.montoEnCentavos,
+      }),
+    );
+
+    return { referencia, wompiTransactionId };
   }
 }
