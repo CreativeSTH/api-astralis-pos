@@ -62,23 +62,65 @@ export class MetodosPagoService extends TenantBaseService<MetodoPago> {
     if (existentes > 0) return;
 
     await this.repository.save(
-      METODOS_POR_DEFECTO.map((m) => this.repository.create({ ...m, negocioId })),
+      METODOS_POR_DEFECTO.map((m) =>
+        this.repository.create({ ...m, negocioId }),
+      ),
     );
   }
 
-  private async validarNombreUnico(nombre: string, excluirId?: string): Promise<void> {
+  /**
+   * Crea un único método de pago puntual si todavía no existe (activo o no) para
+   * este negocio — a diferencia de `asegurarMetodosPorDefecto`, no se salta si el
+   * negocio ya tiene otros métodos. Usado por `PagosService.activar()`: las ventas
+   * pagadas con Wompi se registran con `VentaPago.metodoPago = 'Wompi - QR'`/`'Wompi -
+   * NEQUI'` (string libre, ver CLAUDE.md de este repo), y `VentasService` exige que
+   * ese string exista en el catálogo activo del negocio — sin este paso, la venta se
+   * rechazaría justo después de que Wompi ya le cobró al cliente.
+   */
+  async asegurarMetodo(nombre: string): Promise<void> {
+    const negocioId = this.getNegocioId();
+    const existente = await this.repository.findOne({
+      where: { negocioId, nombre },
+    });
+    if (existente) {
+      if (!existente.activo) {
+        await this.repository.save({ ...existente, activo: true });
+      }
+      return;
+    }
+    await this.repository.save(
+      this.repository.create({
+        nombre,
+        esEfectivo: false,
+        activo: true,
+        negocioId,
+      }),
+    );
+  }
+
+  private async validarNombreUnico(
+    nombre: string,
+    excluirId?: string,
+  ): Promise<void> {
     const activos = await this.findAllForTenant({ activo: true });
     const duplicado = activos.some(
-      (m) => m.id !== excluirId && m.nombre.trim().toLowerCase() === nombre.trim().toLowerCase(),
+      (m) =>
+        m.id !== excluirId &&
+        m.nombre.trim().toLowerCase() === nombre.trim().toLowerCase(),
     );
     if (duplicado) {
-      throw new BadRequestException(`Ya existe un método de pago activo llamado "${nombre}"`);
+      throw new BadRequestException(
+        `Ya existe un método de pago activo llamado "${nombre}"`,
+      );
     }
   }
 
   /** Solo un método puede tener esEfectivo:true a la vez — desmarca cualquier otro antes de guardar el nuevo. */
   private async desmarcarEfectivo(excluirId?: string): Promise<void> {
-    const activos = await this.findAllForTenant({ activo: true, esEfectivo: true });
+    const activos = await this.findAllForTenant({
+      activo: true,
+      esEfectivo: true,
+    });
     const otros = activos.filter((m) => m.id !== excluirId);
     if (otros.length === 0) return;
     await this.repository.save(otros.map((m) => ({ ...m, esEfectivo: false })));

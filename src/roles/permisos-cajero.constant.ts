@@ -7,32 +7,34 @@ import { AccionPermiso } from '../common/enums/accion-permiso.enum';
  * `PermisosService.sembrarCatalogo()` pueda reusarlo sin crear un import circular entre los dos
  * servicios (`RolesService` ya inyecta `PermisosService`).
  */
-export const PERMISOS_CAJERO: Partial<Record<ModuloPermiso, AccionPermiso[]>> = {
-  [ModuloPermiso.SUCURSALES]: [AccionPermiso.VER],
-  [ModuloPermiso.PRODUCTOS]: [AccionPermiso.VER],
-  [ModuloPermiso.CATEGORIAS]: [AccionPermiso.VER],
-  [ModuloPermiso.MARCAS]: [AccionPermiso.VER],
-  [ModuloPermiso.LINEAS]: [AccionPermiso.VER],
-  [ModuloPermiso.BODEGAS]: [AccionPermiso.VER],
-  [ModuloPermiso.INVENTARIO]: [AccionPermiso.VER],
-  [ModuloPermiso.PROVEEDORES]: [AccionPermiso.VER],
-  [ModuloPermiso.VENTAS]: [
-    AccionPermiso.VER,
-    AccionPermiso.CREAR,
-    AccionPermiso.EDITAR,
-  ],
-  [ModuloPermiso.CAJA]: [
-    AccionPermiso.VER,
-    AccionPermiso.CREAR,
-    AccionPermiso.EDITAR,
-  ],
-  [ModuloPermiso.COBROS]: [AccionPermiso.VER],
-  [ModuloPermiso.CLIENTES]: [AccionPermiso.VER, AccionPermiso.CREAR],
-  [ModuloPermiso.DOMICILIOS]: [
-    AccionPermiso.VER,
-    AccionPermiso.CREAR,
-    AccionPermiso.EDITAR,
-  ],
-  [ModuloPermiso.ALERTAS]: [AccionPermiso.VER],
-  [ModuloPermiso.METODOS_PAGO]: [AccionPermiso.VER],
-};
+export const PERMISOS_CAJERO: Partial<Record<ModuloPermiso, AccionPermiso[]>> =
+  {
+    [ModuloPermiso.SUCURSALES]: [AccionPermiso.VER],
+    [ModuloPermiso.PRODUCTOS]: [AccionPermiso.VER],
+    [ModuloPermiso.CATEGORIAS]: [AccionPermiso.VER],
+    [ModuloPermiso.MARCAS]: [AccionPermiso.VER],
+    [ModuloPermiso.LINEAS]: [AccionPermiso.VER],
+    [ModuloPermiso.BODEGAS]: [AccionPermiso.VER],
+    [ModuloPermiso.INVENTARIO]: [AccionPermiso.VER],
+    [ModuloPermiso.PROVEEDORES]: [AccionPermiso.VER],
+    [ModuloPermiso.VENTAS]: [
+      AccionPermiso.VER,
+      AccionPermiso.CREAR,
+      AccionPermiso.EDITAR,
+    ],
+    [ModuloPermiso.CAJA]: [
+      AccionPermiso.VER,
+      AccionPermiso.CREAR,
+      AccionPermiso.EDITAR,
+    ],
+    [ModuloPermiso.COBROS]: [AccionPermiso.VER],
+    [ModuloPermiso.CLIENTES]: [AccionPermiso.VER, AccionPermiso.CREAR],
+    [ModuloPermiso.DOMICILIOS]: [
+      AccionPermiso.VER,
+      AccionPermiso.CREAR,
+      AccionPermiso.EDITAR,
+    ],
+    [ModuloPermiso.ALERTAS]: [AccionPermiso.VER],
+    [ModuloPermiso.METODOS_PAGO]: [AccionPermiso.VER],
+    [ModuloPermiso.PAGOS]: [AccionPermiso.VER],
+  };

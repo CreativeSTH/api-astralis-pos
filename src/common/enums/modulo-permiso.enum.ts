@@ -23,4 +23,5 @@ export enum ModuloPermiso {
   GRAFICOS = 'GRAFICOS',
   FACTURACION = 'FACTURACION',
   CUPONES = 'CUPONES',
+  PAGOS = 'PAGOS',
 }

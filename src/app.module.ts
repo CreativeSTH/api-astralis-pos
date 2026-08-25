@@ -37,6 +37,7 @@ import { FacturacionModule } from './facturacion/facturacion.module';
 import { CuponesModule } from './cupones/cupones.module';
 import { HealthModule } from './health/health.module';
 import { RealtimeModule } from './realtime/realtime.module';
+import { PagosModule } from './pagos/pagos.module';
 
 @Module({
   imports: [
@@ -93,6 +94,7 @@ import { RealtimeModule } from './realtime/realtime.module';
     CuponesModule,
     HealthModule,
     RealtimeModule,
+    PagosModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },
