@@ -1,0 +1,128 @@
+import { MigrationInterface, QueryRunner } from "typeorm";
+
+export class AgregaGraficosFacturacionCuponesPromociones1787620568835 implements MigrationInterface {
+    name = 'AgregaGraficosFacturacionCuponesPromociones1787620568835'
+
+    public async up(queryRunner: QueryRunner): Promise<void> {
+        await queryRunner.query(`CREATE TYPE "public"."promociones_tipo_enum" AS ENUM('PROMOCION', 'CUPON')`);
+        await queryRunner.query(`CREATE TYPE "public"."promociones_tipo_descuento_enum" AS ENUM('PORCENTAJE', 'MONTO_FIJO')`);
+        await queryRunner.query(`CREATE TABLE "promociones" ("id" uuid NOT NULL DEFAULT uuid_generate_v4(), "created_at" TIMESTAMP NOT NULL DEFAULT now(), "updated_at" TIMESTAMP NOT NULL DEFAULT now(), "negocio_id" character varying NOT NULL, "tipo" "public"."promociones_tipo_enum" NOT NULL, "nombre" character varying NOT NULL, "descripcion" character varying, "codigo" character varying, "tipo_descuento" "public"."promociones_tipo_descuento_enum" NOT NULL, "valor" numeric(12,2) NOT NULL, "monto_minimo_compra" numeric(12,2), "fecha_inicio" TIMESTAMP WITH TIME ZONE, "fecha_fin" TIMESTAMP WITH TIME ZONE, "uso_maximo" integer, "activo" boolean NOT NULL DEFAULT true, "creado_por" character varying, CONSTRAINT "PK_c82363f1aaeada3921a25a9eafa" PRIMARY KEY ("id"))`);
+        await queryRunner.query(`CREATE INDEX "IDX_79c6677eb234e91b26832dfcb5" ON "promociones"  ("negocio_id") `);
+        await queryRunner.query(`CREATE UNIQUE INDEX "IDX_c6637528f273e96f166d4bb4b2" ON "promociones"  ("negocio_id", "codigo") WHERE "codigo" IS NOT NULL`);
+        await queryRunner.query(`CREATE TABLE "promociones_uso" ("id" uuid NOT NULL DEFAULT uuid_generate_v4(), "created_at" TIMESTAMP NOT NULL DEFAULT now(), "updated_at" TIMESTAMP NOT NULL DEFAULT now(), "negocio_id" character varying NOT NULL, "promocion_id" uuid NOT NULL, "venta_id" character varying NOT NULL, "sucursal_id" character varying NOT NULL, "monto_descontado" numeric(12,2) NOT NULL, CONSTRAINT "PK_d1417c05f7d6aaf0e683bea6441" PRIMARY KEY ("id"))`);
+        await queryRunner.query(`CREATE INDEX "IDX_19847422e465b03809c20bd17e" ON "promociones_uso"  ("negocio_id") `);
+        await queryRunner.query(`CREATE TYPE "public"."numeraciones_comprobante_tipo_enum" AS ENUM('RECIBO', 'FACTURA')`);
+        await queryRunner.query(`CREATE TABLE "numeraciones_comprobante" ("id" uuid NOT NULL DEFAULT uuid_generate_v4(), "created_at" TIMESTAMP NOT NULL DEFAULT now(), "updated_at" TIMESTAMP NOT NULL DEFAULT now(), "negocio_id" character varying NOT NULL, "sucursal_id" character varying NOT NULL, "tipo" "public"."numeraciones_comprobante_tipo_enum" NOT NULL, "prefijo" character varying, "siguiente_numero" integer NOT NULL DEFAULT '1', "rango_desde" integer, "rango_hasta" integer, "resolucion_dian_ref" character varying, CONSTRAINT "UQ_3d210a49f036cd2bb4c061043c7" UNIQUE ("sucursal_id", "tipo"), CONSTRAINT "PK_bac8250852c747ff1b60e809b99" PRIMARY KEY ("id"))`);
+        await queryRunner.query(`CREATE INDEX "IDX_b4ce0033928e665fa778422d94" ON "numeraciones_comprobante"  ("negocio_id") `);
+        await queryRunner.query(`CREATE TYPE "public"."plantillas_comprobante_tipo_enum" AS ENUM('RECIBO', 'FACTURA')`);
+        await queryRunner.query(`CREATE TABLE "plantillas_comprobante" ("id" uuid NOT NULL DEFAULT uuid_generate_v4(), "created_at" TIMESTAMP NOT NULL DEFAULT now(), "updated_at" TIMESTAMP NOT NULL DEFAULT now(), "negocio_id" character varying NOT NULL, "tipo" "public"."plantillas_comprobante_tipo_enum" NOT NULL, "nombre" character varying NOT NULL, "es_predeterminada" boolean NOT NULL DEFAULT false, "logo_url" character varying, "configuracion" jsonb NOT NULL DEFAULT '{}', "activo" boolean NOT NULL DEFAULT true, "creado_por" character varying, CONSTRAINT "PK_eaee92fd22c5b4f472e6a6aab26" PRIMARY KEY ("id"))`);
+        await queryRunner.query(`CREATE INDEX "IDX_267522fda239f036a2ce469ae7" ON "plantillas_comprobante"  ("negocio_id") `);
+        await queryRunner.query(`CREATE TYPE "public"."graficos_configurados_tipo_enum" AS ENUM('LINEA', 'BARRA', 'BARRA_APILADA', 'AREA', 'PASTEL', 'DONA')`);
+        await queryRunner.query(`CREATE TABLE "graficos_configurados" ("id" uuid NOT NULL DEFAULT uuid_generate_v4(), "created_at" TIMESTAMP NOT NULL DEFAULT now(), "updated_at" TIMESTAMP NOT NULL DEFAULT now(), "negocio_id" character varying NOT NULL, "nombre" character varying NOT NULL, "tipo" "public"."graficos_configurados_tipo_enum" NOT NULL, "configuracion" jsonb NOT NULL, "activo" boolean NOT NULL DEFAULT true, "creado_por" character varying, CONSTRAINT "PK_22a5ab7a46e135b355ffe77f994" PRIMARY KEY ("id"))`);
+        await queryRunner.query(`CREATE INDEX "IDX_f8f323953823635a2b79841e6f" ON "graficos_configurados"  ("negocio_id") `);
+        await queryRunner.query(`CREATE TYPE "public"."layouts_graficos_pagina_enum" AS ENUM('DASHBOARD', 'REPORTES')`);
+        await queryRunner.query(`CREATE TABLE "layouts_graficos" ("id" uuid NOT NULL DEFAULT uuid_generate_v4(), "created_at" TIMESTAMP NOT NULL DEFAULT now(), "updated_at" TIMESTAMP NOT NULL DEFAULT now(), "negocio_id" character varying NOT NULL, "pagina" "public"."layouts_graficos_pagina_enum" NOT NULL, "widgets" jsonb NOT NULL DEFAULT '[]', CONSTRAINT "UQ_0392a98a969d811782b0c21c884" UNIQUE ("negocio_id", "pagina"), CONSTRAINT "PK_ce47cc0367feebde8936a1638c6" PRIMARY KEY ("id"))`);
+        await queryRunner.query(`CREATE INDEX "IDX_73d0e44820a9bca76e0552c126" ON "layouts_graficos"  ("negocio_id") `);
+        await queryRunner.query(`CREATE TABLE "promocion_sucursales" ("promocion_id" uuid NOT NULL, "sucursal_id" uuid NOT NULL, CONSTRAINT "PK_64a2e756a5dc090f22203b5a105" PRIMARY KEY ("promocion_id", "sucursal_id"))`);
+        await queryRunner.query(`CREATE INDEX "IDX_4fc2376247c8e0fef102d82f72" ON "promocion_sucursales"  ("promocion_id") `);
+        await queryRunner.query(`CREATE INDEX "IDX_fcac97a3bed5150b2c44102a0a" ON "promocion_sucursales"  ("sucursal_id") `);
+        await queryRunner.query(`CREATE TABLE "promocion_bodegas" ("promocion_id" uuid NOT NULL, "bodega_id" uuid NOT NULL, CONSTRAINT "PK_70682fedc90af57fca22b23e0ef" PRIMARY KEY ("promocion_id", "bodega_id"))`);
+        await queryRunner.query(`CREATE INDEX "IDX_22827a7ac4c62d3573b1695412" ON "promocion_bodegas"  ("promocion_id") `);
+        await queryRunner.query(`CREATE INDEX "IDX_8423022450087faaa9716ac6d5" ON "promocion_bodegas"  ("bodega_id") `);
+        await queryRunner.query(`CREATE TABLE "promocion_categorias" ("promocion_id" uuid NOT NULL, "categoria_id" uuid NOT NULL, CONSTRAINT "PK_49d703524920dbea50e6966042e" PRIMARY KEY ("promocion_id", "categoria_id"))`);
+        await queryRunner.query(`CREATE INDEX "IDX_38b998c8a8061e190b8623ca8e" ON "promocion_categorias"  ("promocion_id") `);
+        await queryRunner.query(`CREATE INDEX "IDX_b095cb5446cee385be44af96b9" ON "promocion_categorias"  ("categoria_id") `);
+        await queryRunner.query(`CREATE TABLE "promocion_productos" ("promocion_id" uuid NOT NULL, "producto_id" uuid NOT NULL, CONSTRAINT "PK_6cee35b498a376b723a65c2f230" PRIMARY KEY ("promocion_id", "producto_id"))`);
+        await queryRunner.query(`CREATE INDEX "IDX_0bff7172d5c88904296a68d257" ON "promocion_productos"  ("promocion_id") `);
+        await queryRunner.query(`CREATE INDEX "IDX_179b34100dbf1e46ea792ef73c" ON "promocion_productos"  ("producto_id") `);
+        await queryRunner.query(`CREATE TYPE "public"."sucursales_tipo_comprobante_defecto_enum" AS ENUM('RECIBO', 'FACTURA')`);
+        await queryRunner.query(`ALTER TABLE "sucursales" ADD "tipo_comprobante_defecto" "public"."sucursales_tipo_comprobante_defecto_enum" NOT NULL DEFAULT 'RECIBO'`);
+        await queryRunner.query(`ALTER TABLE "sucursales" ADD "plantilla_recibo_defecto_id" character varying`);
+        await queryRunner.query(`ALTER TABLE "sucursales" ADD "plantilla_factura_defecto_id" character varying`);
+        await queryRunner.query(`ALTER TABLE "venta_items" ADD "promocion_id" character varying`);
+        await queryRunner.query(`ALTER TABLE "ventas" ADD "numero_comprobante" character varying`);
+        await queryRunner.query(`CREATE TYPE "public"."ventas_tipo_comprobante_emitido_enum" AS ENUM('RECIBO', 'FACTURA')`);
+        await queryRunner.query(`ALTER TABLE "ventas" ADD "tipo_comprobante_emitido" "public"."ventas_tipo_comprobante_emitido_enum"`);
+        await queryRunner.query(`ALTER TABLE "ventas" ADD "plantilla_comprobante_id" character varying`);
+        await queryRunner.query(`ALTER TABLE "ventas" ADD "cupon_id" character varying`);
+        await queryRunner.query(`ALTER TABLE "ventas" ADD "descuento_cupon" numeric(12,2) NOT NULL DEFAULT '0'`);
+        await queryRunner.query(`DROP INDEX "public"."IDX_e78ec51d8d22da3f9c1b6e0528"`);
+        await queryRunner.query(`ALTER TYPE "public"."permisos_modulo_enum" ADD VALUE 'NEGOCIO'`);
+        await queryRunner.query(`ALTER TYPE "public"."permisos_modulo_enum" ADD VALUE 'GRAFICOS'`);
+        await queryRunner.query(`ALTER TYPE "public"."permisos_modulo_enum" ADD VALUE 'FACTURACION'`);
+        await queryRunner.query(`ALTER TYPE "public"."permisos_modulo_enum" ADD VALUE 'CUPONES'`);
+        await queryRunner.query(`ALTER TABLE "ventas" ALTER COLUMN "tasa_interes_mora" SET DEFAULT '0.1'`);
+        await queryRunner.query(`CREATE UNIQUE INDEX "IDX_e78ec51d8d22da3f9c1b6e0528" ON "permisos"  ("modulo", "accion") `);
+        await queryRunner.query(`ALTER TABLE "promociones_uso" ADD CONSTRAINT "FK_9349229553f8f5faa0e5446f019" FOREIGN KEY ("promocion_id") REFERENCES "promociones"("id") ON DELETE CASCADE ON UPDATE NO ACTION`);
+        await queryRunner.query(`ALTER TABLE "promocion_sucursales" ADD CONSTRAINT "FK_4fc2376247c8e0fef102d82f72b" FOREIGN KEY ("promocion_id") REFERENCES "promociones"("id") ON DELETE CASCADE ON UPDATE CASCADE`);
+        await queryRunner.query(`ALTER TABLE "promocion_sucursales" ADD CONSTRAINT "FK_fcac97a3bed5150b2c44102a0a9" FOREIGN KEY ("sucursal_id") REFERENCES "sucursales"("id") ON DELETE CASCADE ON UPDATE CASCADE`);
+        await queryRunner.query(`ALTER TABLE "promocion_bodegas" ADD CONSTRAINT "FK_22827a7ac4c62d3573b1695412c" FOREIGN KEY ("promocion_id") REFERENCES "promociones"("id") ON DELETE CASCADE ON UPDATE CASCADE`);
+        await queryRunner.query(`ALTER TABLE "promocion_bodegas" ADD CONSTRAINT "FK_8423022450087faaa9716ac6d5e" FOREIGN KEY ("bodega_id") REFERENCES "bodegas"("id") ON DELETE CASCADE ON UPDATE CASCADE`);
+        await queryRunner.query(`ALTER TABLE "promocion_categorias" ADD CONSTRAINT "FK_38b998c8a8061e190b8623ca8e9" FOREIGN KEY ("promocion_id") REFERENCES "promociones"("id") ON DELETE CASCADE ON UPDATE CASCADE`);
+        await queryRunner.query(`ALTER TABLE "promocion_categorias" ADD CONSTRAINT "FK_b095cb5446cee385be44af96b93" FOREIGN KEY ("categoria_id") REFERENCES "categorias"("id") ON DELETE CASCADE ON UPDATE CASCADE`);
+        await queryRunner.query(`ALTER TABLE "promocion_productos" ADD CONSTRAINT "FK_0bff7172d5c88904296a68d2578" FOREIGN KEY ("promocion_id") REFERENCES "promociones"("id") ON DELETE CASCADE ON UPDATE CASCADE`);
+        await queryRunner.query(`ALTER TABLE "promocion_productos" ADD CONSTRAINT "FK_179b34100dbf1e46ea792ef73c5" FOREIGN KEY ("producto_id") REFERENCES "productos"("id") ON DELETE CASCADE ON UPDATE CASCADE`);
+    }
+
+    public async down(queryRunner: QueryRunner): Promise<void> {
+        await queryRunner.query(`ALTER TABLE "promocion_productos" DROP CONSTRAINT "FK_179b34100dbf1e46ea792ef73c5"`);
+        await queryRunner.query(`ALTER TABLE "promocion_productos" DROP CONSTRAINT "FK_0bff7172d5c88904296a68d2578"`);
+        await queryRunner.query(`ALTER TABLE "promocion_categorias" DROP CONSTRAINT "FK_b095cb5446cee385be44af96b93"`);
+        await queryRunner.query(`ALTER TABLE "promocion_categorias" DROP CONSTRAINT "FK_38b998c8a8061e190b8623ca8e9"`);
+        await queryRunner.query(`ALTER TABLE "promocion_bodegas" DROP CONSTRAINT "FK_8423022450087faaa9716ac6d5e"`);
+        await queryRunner.query(`ALTER TABLE "promocion_bodegas" DROP CONSTRAINT "FK_22827a7ac4c62d3573b1695412c"`);
+        await queryRunner.query(`ALTER TABLE "promocion_sucursales" DROP CONSTRAINT "FK_fcac97a3bed5150b2c44102a0a9"`);
+        await queryRunner.query(`ALTER TABLE "promocion_sucursales" DROP CONSTRAINT "FK_4fc2376247c8e0fef102d82f72b"`);
+        await queryRunner.query(`ALTER TABLE "promociones_uso" DROP CONSTRAINT "FK_9349229553f8f5faa0e5446f019"`);
+        await queryRunner.query(`DROP INDEX "public"."IDX_e78ec51d8d22da3f9c1b6e0528"`);
+        await queryRunner.query(`ALTER TABLE "ventas" ALTER COLUMN "tasa_interes_mora" SET DEFAULT 0.1`);
+        await queryRunner.query(`CREATE TYPE "public"."permisos_modulo_enum_old" AS ENUM('NEGOCIOS', 'SUCURSALES', 'USUARIOS', 'ROLES', 'PRODUCTOS', 'CATEGORIAS', 'MARCAS', 'LINEAS', 'PROVEEDORES', 'BODEGAS', 'INVENTARIO', 'VENTAS', 'CAJA', 'COBROS', 'CLIENTES', 'DOMICILIOS', 'ALERTAS', 'REPORTES', 'METODOS_PAGO')`);
+        await queryRunner.query(`ALTER TABLE "permisos" ALTER COLUMN "modulo" TYPE "public"."permisos_modulo_enum_old" USING "modulo"::"text"::"public"."permisos_modulo_enum_old"`);
+        await queryRunner.query(`DROP TYPE "public"."permisos_modulo_enum"`);
+        await queryRunner.query(`ALTER TYPE "public"."permisos_modulo_enum_old" RENAME TO "permisos_modulo_enum"`);
+        await queryRunner.query(`CREATE UNIQUE INDEX "IDX_e78ec51d8d22da3f9c1b6e0528" ON "permisos" USING btree ("modulo", "accion") `);
+        await queryRunner.query(`ALTER TABLE "ventas" DROP COLUMN "descuento_cupon"`);
+        await queryRunner.query(`ALTER TABLE "ventas" DROP COLUMN "cupon_id"`);
+        await queryRunner.query(`ALTER TABLE "ventas" DROP COLUMN "plantilla_comprobante_id"`);
+        await queryRunner.query(`ALTER TABLE "ventas" DROP COLUMN "tipo_comprobante_emitido"`);
+        await queryRunner.query(`DROP TYPE "public"."ventas_tipo_comprobante_emitido_enum"`);
+        await queryRunner.query(`ALTER TABLE "ventas" DROP COLUMN "numero_comprobante"`);
+        await queryRunner.query(`ALTER TABLE "venta_items" DROP COLUMN "promocion_id"`);
+        await queryRunner.query(`ALTER TABLE "sucursales" DROP COLUMN "plantilla_factura_defecto_id"`);
+        await queryRunner.query(`ALTER TABLE "sucursales" DROP COLUMN "plantilla_recibo_defecto_id"`);
+        await queryRunner.query(`ALTER TABLE "sucursales" DROP COLUMN "tipo_comprobante_defecto"`);
+        await queryRunner.query(`DROP TYPE "public"."sucursales_tipo_comprobante_defecto_enum"`);
+        await queryRunner.query(`DROP INDEX "public"."IDX_179b34100dbf1e46ea792ef73c"`);
+        await queryRunner.query(`DROP INDEX "public"."IDX_0bff7172d5c88904296a68d257"`);
+        await queryRunner.query(`DROP TABLE "promocion_productos"`);
+        await queryRunner.query(`DROP INDEX "public"."IDX_b095cb5446cee385be44af96b9"`);
+        await queryRunner.query(`DROP INDEX "public"."IDX_38b998c8a8061e190b8623ca8e"`);
+        await queryRunner.query(`DROP TABLE "promocion_categorias"`);
+        await queryRunner.query(`DROP INDEX "public"."IDX_8423022450087faaa9716ac6d5"`);
+        await queryRunner.query(`DROP INDEX "public"."IDX_22827a7ac4c62d3573b1695412"`);
+        await queryRunner.query(`DROP TABLE "promocion_bodegas"`);
+        await queryRunner.query(`DROP INDEX "public"."IDX_fcac97a3bed5150b2c44102a0a"`);
+        await queryRunner.query(`DROP INDEX "public"."IDX_4fc2376247c8e0fef102d82f72"`);
+        await queryRunner.query(`DROP TABLE "promocion_sucursales"`);
+        await queryRunner.query(`DROP INDEX "public"."IDX_73d0e44820a9bca76e0552c126"`);
+        await queryRunner.query(`DROP TABLE "layouts_graficos"`);
+        await queryRunner.query(`DROP TYPE "public"."layouts_graficos_pagina_enum"`);
+        await queryRunner.query(`DROP INDEX "public"."IDX_f8f323953823635a2b79841e6f"`);
+        await queryRunner.query(`DROP TABLE "graficos_configurados"`);
+        await queryRunner.query(`DROP TYPE "public"."graficos_configurados_tipo_enum"`);
+        await queryRunner.query(`DROP INDEX "public"."IDX_267522fda239f036a2ce469ae7"`);
+        await queryRunner.query(`DROP TABLE "plantillas_comprobante"`);
+        await queryRunner.query(`DROP TYPE "public"."plantillas_comprobante_tipo_enum"`);
+        await queryRunner.query(`DROP INDEX "public"."IDX_b4ce0033928e665fa778422d94"`);
+        await queryRunner.query(`DROP TABLE "numeraciones_comprobante"`);
+        await queryRunner.query(`DROP TYPE "public"."numeraciones_comprobante_tipo_enum"`);
+        await queryRunner.query(`DROP INDEX "public"."IDX_19847422e465b03809c20bd17e"`);
+        await queryRunner.query(`DROP TABLE "promociones_uso"`);
+        await queryRunner.query(`DROP INDEX "public"."IDX_c6637528f273e96f166d4bb4b2"`);
+        await queryRunner.query(`DROP INDEX "public"."IDX_79c6677eb234e91b26832dfcb5"`);
+        await queryRunner.query(`DROP TABLE "promociones"`);
+        await queryRunner.query(`DROP TYPE "public"."promociones_tipo_descuento_enum"`);
+        await queryRunner.query(`DROP TYPE "public"."promociones_tipo_enum"`);
+    }
+
+}
