@@ -235,8 +235,14 @@ describe('PagosService — webhook', () => {
     const moduleRef = await Test.createTestingModule({
       providers: [
         PagosService,
-        { provide: getRepositoryToken(ConfiguracionPagoWompi), useValue: configRepo },
-        { provide: getRepositoryToken(TransaccionPago), useValue: transaccionRepo },
+        {
+          provide: getRepositoryToken(ConfiguracionPagoWompi),
+          useValue: configRepo,
+        },
+        {
+          provide: getRepositoryToken(TransaccionPago),
+          useValue: transaccionRepo,
+        },
         { provide: WompiClientService, useValue: {} },
         { provide: RealtimeGateway, useValue: realtimeGateway },
         { provide: ClsService, useValue: { get: jest.fn() } },
@@ -248,8 +254,13 @@ describe('PagosService — webhook', () => {
   it('descarta el evento si la firma no coincide', async () => {
     const payload = {
       event: 'transaction.updated',
-      data: { transaction: { id: 'txn-1', status: 'APPROVED', reference: 'ref-abc' } },
-      signature: { properties: ['transaction.id', 'transaction.status'], checksum: 'firma-invalida' },
+      data: {
+        transaction: { id: 'txn-1', status: 'APPROVED', reference: 'ref-abc' },
+      },
+      signature: {
+        properties: ['transaction.id', 'transaction.status'],
+        checksum: 'firma-invalida',
+      },
       timestamp: 1234567890,
     };
     await service.procesarWebhook(payload);
@@ -258,7 +269,9 @@ describe('PagosService — webhook', () => {
   });
 
   it('descarta el evento si la firma fue calculada con un secreto distinto (firma trucada de otro negocio)', async () => {
-    const data = { transaction: { id: 'txn-1', status: 'APPROVED', reference: 'ref-abc' } };
+    const data = {
+      transaction: { id: 'txn-1', status: 'APPROVED', reference: 'ref-abc' },
+    };
     const timestamp = 1234567890;
     const checksum = firmarEvento(
       ['transaction.id', 'transaction.status'],
@@ -269,7 +282,10 @@ describe('PagosService — webhook', () => {
     await service.procesarWebhook({
       event: 'transaction.updated',
       data,
-      signature: { properties: ['transaction.id', 'transaction.status'], checksum },
+      signature: {
+        properties: ['transaction.id', 'transaction.status'],
+        checksum,
+      },
       timestamp,
     });
     expect(transaccionRepo.save).not.toHaveBeenCalled();
@@ -277,51 +293,104 @@ describe('PagosService — webhook', () => {
   });
 
   it('descarta el evento si el payload fue alterado después de firmarlo (status distinto al firmado)', async () => {
-    const data = { transaction: { id: 'txn-1', status: 'APPROVED', reference: 'ref-abc' } };
+    const data = {
+      transaction: { id: 'txn-1', status: 'APPROVED', reference: 'ref-abc' },
+    };
     const timestamp = 1234567890;
     // Firma calculada con el status real (APPROVED)...
-    const checksum = firmarEvento(['transaction.id', 'transaction.status'], data, timestamp, SECRETO);
+    const checksum = firmarEvento(
+      ['transaction.id', 'transaction.status'],
+      data,
+      timestamp,
+      SECRETO,
+    );
     // ...pero el atacante intenta colar un status distinto sin volver a firmar.
-    const dataAlterada = { transaction: { ...data.transaction, status: 'DECLINED' } };
+    const dataAlterada = {
+      transaction: { ...data.transaction, status: 'DECLINED' },
+    };
     await service.procesarWebhook({
       event: 'transaction.updated',
       data: dataAlterada,
-      signature: { properties: ['transaction.id', 'transaction.status'], checksum },
+      signature: {
+        properties: ['transaction.id', 'transaction.status'],
+        checksum,
+      },
       timestamp,
     });
     expect(transaccionRepo.save).not.toHaveBeenCalled();
     expect(realtimeGateway.emitToNegocio).not.toHaveBeenCalled();
   });
 
-  it('actualiza la transacción a APROBADA y emite el evento realtime cuando la firma es válida', async () => {
-    const data = { transaction: { id: 'txn-1', status: 'APPROVED', reference: 'ref-abc' } };
+  // Forma real del payload de Wompi para transaction.updated: firma TRES
+  // propiedades, no dos. Es la fixture "feliz" primaria a partir de acá —
+  // Wompi documenta que este set puede variar, así que el código no puede
+  // asumir exactamente estas tres, pero sí es lo que realmente manda hoy.
+  const PROPERTIES_REALISTA = [
+    'transaction.id',
+    'transaction.status',
+    'transaction.amount_in_cents',
+  ];
+
+  it('actualiza la transacción a APROBADA y emite el evento realtime cuando la firma es válida (properties real de Wompi: 3 elementos)', async () => {
+    const data = {
+      transaction: {
+        id: 'txn-1',
+        status: 'APPROVED',
+        reference: 'ref-abc',
+        amount_in_cents: 1000000,
+      },
+    };
     const timestamp = 1234567890;
-    const checksum = firmarEvento(['transaction.id', 'transaction.status'], data, timestamp, SECRETO);
+    const checksum = firmarEvento(
+      PROPERTIES_REALISTA,
+      data,
+      timestamp,
+      SECRETO,
+    );
 
     await service.procesarWebhook({
       event: 'transaction.updated',
       data,
-      signature: { properties: ['transaction.id', 'transaction.status'], checksum },
+      signature: { properties: PROPERTIES_REALISTA, checksum },
       timestamp,
     });
 
     expect(transaccionRepo.save).toHaveBeenCalledWith(
-      expect.objectContaining({ estado: 'APROBADA', wompiTransactionId: 'txn-1' }),
+      expect.objectContaining({
+        estado: 'APROBADA',
+        wompiTransactionId: 'txn-1',
+      }),
     );
-    expect(realtimeGateway.emitToNegocio).toHaveBeenCalledWith('n1', 'pago-wompi:confirmado', {
-      referencia: 'ref-abc',
-    });
+    expect(realtimeGateway.emitToNegocio).toHaveBeenCalledWith(
+      'n1',
+      'pago-wompi:confirmado',
+      {
+        referencia: 'ref-abc',
+      },
+    );
   });
 
   it('actualiza la transacción a DECLINADA y NO emite el evento realtime cuando Wompi declina el pago', async () => {
-    const data = { transaction: { id: 'txn-1', status: 'DECLINED', reference: 'ref-abc' } };
+    const data = {
+      transaction: {
+        id: 'txn-1',
+        status: 'DECLINED',
+        reference: 'ref-abc',
+        amount_in_cents: 1000000,
+      },
+    };
     const timestamp = 1234567890;
-    const checksum = firmarEvento(['transaction.id', 'transaction.status'], data, timestamp, SECRETO);
+    const checksum = firmarEvento(
+      PROPERTIES_REALISTA,
+      data,
+      timestamp,
+      SECRETO,
+    );
 
     await service.procesarWebhook({
       event: 'transaction.updated',
       data,
-      signature: { properties: ['transaction.id', 'transaction.status'], checksum },
+      signature: { properties: PROPERTIES_REALISTA, checksum },
       timestamp,
     });
 
@@ -331,10 +400,111 @@ describe('PagosService — webhook', () => {
     expect(realtimeGateway.emitToNegocio).not.toHaveBeenCalled();
   });
 
+  it('acepta un checksum válido enviado en mayúsculas (comparación case-insensitive)', async () => {
+    const data = {
+      transaction: {
+        id: 'txn-1',
+        status: 'APPROVED',
+        reference: 'ref-abc',
+        amount_in_cents: 1000000,
+      },
+    };
+    const timestamp = 1234567890;
+    const checksum = firmarEvento(
+      PROPERTIES_REALISTA,
+      data,
+      timestamp,
+      SECRETO,
+    ).toUpperCase();
+
+    await service.procesarWebhook({
+      event: 'transaction.updated',
+      data,
+      signature: { properties: PROPERTIES_REALISTA, checksum },
+      timestamp,
+    });
+
+    expect(transaccionRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ estado: 'APROBADA' }),
+    );
+    expect(realtimeGateway.emitToNegocio).toHaveBeenCalledTimes(1);
+  });
+
+  it('un evento con status intermedio (PENDING) no guarda ni consume el guard de PENDIENTE, y un APPROVED genuino posterior sigue resolviendo la transacción', async () => {
+    // Misma referencia de objeto en las tres llamadas — si el evento PENDING
+    // mutara `estado`, el guard "solo transiciona una vez desde PENDIENTE"
+    // quedaría consumido y el APPROVED posterior se descartaría en silencio.
+    const transaccionMutable = {
+      referencia: 'ref-abc',
+      negocioId: 'n1',
+      estado: 'PENDIENTE',
+      wompiTransactionId: 'txn-1',
+    };
+    transaccionRepo.findOne.mockResolvedValue(transaccionMutable);
+
+    const timestamp1 = 1234567890;
+    const dataPending = {
+      transaction: {
+        id: 'txn-1',
+        status: 'PENDING',
+        reference: 'ref-abc',
+        amount_in_cents: 1000000,
+      },
+    };
+    const checksumPending = firmarEvento(
+      PROPERTIES_REALISTA,
+      dataPending,
+      timestamp1,
+      SECRETO,
+    );
+    await service.procesarWebhook({
+      event: 'transaction.updated',
+      data: dataPending,
+      signature: { properties: PROPERTIES_REALISTA, checksum: checksumPending },
+      timestamp: timestamp1,
+    });
+    expect(transaccionRepo.save).not.toHaveBeenCalled();
+    expect(realtimeGateway.emitToNegocio).not.toHaveBeenCalled();
+    expect(transaccionMutable.estado).toBe('PENDIENTE');
+
+    const timestamp2 = 1234567999;
+    const dataApproved = {
+      transaction: {
+        id: 'txn-1',
+        status: 'APPROVED',
+        reference: 'ref-abc',
+        amount_in_cents: 1000000,
+      },
+    };
+    const checksumApproved = firmarEvento(
+      PROPERTIES_REALISTA,
+      dataApproved,
+      timestamp2,
+      SECRETO,
+    );
+    await service.procesarWebhook({
+      event: 'transaction.updated',
+      data: dataApproved,
+      signature: {
+        properties: PROPERTIES_REALISTA,
+        checksum: checksumApproved,
+      },
+      timestamp: timestamp2,
+    });
+
+    expect(transaccionRepo.save).toHaveBeenCalledTimes(1);
+    expect(transaccionRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ estado: 'APROBADA' }),
+    );
+    expect(realtimeGateway.emitToNegocio).toHaveBeenCalledTimes(1);
+  });
+
   it('ignora eventos que no son transaction.updated', async () => {
     await service.procesarWebhook({
       event: 'transaction.created',
-      data: { transaction: { id: 'txn-1', status: 'APPROVED', reference: 'ref-abc' } },
+      data: {
+        transaction: { id: 'txn-1', status: 'APPROVED', reference: 'ref-abc' },
+      },
       signature: { properties: ['transaction.id'], checksum: 'lo-que-sea' },
       timestamp: 1234567890,
     });
@@ -345,9 +515,14 @@ describe('PagosService — webhook', () => {
   it('descarta el evento en silencio (sin lanzar) si signature.properties está mal formado', async () => {
     const payload = {
       event: 'transaction.updated',
-      data: { transaction: { id: 'txn-1', status: 'APPROVED', reference: 'ref-abc' } },
+      data: {
+        transaction: { id: 'txn-1', status: 'APPROVED', reference: 'ref-abc' },
+      },
       // properties no es un array — no debe tirar una excepción sin manejar.
-      signature: { properties: 'transaction.id' as unknown as string[], checksum: 'lo-que-sea' },
+      signature: {
+        properties: 'transaction.id' as unknown as string[],
+        checksum: 'lo-que-sea',
+      },
       timestamp: 1234567890,
     };
     await expect(service.procesarWebhook(payload)).resolves.toBeUndefined();
@@ -357,13 +532,27 @@ describe('PagosService — webhook', () => {
 
   it('descarta el evento si no encuentra ninguna transacción con esa referencia', async () => {
     transaccionRepo.findOne.mockResolvedValue(null);
-    const data = { transaction: { id: 'txn-1', status: 'APPROVED', reference: 'ref-inexistente' } };
+    const data = {
+      transaction: {
+        id: 'txn-1',
+        status: 'APPROVED',
+        reference: 'ref-inexistente',
+      },
+    };
     const timestamp = 1234567890;
-    const checksum = firmarEvento(['transaction.id', 'transaction.status'], data, timestamp, SECRETO);
+    const checksum = firmarEvento(
+      ['transaction.id', 'transaction.status'],
+      data,
+      timestamp,
+      SECRETO,
+    );
     await service.procesarWebhook({
       event: 'transaction.updated',
       data,
-      signature: { properties: ['transaction.id', 'transaction.status'], checksum },
+      signature: {
+        properties: ['transaction.id', 'transaction.status'],
+        checksum,
+      },
       timestamp,
     });
     expect(configRepo.findOne).not.toHaveBeenCalled();
@@ -372,9 +561,16 @@ describe('PagosService — webhook', () => {
   });
 
   it('descarta el evento si signature.properties no viene en el payload', async () => {
-    const data = { transaction: { id: 'txn-1', status: 'APPROVED', reference: 'ref-abc' } };
+    const data = {
+      transaction: { id: 'txn-1', status: 'APPROVED', reference: 'ref-abc' },
+    };
     const timestamp = 1234567890;
-    const checksum = firmarEvento(['transaction.id', 'transaction.status'], data, timestamp, SECRETO);
+    const checksum = firmarEvento(
+      ['transaction.id', 'transaction.status'],
+      data,
+      timestamp,
+      SECRETO,
+    );
     const payload: any = {
       event: 'transaction.updated',
       data,
@@ -386,10 +582,13 @@ describe('PagosService — webhook', () => {
     expect(realtimeGateway.emitToNegocio).not.toHaveBeenCalled();
   });
 
-  it('descarta el evento si signature.properties no calza EXACTO con ["transaction.id", "transaction.status"]', async () => {
-    const data = { transaction: { id: 'txn-1', status: 'APPROVED', reference: 'ref-abc' } };
+  it('descarta el evento si signature.properties no incluye "transaction.status" (aunque la firma sea válida para esas properties)', async () => {
+    const data = {
+      transaction: { id: 'txn-1', status: 'APPROVED', reference: 'ref-abc' },
+    };
     const timestamp = 1234567890;
-    // Firma calculada (y válida) sobre una lista más corta que la esperada.
+    // Firma calculada (y válida) solo sobre transaction.id — el checksum no
+    // cubre transaction.status, que es un campo del que este método depende.
     const checksum = firmarEvento(['transaction.id'], data, timestamp, SECRETO);
     await service.procesarWebhook({
       event: 'transaction.updated',
@@ -399,6 +598,58 @@ describe('PagosService — webhook', () => {
     });
     expect(transaccionRepo.save).not.toHaveBeenCalled();
     expect(realtimeGateway.emitToNegocio).not.toHaveBeenCalled();
+  });
+
+  it('descarta el evento si signature.properties no incluye "transaction.id" (aunque la firma sea válida para esas properties)', async () => {
+    const data = {
+      transaction: { id: 'txn-1', status: 'APPROVED', reference: 'ref-abc' },
+    };
+    const timestamp = 1234567890;
+    // Firma calculada (y válida) solo sobre transaction.status — el checksum
+    // no cubre transaction.id, usado en el cross-check contra wompiTransactionId.
+    const checksum = firmarEvento(
+      ['transaction.status'],
+      data,
+      timestamp,
+      SECRETO,
+    );
+    await service.procesarWebhook({
+      event: 'transaction.updated',
+      data,
+      signature: { properties: ['transaction.status'], checksum },
+      timestamp,
+    });
+    expect(transaccionRepo.save).not.toHaveBeenCalled();
+    expect(realtimeGateway.emitToNegocio).not.toHaveBeenCalled();
+  });
+
+  it('acepta signature.properties con propiedades EXTRA además de las dos requeridas (Wompi puede agregar más campos firmados)', async () => {
+    const data = {
+      transaction: {
+        id: 'txn-1',
+        status: 'APPROVED',
+        reference: 'ref-abc',
+        amount_in_cents: 1000000,
+        currency: 'COP',
+      },
+    };
+    const timestamp = 1234567890;
+    const propertiesConExtra = [
+      'transaction.amount_in_cents',
+      'transaction.currency',
+      'transaction.id',
+      'transaction.status',
+    ];
+    const checksum = firmarEvento(propertiesConExtra, data, timestamp, SECRETO);
+    await service.procesarWebhook({
+      event: 'transaction.updated',
+      data,
+      signature: { properties: propertiesConExtra, checksum },
+      timestamp,
+    });
+    expect(transaccionRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ estado: 'APROBADA' }),
+    );
   });
 
   it('descarta el evento (ataque de swap de reference) si transaction.id no coincide con el wompiTransactionId ya registrado para esa referencia', async () => {
@@ -411,13 +662,23 @@ describe('PagosService — webhook', () => {
     });
     // El atacante reusa un checksum válido capturado para OTRA transacción (txn-1),
     // apuntándolo a 'ref-abc' vía el campo `reference` (no firmado).
-    const data = { transaction: { id: 'txn-1', status: 'APPROVED', reference: 'ref-abc' } };
+    const data = {
+      transaction: { id: 'txn-1', status: 'APPROVED', reference: 'ref-abc' },
+    };
     const timestamp = 1234567890;
-    const checksum = firmarEvento(['transaction.id', 'transaction.status'], data, timestamp, SECRETO);
+    const checksum = firmarEvento(
+      ['transaction.id', 'transaction.status'],
+      data,
+      timestamp,
+      SECRETO,
+    );
     await service.procesarWebhook({
       event: 'transaction.updated',
       data,
-      signature: { properties: ['transaction.id', 'transaction.status'], checksum },
+      signature: {
+        properties: ['transaction.id', 'transaction.status'],
+        checksum,
+      },
       timestamp,
     });
     expect(transaccionRepo.save).not.toHaveBeenCalled();
@@ -435,13 +696,23 @@ describe('PagosService — webhook', () => {
     };
     transaccionRepo.findOne.mockResolvedValue(transaccionMutable);
 
-    const data = { transaction: { id: 'txn-1', status: 'APPROVED', reference: 'ref-abc' } };
+    const data = {
+      transaction: { id: 'txn-1', status: 'APPROVED', reference: 'ref-abc' },
+    };
     const timestamp = 1234567890;
-    const checksum = firmarEvento(['transaction.id', 'transaction.status'], data, timestamp, SECRETO);
+    const checksum = firmarEvento(
+      ['transaction.id', 'transaction.status'],
+      data,
+      timestamp,
+      SECRETO,
+    );
     const payload = {
       event: 'transaction.updated' as const,
       data,
-      signature: { properties: ['transaction.id', 'transaction.status'], checksum },
+      signature: {
+        properties: ['transaction.id', 'transaction.status'],
+        checksum,
+      },
       timestamp,
     };
 

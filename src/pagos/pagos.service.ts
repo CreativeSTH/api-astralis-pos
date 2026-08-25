@@ -6,7 +6,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ClsService } from 'nestjs-cls';
-import { createHash, randomUUID } from 'crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'crypto';
 import { TenantBaseService } from '../common/services/tenant-base.service';
 import { ConfiguracionPagoWompi } from './entities/configuracion-pago-wompi.entity';
 import {
@@ -172,8 +172,7 @@ export class PagosService extends TenantBaseService<ConfiguracionPagoWompi> {
     if (payload?.event !== 'transaction.updated') return;
 
     const referencia = payload.data?.transaction?.reference as
-      | string
-      | undefined;
+      string | undefined;
     if (!referencia) return;
 
     const transaccion = await this.transaccionRepo.findOne({
@@ -194,21 +193,22 @@ export class PagosService extends TenantBaseService<ConfiguracionPagoWompi> {
 
     const secreto = desencriptar(config.llaveSecretaEventosCifrada);
 
-    // El set de propiedades que Wompi firma para transaction.updated está
-    // fijo y documentado: ["transaction.id", "transaction.status"].
-    // `payload.signature.properties` es, en cambio, un campo que llega en el
-    // body y por lo tanto es controlado por quien envía el request — no basta
-    // con exigir que no esté vacío. Como `valores.join('')` concatena sin
-    // delimitador y los NOMBRES de propiedad no se hashean, aceptar una lista
-    // distinta permitiría reparticionar un checksum ya capturado sobre otro
-    // conjunto de campos, desacoplando la firma de `status`. Se exige un calce
-    // EXACTO (orden y contenido) con el set documentado.
-    const PROPIEDADES_ESPERADAS = ['transaction.id', 'transaction.status'];
+    // Wompi documenta explícitamente que el set de propiedades firmadas
+    // puede variar entre eventos y en el tiempo, así que NO se puede exigir
+    // un calce exacto contra un array fijo (el payload real de
+    // transaction.updated hoy firma tres: transaction.id, transaction.status
+    // Y transaction.amount_in_cents). Lo que sí es fijo es qué campos usa
+    // ESTE método: `transaction.id` (para el cross-check de abajo) y
+    // `transaction.status` (para decidir el estado). Si cualquiera de los
+    // dos no está en `properties`, el checksum no cubre un campo del que
+    // este código depende, así que se descarta — pero el checksum en sí se
+    // calcula sobre el array COMPLETO que mandó Wompi, no sobre un subset
+    // hardcodeado.
     const properties = payload.signature?.properties;
     if (
       !Array.isArray(properties) ||
-      properties.length !== PROPIEDADES_ESPERADAS.length ||
-      properties.some((prop, i) => prop !== PROPIEDADES_ESPERADAS[i])
+      !properties.includes('transaction.id') ||
+      !properties.includes('transaction.status')
     ) {
       return;
     }
@@ -232,7 +232,22 @@ export class PagosService extends TenantBaseService<ConfiguracionPagoWompi> {
       return; // payload estructuralmente inválido — descartar en silencio, mismo tratamiento que una firma inválida
     }
 
-    if (checksumEsperado !== payload.signature?.checksum) {
+    // Comparación case-insensitive (Wompi no documenta con qué casing manda
+    // el hex, así que no se puede asumir uno) y a tiempo constante — evita
+    // filtrar por timing cuánto de los primeros bytes coincide. `Buffer.from`
+    // sobre hex con casing distinto produce igualmente el buffer correcto
+    // (hex es case-insensitive per se), así que basta con normalizar a
+    // minúsculas antes; `timingSafeEqual` lanza si los buffers no tienen el
+    // mismo largo, así que ese caso se descarta ANTES de llamarlo, nunca se
+    // deja escapar la excepción.
+    const checksumRecibido = payload.signature?.checksum;
+    if (typeof checksumRecibido !== 'string') return;
+    const bufEsperado = Buffer.from(checksumEsperado.toLowerCase(), 'hex');
+    const bufRecibido = Buffer.from(checksumRecibido.toLowerCase(), 'hex');
+    if (
+      bufEsperado.length !== bufRecibido.length ||
+      !timingSafeEqual(bufEsperado, bufRecibido)
+    ) {
       return; // firma inválida — descartar en silencio, no darle información a un posible atacante
     }
 
@@ -252,13 +267,19 @@ export class PagosService extends TenantBaseService<ConfiguracionPagoWompi> {
       return;
     }
 
+    // Solo APPROVED/DECLINED son estados TERMINALES de Wompi. Cualquier otro
+    // (PENDING, VOIDED, etc.) es un estado intermedio — si lo mapeáramos a
+    // ERROR y lo guardáramos, el guard de "una transacción solo transiciona
+    // una vez desde PENDIENTE" (arriba) quedaría consumido, y un APPROVED
+    // genuino que llegue después (el pago sí se confirmó del lado de Wompi)
+    // se descartaría en silencio porque `transaccion.estado` ya no sería
+    // PENDIENTE. Para un estado no terminal no se escribe nada: se deja la
+    // transacción en PENDIENTE para que un evento posterior, más definitivo,
+    // todavía pueda resolverla.
     const status = payload.data.transaction.status as string;
-    transaccion.estado =
-      status === 'APPROVED'
-        ? 'APROBADA'
-        : status === 'DECLINED'
-          ? 'DECLINADA'
-          : 'ERROR';
+    if (status !== 'APPROVED' && status !== 'DECLINED') return;
+
+    transaccion.estado = status === 'APPROVED' ? 'APROBADA' : 'DECLINADA';
     transaccion.wompiTransactionId = transactionId;
     transaccion.confirmedAt = new Date();
     await this.transaccionRepo.save(transaccion);
