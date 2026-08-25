@@ -123,7 +123,7 @@ export class AlertasService {
 
   findReglas(): Promise<ReglaAlerta[]> {
     return this.reglasRepository.find({
-      where: { negocioId: this.getNegocioId() },
+      where: { negocioId: this.getNegocioId(), activa: true },
       order: { createdAt: 'DESC' },
     });
   }
@@ -167,7 +167,8 @@ export class AlertasService {
     if (!regla) {
       throw new NotFoundException(`Regla con ID ${id} no encontrada`);
     }
-    await this.reglasRepository.remove(regla);
+    regla.activa = false;
+    await this.reglasRepository.save(regla);
   }
 
   /** Evalúa todas las reglas activas del negocio — parte del mismo barrido que `generar()`. */
