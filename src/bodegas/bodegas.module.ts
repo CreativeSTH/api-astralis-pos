@@ -3,9 +3,10 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { BodegasService } from './bodegas.service';
 import { BodegasController } from './bodegas.controller';
 import { Bodega } from './entities/bodega.entity';
+import { TiendaOnlineModule } from '../tienda-online/tienda-online.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Bodega])],
+  imports: [TypeOrmModule.forFeature([Bodega]), TiendaOnlineModule],
   controllers: [BodegasController],
   providers: [BodegasService],
   exports: [BodegasService],
