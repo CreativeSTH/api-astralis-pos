@@ -132,6 +132,13 @@ export class ClientesController {
     return this.clientesService.update(id, dto);
   }
 
+  @Patch(':id/resetear-password')
+  @RequierePermiso(ModuloPermiso.CLIENTES, AccionPermiso.EDITAR)
+  @ApiOperation({ summary: 'Genera una contraseña temporal para el cliente (self-service todavía no existe)' })
+  resetearPassword(@Param('id', ParseUUIDPipe) id: string) {
+    return this.clientesService.resetearPassword(id);
+  }
+
   @Post(':id/bloquear')
   @RequierePermiso(ModuloPermiso.CLIENTES, AccionPermiso.ELIMINAR)
   bloquear(

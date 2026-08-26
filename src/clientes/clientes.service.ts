@@ -7,6 +7,8 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ClsService } from 'nestjs-cls';
+import { randomBytes } from 'crypto';
+import * as bcrypt from 'bcrypt';
 import { TenantBaseService } from '../common/services/tenant-base.service';
 import { Cliente } from './entities/cliente.entity';
 import { NotaCliente } from './entities/nota-cliente.entity';
@@ -153,6 +155,15 @@ export class ClientesService extends TenantBaseService<Cliente> {
 
   async remove(id: string) {
     await this.updateForTenant(id, { activo: false });
+  }
+
+  /** Genera una contrasena temporal para un cliente que la olvidó — self-service queda para cuando exista un proveedor de email/SMS (ver spec de storefront, sección 7). */
+  async resetearPassword(id: string): Promise<{ passwordTemporal: string }> {
+    const cliente = await this.findOneForTenant(id);
+    const passwordTemporal = randomBytes(6).toString('base64url').slice(0, 8);
+    cliente.passwordHash = await bcrypt.hash(passwordTemporal, 12);
+    await this.repository.save(cliente);
+    return { passwordTemporal };
   }
 
   async bloquear(id: string, motivo: string): Promise<Cliente> {
