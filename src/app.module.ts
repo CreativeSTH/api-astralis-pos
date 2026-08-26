@@ -38,6 +38,7 @@ import { CuponesModule } from './cupones/cupones.module';
 import { HealthModule } from './health/health.module';
 import { RealtimeModule } from './realtime/realtime.module';
 import { PagosModule } from './pagos/pagos.module';
+import { TiendaOnlineModule } from './tienda-online/tienda-online.module';
 
 @Module({
   imports: [
@@ -95,6 +96,7 @@ import { PagosModule } from './pagos/pagos.module';
     HealthModule,
     RealtimeModule,
     PagosModule,
+    TiendaOnlineModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },
