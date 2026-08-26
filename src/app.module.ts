@@ -39,6 +39,7 @@ import { HealthModule } from './health/health.module';
 import { RealtimeModule } from './realtime/realtime.module';
 import { PagosModule } from './pagos/pagos.module';
 import { TiendaOnlineModule } from './tienda-online/tienda-online.module';
+import { CatalogoClienteModule } from './catalogo-cliente/catalogo-cliente.module';
 
 @Module({
   imports: [
@@ -97,6 +98,7 @@ import { TiendaOnlineModule } from './tienda-online/tienda-online.module';
     RealtimeModule,
     PagosModule,
     TiendaOnlineModule,
+    CatalogoClienteModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },
