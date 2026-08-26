@@ -13,6 +13,7 @@ import { VentaPago } from './entities/venta-pago.entity';
 import { Cuota } from './entities/cuota.entity';
 import { RegistroPagoCuota } from './entities/registro-pago-cuota.entity';
 import { Producto } from '../productos/entities/producto.entity';
+import { Bodega } from '../bodegas/entities/bodega.entity';
 import { Inventario } from '../inventario/entities/inventario.entity';
 import { MovimientoInventario } from '../inventario/entities/movimiento-inventario.entity';
 import { MovimientoCaja } from '../caja/entities/movimiento-caja.entity';
@@ -616,6 +617,25 @@ export class VentasService {
   ) {
     const productoRepo = manager.getRepository(Producto);
     const inventarioRepo = manager.getRepository(Inventario);
+
+    // Defensa en profundidad: nunca confiar en que el `bodegaId` que manda el cliente
+    // realmente pertenece a la `sucursalId` de la venta — el frontend ya lo garantiza
+    // (ver `PuntoVenta.bodega`), pero acá es donde se protege de verdad. Sin esto, un
+    // `bodegaId` de otra sucursal del mismo negocio pasaba sin ningún control y la venta
+    // terminaba descontando stock de la bodega equivocada.
+    const bodega = await manager.getRepository(Bodega).findOne({
+      where: {
+        id: dto.bodegaId,
+        negocioId,
+        sucursalId: dto.sucursalId,
+        activo: true,
+      },
+    });
+    if (!bodega) {
+      throw new BadRequestException(
+        'La bodega indicada no pertenece a la sucursal de la venta',
+      );
+    }
 
     let subtotal = 0;
     let descuentoTotal = 0;
