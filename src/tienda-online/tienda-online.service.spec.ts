@@ -62,13 +62,59 @@ describe('TiendaOnlineService', () => {
   it('obtenerConfiguracionPublica devuelve la config de un negocio sin depender del contexto CLS', async () => {
     tiendaRepo.findOne.mockResolvedValue({ negocioId: 'negocio-2', bodegaId: 'bodega-9', activo: true });
     const config = await service.obtenerConfiguracionPublica('negocio-2');
-    expect(config).toEqual({ bodegaId: 'bodega-9', activo: true });
+    expect(config).toEqual({
+      bodegaId: 'bodega-9', activo: true, plantilla: 'aurora',
+      logoUrl: null, banners: [], terminos: null, tratamientoDatos: null, politicaEnvios: null,
+    });
     expect(tiendaRepo.findOne).toHaveBeenCalledWith({ where: { negocioId: 'negocio-2' } });
   });
 
   it('obtenerConfiguracionPublica devuelve inactivo/sin bodega si el negocio no tiene TiendaOnline creada', async () => {
     tiendaRepo.findOne.mockResolvedValue(null);
     const config = await service.obtenerConfiguracionPublica('negocio-sin-tienda');
-    expect(config).toEqual({ bodegaId: null, activo: false });
+    expect(config).toEqual({
+      bodegaId: null, activo: false, plantilla: 'aurora',
+      logoUrl: null, banners: [], terminos: null, tratamientoDatos: null, politicaEnvios: null,
+    });
+  });
+
+  it('obtenerConfiguracion devuelve plantilla por defecto (aurora) cuando todavía no se eligió ninguna', async () => {
+    tiendaRepo.findOne.mockResolvedValue({
+      negocioId: 'negocio-1', bodegaId: 'bodega-1', activo: true,
+      plantilla: null, logoUrl: null, banners: [], terminos: null, tratamientoDatos: null, politicaEnvios: null,
+    });
+    const config = await service.obtenerConfiguracion();
+    expect(config.plantilla).toBe('aurora');
+  });
+
+  it('obtenerConfiguracion respeta la plantilla ya elegida', async () => {
+    tiendaRepo.findOne.mockResolvedValue({
+      negocioId: 'negocio-1', bodegaId: 'bodega-1', activo: true,
+      plantilla: 'meadow', logoUrl: '/uploads/tienda-online/logos/a.png', banners: ['/uploads/x.png'],
+      terminos: 'Términos', tratamientoDatos: null, politicaEnvios: null,
+    });
+    const config = await service.obtenerConfiguracion();
+    expect(config).toEqual({
+      bodegaId: 'bodega-1', activo: true, plantilla: 'meadow',
+      logoUrl: '/uploads/tienda-online/logos/a.png', banners: ['/uploads/x.png'],
+      terminos: 'Términos', tratamientoDatos: null, politicaEnvios: null,
+    });
+  });
+
+  it('actualizarPlantilla guarda la plantilla elegida', async () => {
+    tiendaRepo.findOne.mockResolvedValue({ negocioId: 'negocio-1', bodegaId: 'bodega-1', activo: true });
+    await service.actualizarPlantilla('foundry' as any);
+    expect(tiendaRepo.save).toHaveBeenCalledWith(expect.objectContaining({ plantilla: 'foundry' }));
+  });
+
+  it('actualizarLegales guarda solo los campos provistos, sin tocar los demás', async () => {
+    tiendaRepo.findOne.mockResolvedValue({
+      negocioId: 'negocio-1', bodegaId: 'bodega-1', activo: true,
+      terminos: 'viejo', tratamientoDatos: 'viejo-2', politicaEnvios: 'viejo-3',
+    });
+    await service.actualizarLegales({ terminos: 'nuevo' });
+    expect(tiendaRepo.save).toHaveBeenCalledWith(expect.objectContaining({
+      terminos: 'nuevo', tratamientoDatos: 'viejo-2', politicaEnvios: 'viejo-3',
+    }));
   });
 });

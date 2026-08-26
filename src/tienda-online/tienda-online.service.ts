@@ -5,6 +5,7 @@ import { ClsService } from 'nestjs-cls';
 import { TenantBaseService } from '../common/services/tenant-base.service';
 import { TiendaOnline } from './entities/tienda-online.entity';
 import { Bodega } from '../bodegas/entities/bodega.entity';
+import { PlantillaTienda } from '../common/enums/plantilla-tienda.enum';
 
 @Injectable()
 export class TiendaOnlineService extends TenantBaseService<TiendaOnline> {
@@ -27,15 +28,28 @@ export class TiendaOnlineService extends TenantBaseService<TiendaOnline> {
     return tienda;
   }
 
-  async obtenerConfiguracion(): Promise<{ bodegaId: string | null; activo: boolean }> {
+  async obtenerConfiguracion() {
     const tienda = await this.tiendaRepo.findOne({ where: { negocioId: this.getNegocioId() } });
-    return { bodegaId: tienda?.bodegaId ?? null, activo: tienda?.activo ?? false };
+    return this.mapearConfiguracion(tienda);
   }
 
   /** Variante sin CLS de `obtenerConfiguracion()` — para consumidores públicos (catálogo de tienda) que no tienen un Usuario interno logueado detrás. */
-  async obtenerConfiguracionPublica(negocioId: string): Promise<{ bodegaId: string | null; activo: boolean }> {
+  async obtenerConfiguracionPublica(negocioId: string) {
     const tienda = await this.tiendaRepo.findOne({ where: { negocioId } });
-    return { bodegaId: tienda?.bodegaId ?? null, activo: tienda?.activo ?? false };
+    return this.mapearConfiguracion(tienda);
+  }
+
+  private mapearConfiguracion(tienda: TiendaOnline | null) {
+    return {
+      bodegaId: tienda?.bodegaId ?? null,
+      activo: tienda?.activo ?? false,
+      plantilla: tienda?.plantilla ?? PlantillaTienda.AURORA,
+      logoUrl: tienda?.logoUrl ?? null,
+      banners: tienda?.banners ?? [],
+      terminos: tienda?.terminos ?? null,
+      tratamientoDatos: tienda?.tratamientoDatos ?? null,
+      politicaEnvios: tienda?.politicaEnvios ?? null,
+    };
   }
 
   async elegirBodega(bodegaId: string): Promise<void> {
@@ -62,6 +76,24 @@ export class TiendaOnlineService extends TenantBaseService<TiendaOnline> {
     const tienda = await this.tiendaRepo.findOne({ where: { negocioId: this.getNegocioId() } });
     if (!tienda) return;
     tienda.activo = false;
+    await this.tiendaRepo.save(tienda);
+  }
+
+  async actualizarPlantilla(plantilla: PlantillaTienda): Promise<void> {
+    const tienda = await this.obtenerOCrear();
+    tienda.plantilla = plantilla;
+    await this.tiendaRepo.save(tienda);
+  }
+
+  async actualizarLegales(dto: {
+    terminos?: string;
+    tratamientoDatos?: string;
+    politicaEnvios?: string;
+  }): Promise<void> {
+    const tienda = await this.obtenerOCrear();
+    if (dto.terminos !== undefined) tienda.terminos = dto.terminos;
+    if (dto.tratamientoDatos !== undefined) tienda.tratamientoDatos = dto.tratamientoDatos;
+    if (dto.politicaEnvios !== undefined) tienda.politicaEnvios = dto.politicaEnvios;
     await this.tiendaRepo.save(tienda);
   }
 
