@@ -32,6 +32,12 @@ export class TiendaOnlineService extends TenantBaseService<TiendaOnline> {
     return { bodegaId: tienda?.bodegaId ?? null, activo: tienda?.activo ?? false };
   }
 
+  /** Variante sin CLS de `obtenerConfiguracion()` — para consumidores públicos (catálogo de tienda) que no tienen un Usuario interno logueado detrás. */
+  async obtenerConfiguracionPublica(negocioId: string): Promise<{ bodegaId: string | null; activo: boolean }> {
+    const tienda = await this.tiendaRepo.findOne({ where: { negocioId } });
+    return { bodegaId: tienda?.bodegaId ?? null, activo: tienda?.activo ?? false };
+  }
+
   async elegirBodega(bodegaId: string): Promise<void> {
     const negocioId = this.getNegocioId();
     const bodega = await this.bodegaRepo.findOne({ where: { id: bodegaId, negocioId } });

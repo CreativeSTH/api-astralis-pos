@@ -58,4 +58,17 @@ describe('TiendaOnlineService', () => {
     tiendaRepo.findOne.mockResolvedValue(null);
     await expect(service.estaUsadaPorTiendaActiva('bodega-1')).resolves.toBe(false);
   });
+
+  it('obtenerConfiguracionPublica devuelve la config de un negocio sin depender del contexto CLS', async () => {
+    tiendaRepo.findOne.mockResolvedValue({ negocioId: 'negocio-2', bodegaId: 'bodega-9', activo: true });
+    const config = await service.obtenerConfiguracionPublica('negocio-2');
+    expect(config).toEqual({ bodegaId: 'bodega-9', activo: true });
+    expect(tiendaRepo.findOne).toHaveBeenCalledWith({ where: { negocioId: 'negocio-2' } });
+  });
+
+  it('obtenerConfiguracionPublica devuelve inactivo/sin bodega si el negocio no tiene TiendaOnline creada', async () => {
+    tiendaRepo.findOne.mockResolvedValue(null);
+    const config = await service.obtenerConfiguracionPublica('negocio-sin-tienda');
+    expect(config).toEqual({ bodegaId: null, activo: false });
+  });
 });
