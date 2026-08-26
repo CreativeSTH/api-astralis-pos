@@ -6,16 +6,19 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { Inventario } from '../inventario/entities/inventario.entity';
 import { Negocio } from '../negocios/entities/negocio.entity';
 import { Cliente } from '../clientes/entities/cliente.entity';
+import { DireccionCliente } from '../clientes/entities/direccion-cliente.entity';
 import { TiendaOnlineModule } from '../tienda-online/tienda-online.module';
 import { CatalogoPublicoService } from './catalogo-publico.service';
 import { CatalogoPublicoController } from './catalogo-publico.controller';
 import { ClienteAuthService } from './cliente-auth.service';
 import { ClienteAuthController } from './cliente-auth.controller';
+import { ClientePerfilService } from './cliente-perfil.service';
+import { ClientePerfilController } from './cliente-perfil.controller';
 import { JwtClienteStrategy } from './strategies/jwt-cliente.strategy';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Inventario, Negocio, Cliente]),
+    TypeOrmModule.forFeature([Inventario, Negocio, Cliente, DireccionCliente]),
     TiendaOnlineModule,
     PassportModule,
     JwtModule.registerAsync({
@@ -32,8 +35,8 @@ import { JwtClienteStrategy } from './strategies/jwt-cliente.strategy';
       }),
     }),
   ],
-  controllers: [CatalogoPublicoController, ClienteAuthController],
-  providers: [CatalogoPublicoService, ClienteAuthService, JwtClienteStrategy],
+  controllers: [CatalogoPublicoController, ClienteAuthController, ClientePerfilController],
+  providers: [CatalogoPublicoService, ClienteAuthService, ClientePerfilService, JwtClienteStrategy],
   exports: [JwtModule, PassportModule],
 })
 export class CatalogoClienteModule {}
