@@ -75,4 +75,27 @@ describe('CatalogoPublicoService', () => {
     expect(queryBuilder.andWhere).toHaveBeenCalledWith('inv.cantidad > 0');
     expect(queryBuilder.andWhere).toHaveBeenCalledWith('producto.activo = true');
   });
+
+  it('incluye plantilla, logo, banners y legales cuando la tienda esta activa', async () => {
+    tiendaOnlineService.obtenerConfiguracionPublica.mockResolvedValue({
+      bodegaId: 'bodega-1', activo: true, plantilla: 'nocturne', logoUrl: '/logo.png',
+      banners: ['/b1.png'], terminos: 'T', tratamientoDatos: 'D', politicaEnvios: 'E',
+    });
+    queryBuilder.getMany.mockResolvedValue([]);
+    const resultado = await service.obtenerCatalogo('negocio-1');
+    expect(resultado).toEqual({
+      activa: true, productos: [], plantilla: 'nocturne', logoUrl: '/logo.png',
+      banners: ['/b1.png'], terminos: 'T', tratamientoDatos: 'D', politicaEnvios: 'E',
+    });
+  });
+
+  it('incluye plantilla por defecto aunque la tienda este inactiva', async () => {
+    tiendaOnlineService.obtenerConfiguracionPublica.mockResolvedValue({
+      bodegaId: null, activo: false, plantilla: 'aurora', logoUrl: null,
+      banners: [], terminos: null, tratamientoDatos: null, politicaEnvios: null,
+    });
+    const resultado = await service.obtenerCatalogo('negocio-1');
+    expect(resultado.plantilla).toBe('aurora');
+    expect(resultado.activa).toBe(false);
+  });
 });

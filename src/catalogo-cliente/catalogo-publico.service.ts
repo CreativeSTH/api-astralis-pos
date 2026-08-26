@@ -21,14 +21,14 @@ export class CatalogoPublicoService {
     private readonly tiendaOnlineService: TiendaOnlineService,
   ) {}
 
-  async obtenerCatalogo(
-    negocioId: string,
-  ): Promise<{ activa: boolean; productos: ProductoCatalogoPublico[] }> {
-    const { bodegaId, activo } =
+  async obtenerCatalogo(negocioId: string) {
+    const { bodegaId, activo, plantilla, logoUrl, banners, terminos, tratamientoDatos, politicaEnvios } =
       await this.tiendaOnlineService.obtenerConfiguracionPublica(negocioId);
 
+    const base = { plantilla, logoUrl, banners, terminos, tratamientoDatos, politicaEnvios };
+
     if (!activo || !bodegaId) {
-      return { activa: false, productos: [] };
+      return { activa: false, productos: [], ...base };
     }
 
     const filas = await this.inventarioRepo
@@ -49,6 +49,6 @@ export class CatalogoPublicoService {
       imagenUrl: fila.producto.imagenUrl ?? null,
     }));
 
-    return { activa: true, productos };
+    return { activa: true, productos, ...base };
   }
 }
