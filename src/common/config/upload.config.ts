@@ -80,3 +80,39 @@ export const proveedorDocumentoUploadOptions: MulterOptions = {
   },
   limits: { fileSize: 5 * 1024 * 1024 },
 };
+
+/** Config de multer para el logo de una tienda online. */
+export const tiendaLogoUploadOptions: MulterOptions = {
+  storage: diskStorage({
+    destination: join(process.cwd(), 'uploads', 'tienda-online', 'logos'),
+    filename: (_req, file, callback) => {
+      callback(null, `${randomUUID()}${extname(file.originalname).toLowerCase()}`);
+    },
+  }),
+  fileFilter: (_req, file, callback) => {
+    if (!TIPOS_PERMITIDOS.test(extname(file.originalname))) {
+      callback(new BadRequestException('Solo se permiten imágenes JPG, PNG o WEBP'), false);
+      return;
+    }
+    callback(null, true);
+  },
+  limits: { fileSize: 2 * 1024 * 1024 },
+};
+
+/** Config de multer para los banners del carrusel de una tienda online — hasta 4, se suben de a uno. */
+export const tiendaBannerUploadOptions: MulterOptions = {
+  storage: diskStorage({
+    destination: join(process.cwd(), 'uploads', 'tienda-online', 'banners'),
+    filename: (_req, file, callback) => {
+      callback(null, `${randomUUID()}${extname(file.originalname).toLowerCase()}`);
+    },
+  }),
+  fileFilter: (_req, file, callback) => {
+    if (!TIPOS_PERMITIDOS.test(extname(file.originalname))) {
+      callback(new BadRequestException('Solo se permiten imágenes JPG, PNG o WEBP'), false);
+      return;
+    }
+    callback(null, true);
+  },
+  limits: { fileSize: 3 * 1024 * 1024 },
+};

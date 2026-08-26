@@ -97,6 +97,34 @@ export class TiendaOnlineService extends TenantBaseService<TiendaOnline> {
     await this.tiendaRepo.save(tienda);
   }
 
+  async actualizarLogo(logoUrl: string): Promise<void> {
+    const tienda = await this.obtenerOCrear();
+    tienda.logoUrl = logoUrl;
+    await this.tiendaRepo.save(tienda);
+  }
+
+  async agregarBanner(url: string): Promise<string[]> {
+    const tienda = await this.obtenerOCrear();
+    const banners = tienda.banners ?? [];
+    if (banners.length >= 4) {
+      throw new BadRequestException('Ya hay 4 banners — eliminá uno antes de agregar otro');
+    }
+    tienda.banners = [...banners, url];
+    await this.tiendaRepo.save(tienda);
+    return tienda.banners;
+  }
+
+  async eliminarBanner(index: number): Promise<string[]> {
+    const tienda = await this.obtenerOCrear();
+    const banners = tienda.banners ?? [];
+    if (index < 0 || index >= banners.length) {
+      throw new NotFoundException('No existe un banner en esa posición');
+    }
+    tienda.banners = banners.filter((_, i) => i !== index);
+    await this.tiendaRepo.save(tienda);
+    return tienda.banners;
+  }
+
   /** Usado por `BodegasService.remove()` (Task 4) para bloquear la desactivación de una bodega en uso. */
   async estaUsadaPorTiendaActiva(bodegaId: string): Promise<boolean> {
     const tienda = await this.tiendaRepo.findOne({

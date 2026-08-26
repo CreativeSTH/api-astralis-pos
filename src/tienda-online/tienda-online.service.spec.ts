@@ -117,4 +117,30 @@ describe('TiendaOnlineService', () => {
       terminos: 'nuevo', tratamientoDatos: 'viejo-2', politicaEnvios: 'viejo-3',
     }));
   });
+
+  it('actualizarLogo guarda la URL del logo', async () => {
+    tiendaRepo.findOne.mockResolvedValue({ negocioId: 'negocio-1', bodegaId: 'bodega-1', activo: true });
+    await service.actualizarLogo('/uploads/tienda-online/logos/abc.png');
+    expect(tiendaRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ logoUrl: '/uploads/tienda-online/logos/abc.png' }),
+    );
+  });
+
+  it('agregarBanner agrega la URL al final del array existente', async () => {
+    tiendaRepo.findOne.mockResolvedValue({ negocioId: 'negocio-1', banners: ['/a.png'] });
+    const resultado = await service.agregarBanner('/b.png');
+    expect(resultado).toEqual(['/a.png', '/b.png']);
+    expect(tiendaRepo.save).toHaveBeenCalledWith(expect.objectContaining({ banners: ['/a.png', '/b.png'] }));
+  });
+
+  it('agregarBanner rechaza un 5to banner', async () => {
+    tiendaRepo.findOne.mockResolvedValue({ negocioId: 'negocio-1', banners: ['/a.png', '/b.png', '/c.png', '/d.png'] });
+    await expect(service.agregarBanner('/e.png')).rejects.toThrow('Ya hay 4 banners');
+  });
+
+  it('eliminarBanner quita el banner en ese índice', async () => {
+    tiendaRepo.findOne.mockResolvedValue({ negocioId: 'negocio-1', banners: ['/a.png', '/b.png', '/c.png'] });
+    const resultado = await service.eliminarBanner(1);
+    expect(resultado).toEqual(['/a.png', '/c.png']);
+  });
 });
