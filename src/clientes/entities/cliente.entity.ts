@@ -55,4 +55,7 @@ export class Cliente extends BaseEntity {
 
   @Column({ default: true })
   activo: boolean;
+
+  @Column({ name: 'password_hash', type: 'varchar', nullable: true })
+  passwordHash: string | null;
 }
