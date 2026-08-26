@@ -1,4 +1,5 @@
 import { Column, Entity, Index } from 'typeorm';
+import { Exclude } from 'class-transformer';
 import { BaseEntity } from '../../common/entities/base.entity';
 
 @Entity('clientes')
@@ -56,6 +57,8 @@ export class Cliente extends BaseEntity {
   @Column({ default: true })
   activo: boolean;
 
+  /** Nunca debe viajar en una respuesta HTTP del backoffice — ver ClientesController (ClassSerializerInterceptor). */
+  @Exclude()
   @Column({ name: 'password_hash', type: 'varchar', nullable: true })
   passwordHash: string | null;
 }
