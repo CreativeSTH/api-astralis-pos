@@ -40,6 +40,7 @@ import { RealtimeModule } from './realtime/realtime.module';
 import { PagosModule } from './pagos/pagos.module';
 import { TiendaOnlineModule } from './tienda-online/tienda-online.module';
 import { CatalogoClienteModule } from './catalogo-cliente/catalogo-cliente.module';
+import { PaquetesModule } from './paquetes/paquetes.module';
 
 @Module({
   imports: [
@@ -99,6 +100,7 @@ import { CatalogoClienteModule } from './catalogo-cliente/catalogo-cliente.modul
     PagosModule,
     TiendaOnlineModule,
     CatalogoClienteModule,
+    PaquetesModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },
