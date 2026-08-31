@@ -25,7 +25,11 @@ describe('PermisosService.sembrarCatalogo — reconciliación de Super Administr
       ),
     };
     const rolesRepo = {
-      find: jest.fn().mockResolvedValue([superAdmin]),
+      find: jest
+        .fn()
+        .mockResolvedValueOnce([]) // primera llamada: administradores (tier: NEGOCIO) — vacío
+        .mockResolvedValueOnce([superAdmin]) // segunda llamada: superAdmins (tier: SISTEMA) — el Super Admin
+        .mockResolvedValueOnce([]), // tercera llamada: cajeros (tier: NEGOCIO) — vacío
       save: jest.fn(async (roles: Rol[]) => roles),
     };
 
@@ -40,11 +44,22 @@ describe('PermisosService.sembrarCatalogo — reconciliación de Super Administr
     const service = moduleRef.get(PermisosService);
     await service.sembrarCatalogo();
 
+    // Verificar que se hizo save con el Super Admin que contiene PAQUETES
     const rolesGuardados = rolesRepo.save.mock.calls.flatMap((call: [Rol[]]) => call[0]);
     const superAdminGuardado = rolesGuardados.find((r: Rol) => r.nombre === 'Super Administrador');
     expect(superAdminGuardado).toBeDefined();
     expect(
       superAdminGuardado!.permisos.some((p) => p.modulo === ModuloPermiso.PAQUETES && p.accion === AccionPermiso.VER),
     ).toBe(true);
+
+    // Verificar que el segundo find() (para Super Administrador) fue llamado con la query correcta
+    // Si la query fuera incorrecta (tier equivocado, esDefault faltante, nombre mal escrito),
+    // este assertion fallaría, lo que no ocurriría con un mock que devuelve siempre lo mismo
+    expect(rolesRepo.find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { tier: RolTier.SISTEMA, esDefault: true, nombre: 'Super Administrador' },
+        relations: { permisos: true },
+      }),
+    );
   });
 });
