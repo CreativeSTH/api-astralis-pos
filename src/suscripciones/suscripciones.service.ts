@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { createHash, randomUUID, timingSafeEqual } from 'crypto';
@@ -21,6 +21,8 @@ const WOMPI_PAYMENT_TYPE: Record<MetodoPagoSuscripcion, string> = {
 
 @Injectable()
 export class SuscripcionesService {
+  private readonly logger = new Logger(SuscripcionesService.name);
+
   constructor(
     @InjectRepository(Suscripcion)
     private readonly suscripcionesRepository: Repository<Suscripcion>,
@@ -89,13 +91,22 @@ export class SuscripcionesService {
   }
 
   async iniciarReactivacion(negocioId: string, dto: ReactivarSuscripcionDto) {
-    // Idempotencia acotada en el tiempo: sin este chequeo, dos clics del cajero (o un reintento
-    // del frontend tras un timeout) crean dos transacciones distintas en Wompi — dos cobros
-    // reales por la misma reactivación. Se bloquea solo mientras la última PENDIENTE sea
-    // "reciente" (mismo criterio que usa `reconciliarPendientes` para considerar una transacción
-    // todavía viva) — pasada esa ventana se asume abandonada (QR nunca escaneado) y se permite
-    // generar una nueva, para no dejar a un negocio bloqueado para siempre por un intento viejo
-    // que nunca se completó.
+    // Idempotencia acotada en el tiempo: sin este chequeo, un reintento del frontend (ej. recargar
+    // la página y volver a apretar el botón) crea una transacción nueva en Wompi por la misma
+    // reactivación — el botón ya queda deshabilitado del lado del frontend mientras la request
+    // está en curso (`[disabled]="loading()"` en ds-button), así que esto cubre el caso de
+    // reintento tras cerrar/recargar, no un verdadero doble-click. Ventana de 10 minutos —
+    // deliberadamente DISTINTA a la hora que usa `reconciliarPendientes` para considerar una
+    // transacción viva (esa es la ventana de "todavía puede resolverse sola"; esta es la de
+    // "cuánto esperamos antes de ofrecer generar un QR nuevo") — aproxima la vida útil típica de
+    // un QR de Bancolombia. Pasada esa ventana se asume abandonada y se permite un intento nuevo,
+    // para no dejar a un negocio bloqueado para siempre por un QR que nunca se escaneó.
+    //
+    // Nota conocida (no cerrada acá, ver hallazgo de la revisión): esto no elimina la carrera
+    // entre dos requests genuinamente concurrentes (dos pestañas/sesiones a la vez) — cada
+    // `iniciarReactivacion` genera su propia `referencia` (randomUUID), así que ni el índice
+    // único de `referencia` ni la idempotencia de Wompi las deduplican. El fix de raíz sería un
+    // índice único parcial `(negocio_id) WHERE estado='PENDIENTE'` a nivel de esquema.
     const VENTANA_PENDIENTE_MS = 10 * 60 * 1000;
     const pendiente = await this.transaccionesRepository.findOne({
       where: { negocioId, estado: 'PENDIENTE' },
@@ -221,7 +232,15 @@ export class SuscripcionesService {
     // una suscripción de 30 días sin ningún pago real. Bug de seguridad real
     // encontrado en la revisión final de rama, probado en vivo contra el
     // endpoint público antes de este fix.
-    if (!secreto) return;
+    if (!secreto) {
+      // No-op silencioso hacia Wompi (fail-closed correcto), pero acá adentro sí queda rastro:
+      // sin esto, una config faltante en producción tumba TODA la confirmación de pagos de
+      // suscripción sin que nadie se entere hasta que un cliente reclame que pagó y sigue
+      // bloqueado — reconciliarPendientes lo tapa parcialmente (corre cada minuto), pero solo
+      // durante la primera hora de vida de cada transacción.
+      this.logger.error('WOMPI_PLATAFORMA_LLAVE_SECRETA_EVENTOS no configurada — webhook de suscripción descartado');
+      return;
+    }
     const properties = payload.signature?.properties;
     if (!Array.isArray(properties) || !properties.includes('transaction.id') || !properties.includes('transaction.status')) {
       return;
