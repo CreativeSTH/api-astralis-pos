@@ -9,6 +9,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { TenantGuard } from './common/guards/tenant.guard';
+import { SuscripcionGuard } from './common/guards/suscripcion.guard';
 import { PermissionsGuard } from './common/guards/permissions.guard';
 
 import { AuthModule } from './auth/auth.module';
@@ -107,6 +108,7 @@ import { SuscripcionesModule } from './suscripciones/suscripciones.module';
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: TenantGuard },
+    { provide: APP_GUARD, useClass: SuscripcionGuard },
     { provide: APP_GUARD, useClass: PermissionsGuard },
     { provide: APP_GUARD, useClass: ThrottlerGuard },
     { provide: APP_FILTER, useClass: HttpExceptionFilter },

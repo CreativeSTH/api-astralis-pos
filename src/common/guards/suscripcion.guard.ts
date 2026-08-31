@@ -1,0 +1,56 @@
+import { ExecutionContext, HttpException, HttpStatus, Injectable } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
+import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
+import { JwtUserPayload } from '../decorators/current-user.decorator';
+import { SuscripcionesService } from '../../suscripciones/suscripciones.service';
+
+/**
+ * Rutas alcanzables aunque el negocio esté VENCIDA — sin esto, un negocio
+ * bloqueado no tendría ninguna forma de reactivarse ni de cerrar sesión.
+ *
+ * `request.route.path` incluye el prefijo global `api` (`app.setGlobalPrefix('api')`
+ * en main.ts) — confirmado en vivo levantando el servidor, donde
+ * `request.route.path` para `GET /api/suscripcion/mi-estado` resultó ser
+ * `/api/suscripcion/mi-estado`, no `/suscripcion/mi-estado` como se podría
+ * asumir. Sin el prefijo acá, esta whitelist nunca hace match con nada y
+ * un negocio VENCIDA queda sin forma de reactivarse — bug real detectado
+ * y corregido antes de continuar.
+ */
+const RUTAS_PERMITIDAS_BLOQUEADO = new Set([
+  'GET /api/suscripcion/mi-estado',
+  'POST /api/suscripcion/reactivar',
+  'POST /api/auth/logout',
+]);
+
+@Injectable()
+export class SuscripcionGuard {
+  constructor(
+    private readonly reflector: Reflector,
+    private readonly suscripciones: SuscripcionesService,
+  ) {}
+
+  async canActivate(context: ExecutionContext): Promise<boolean> {
+    const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+    if (isPublic) return true;
+
+    const request = context.switchToHttp().getRequest();
+    const user = request.user as JwtUserPayload | undefined;
+    // Sin user (no debería pasar, JwtAuthGuard ya corrió) o tier SISTEMA (no tiene Suscripcion): no aplica.
+    if (!user || user.rolTier === 'SISTEMA' || !user.negocioId) return true;
+
+    const bloqueado = await this.suscripciones.estaBloqueado(user.negocioId);
+    if (!bloqueado) return true;
+
+    const metodo = request.method as string;
+    const ruta = request.route?.path as string | undefined;
+    if (ruta && RUTAS_PERMITIDAS_BLOQUEADO.has(`${metodo} ${ruta}`)) return true;
+
+    throw new HttpException(
+      'La suscripción de tu negocio venció — reactivala para seguir usando el sistema',
+      HttpStatus.PAYMENT_REQUIRED,
+    );
+  }
+}
