@@ -225,4 +225,16 @@ export class SuscripcionesService {
     suscripcion.fechaFin = fechaFin;
     await this.suscripcionesRepository.save(suscripcion);
   }
+
+  /** Corrida periódica (ver SuscripcionesCronService): PRUEBA/ACTIVA vencidas pasan a VENCIDA. */
+  async marcarVencidas(): Promise<void> {
+    const ahora = new Date();
+    await this.suscripcionesRepository
+      .createQueryBuilder()
+      .update(Suscripcion)
+      .set({ estado: EstadoSuscripcion.VENCIDA })
+      .where('estado IN (:...estados)', { estados: [EstadoSuscripcion.PRUEBA, EstadoSuscripcion.ACTIVA] })
+      .andWhere('fecha_fin IS NOT NULL AND fecha_fin < :ahora', { ahora })
+      .execute();
+  }
 }

@@ -41,6 +41,7 @@ import { PagosModule } from './pagos/pagos.module';
 import { TiendaOnlineModule } from './tienda-online/tienda-online.module';
 import { CatalogoClienteModule } from './catalogo-cliente/catalogo-cliente.module';
 import { PaquetesModule } from './paquetes/paquetes.module';
+import { SuscripcionesModule } from './suscripciones/suscripciones.module';
 
 @Module({
   imports: [
@@ -101,6 +102,7 @@ import { PaquetesModule } from './paquetes/paquetes.module';
     TiendaOnlineModule,
     CatalogoClienteModule,
     PaquetesModule,
+    SuscripcionesModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },
