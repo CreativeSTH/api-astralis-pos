@@ -1,7 +1,11 @@
-import { Column, Entity } from 'typeorm';
+import { Column, Entity, Index } from 'typeorm';
 import { BaseEntity } from '../../common/entities/base.entity';
 
 @Entity('paquetes')
+@Index('UQ_paquetes_es_paquete_free', ['esPaqueteFree'], {
+  unique: true,
+  where: '"es_paquete_free" = true',
+})
 export class Paquete extends BaseEntity {
   @Column()
   nombre: string;
@@ -30,9 +34,9 @@ export class Paquete extends BaseEntity {
   /**
    * A lo sumo una fila del catálogo debería tener esto en true — es el fallback de todo
    * negocio sin otra Suscripcion asignada (ver PaquetesService.asegurarPaqueteFreePorDefecto,
-   * consumido por SuscripcionesService en la pieza 2). No hay constraint de unicidad a nivel
-   * DB: el único código que lo pone en true es ese método, que es idempotente (busca antes
-   * de crear), así que la invariante se sostiene por convención de uso, no por el esquema.
+   * consumido por SuscripcionesService en la pieza 2). La invariante la sostiene el índice
+   * único parcial `UQ_paquetes_es_paquete_free` (arriba) — un segundo insert/update con
+   * esPaqueteFree=true falla con 23505 en vez de dejar dos filas FREE.
    */
   @Column({ name: 'es_paquete_free', default: false })
   esPaqueteFree: boolean;
