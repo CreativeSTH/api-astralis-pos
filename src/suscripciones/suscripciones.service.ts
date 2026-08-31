@@ -5,6 +5,7 @@ import { createHash, randomUUID, timingSafeEqual } from 'crypto';
 import { Suscripcion } from './entities/suscripcion.entity';
 import { EstadoSuscripcion } from './entities/estado-suscripcion.enum';
 import { TransaccionSuscripcion, MetodoPagoSuscripcion } from './entities/transaccion-suscripcion.entity';
+import { MedioPagoGuardado } from './entities/medio-pago-guardado.entity';
 import { WompiClientService } from '../pagos/wompi-client.service';
 import { PaquetesService } from '../paquetes/paquetes.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
@@ -28,6 +29,8 @@ export class SuscripcionesService {
     private readonly suscripcionesRepository: Repository<Suscripcion>,
     @InjectRepository(TransaccionSuscripcion)
     private readonly transaccionesRepository: Repository<TransaccionSuscripcion>,
+    @InjectRepository(MedioPagoGuardado)
+    private readonly medioPagoRepository: Repository<MedioPagoGuardado>,
     private readonly wompiClient: WompiClientService,
     private readonly paquetesService: PaquetesService,
     private readonly realtimeGateway: RealtimeGateway,
@@ -139,42 +142,80 @@ export class SuscripcionesService {
       await this.wompiClient.obtenerTokensAceptacion(llavePublica);
 
     const montoEnCentavos = Math.round(Number(paquete.precioMensual) * 100);
-    const wompiType = WOMPI_PAYMENT_TYPE[dto.metodo];
-    const requierePaymentDescription = wompiType === 'BANCOLOMBIA_QR' || wompiType === 'PSE';
-    const paymentMethod = {
-      ...(requierePaymentDescription ? { payment_description: `Suscripción AURA — ${paquete.nombre}` } : {}),
-      ...dto.datosMetodo,
-      type: wompiType,
-    };
-
     const referencia = randomUUID();
     const currency = 'COP';
     const signature = createHash('sha256')
       .update(`${referencia}${montoEnCentavos}${currency}${llaveIntegridad}`)
       .digest('hex');
 
-    const { wompiTransactionId, status, extra: extraInicial } = await this.wompiClient.crearTransaccion({
-      llavePrivada,
-      amountInCents: montoEnCentavos,
-      currency,
-      reference: referencia,
-      signature,
-      acceptanceToken,
-      acceptPersonalAuth,
-      paymentMethod,
-      customerEmail: 'facturacion@somosaura.dev',
-    });
+    const debeGuardarTarjeta = !!dto.guardarTarjeta && dto.metodo === 'TARJETA';
+    let wompiTransactionId: string;
+    let status: string;
+    let extra: Record<string, unknown> | undefined;
+    let paymentSourceIdCreado: number | undefined;
 
-    // Wompi no manda `qr_image` en la respuesta de POST /transactions para
-    // BANCOLOMBIA_QR — se genera async y solo aparece consultando
-    // GET /transactions/{id} un rato después. Mismo bug y mismo fix que
-    // PagosService.iniciarPago/esperarQrImagen (ver ese archivo): sin este
-    // polling, el frontend siempre recibía `extra` vacío y no podía mostrar
-    // ningún QR para pagar.
-    const extra =
-      wompiType === 'BANCOLOMBIA_QR' && !extraInicial?.['qr_image']
-        ? await this.esperarQrImagen(wompiTransactionId, llavePublica)
-        : extraInicial;
+    if (debeGuardarTarjeta) {
+      const token = dto.datosMetodo['token'] as string | undefined;
+      if (!token) {
+        throw new BadRequestException('Falta el token de tarjeta en datosMetodo para guardar la tarjeta');
+      }
+      if (!dto.ultimosCuatroDigitos) {
+        throw new BadRequestException('Falta ultimosCuatroDigitos para guardar la tarjeta');
+      }
+      const fuente = await this.wompiClient.crearFuentePago({
+        llavePrivada,
+        token,
+        customerEmail: 'facturacion@somosaura.dev',
+        acceptanceToken,
+        acceptPersonalAuth,
+      });
+      paymentSourceIdCreado = fuente.paymentSourceId;
+
+      const resultado = await this.wompiClient.crearTransaccionConFuente({
+        llavePrivada,
+        amountInCents: montoEnCentavos,
+        currency,
+        reference: referencia,
+        signature,
+        paymentSourceId: fuente.paymentSourceId,
+        customerEmail: 'facturacion@somosaura.dev',
+      });
+      wompiTransactionId = resultado.wompiTransactionId;
+      status = resultado.status;
+    } else {
+      const wompiType = WOMPI_PAYMENT_TYPE[dto.metodo];
+      const requierePaymentDescription = wompiType === 'BANCOLOMBIA_QR' || wompiType === 'PSE';
+      const paymentMethod = {
+        ...(requierePaymentDescription ? { payment_description: `Suscripción AURA — ${paquete.nombre}` } : {}),
+        ...dto.datosMetodo,
+        type: wompiType,
+      };
+
+      const resultado = await this.wompiClient.crearTransaccion({
+        llavePrivada,
+        amountInCents: montoEnCentavos,
+        currency,
+        reference: referencia,
+        signature,
+        acceptanceToken,
+        acceptPersonalAuth,
+        paymentMethod,
+        customerEmail: 'facturacion@somosaura.dev',
+      });
+      wompiTransactionId = resultado.wompiTransactionId;
+      status = resultado.status;
+
+      // Wompi no manda `qr_image` en la respuesta de POST /transactions para
+      // BANCOLOMBIA_QR — se genera async y solo aparece consultando
+      // GET /transactions/{id} un rato después. Mismo bug y mismo fix que
+      // PagosService.iniciarPago/esperarQrImagen (ver ese archivo): sin este
+      // polling, el frontend siempre recibía `extra` vacío y no podía mostrar
+      // ningún QR para pagar.
+      extra =
+        wompiType === 'BANCOLOMBIA_QR' && !resultado.extra?.['qr_image']
+          ? await this.esperarQrImagen(wompiTransactionId, llavePublica)
+          : resultado.extra;
+    }
 
     await this.transaccionesRepository.save(
       this.transaccionesRepository.create({
@@ -185,14 +226,43 @@ export class SuscripcionesService {
         metodoPago: dto.metodo,
         estado: status === 'APPROVED' ? 'APROBADA' : 'PENDIENTE',
         montoEnCentavos,
+        origen: 'MANUAL',
       }),
     );
 
     if (status === 'APPROVED') {
       await this.activarTrasPago(negocioId, paqueteId);
+      if (paymentSourceIdCreado) {
+        await this.guardarMedioPago(negocioId, paymentSourceIdCreado, dto.ultimosCuatroDigitos!);
+      }
     }
 
     return { referencia, wompiTransactionId, extra };
+  }
+
+  private async guardarMedioPago(negocioId: string, paymentSourceId: number, ultimosCuatroDigitos: string): Promise<void> {
+    const existente = await this.medioPagoRepository.findOne({ where: { negocioId } });
+    if (existente) {
+      existente.wompiPaymentSourceId = paymentSourceId;
+      existente.ultimosCuatroDigitos = ultimosCuatroDigitos;
+      existente.activo = true;
+      await this.medioPagoRepository.save(existente);
+      return;
+    }
+    await this.medioPagoRepository.save(
+      this.medioPagoRepository.create({ negocioId, wompiPaymentSourceId: paymentSourceId, ultimosCuatroDigitos, activo: true }),
+    );
+  }
+
+  async obtenerMedioPago(negocioId: string): Promise<MedioPagoGuardado | null> {
+    return this.medioPagoRepository.findOne({ where: { negocioId, activo: true } });
+  }
+
+  async quitarMedioPago(negocioId: string): Promise<void> {
+    const medioPago = await this.medioPagoRepository.findOne({ where: { negocioId } });
+    if (!medioPago) return;
+    medioPago.activo = false;
+    await this.medioPagoRepository.save(medioPago);
   }
 
   /**
@@ -345,20 +415,97 @@ export class SuscripcionesService {
     suscripcion.paqueteId = paqueteId;
     suscripcion.estado = EstadoSuscripcion.ACTIVA;
     suscripcion.fechaFin = fechaFin;
+    // Único punto de éxito compartido por reactivación manual, webhook, polling de respaldo y
+    // cobro automático — sin este reset, un negocio que falla una vez y luego cobra bien seguiría
+    // acumulando el contador en el próximo fallo aislado, marcando VENCIDA mucho antes de las 3
+    // fallas CONSECUTIVAS que exige el spec.
+    suscripcion.intentosFallidosCobro = 0;
     await this.suscripcionesRepository.save(suscripcion);
 
     this.realtimeGateway.emitToNegocio(negocioId, 'suscripcion:cambio', { estado: EstadoSuscripcion.ACTIVA });
   }
 
-  /** Corrida periódica (ver SuscripcionesCronService): PRUEBA/ACTIVA vencidas pasan a VENCIDA. */
+  /** Corrida periódica (ver SuscripcionesCronService): PRUEBA/ACTIVA vencidas pasan a VENCIDA — excluye negocios con medio de pago guardado activo, esos los maneja `cobrarAutomatico()`. */
   async marcarVencidas(): Promise<void> {
     const ahora = new Date();
-    await this.suscripcionesRepository
+    const negociosConMedioPago = await this.medioPagoRepository.find({ where: { activo: true } });
+    const idsExcluidos = negociosConMedioPago.map((m) => m.negocioId);
+
+    const query = this.suscripcionesRepository
       .createQueryBuilder()
       .update(Suscripcion)
       .set({ estado: EstadoSuscripcion.VENCIDA })
       .where('estado IN (:...estados)', { estados: [EstadoSuscripcion.PRUEBA, EstadoSuscripcion.ACTIVA] })
-      .andWhere('fecha_fin IS NOT NULL AND fecha_fin < :ahora', { ahora })
-      .execute();
+      .andWhere('fecha_fin IS NOT NULL AND fecha_fin < :ahora', { ahora });
+
+    if (idsExcluidos.length > 0) {
+      query.andWhere('negocio_id NOT IN (:...idsExcluidos)', { idsExcluidos });
+    }
+
+    await query.execute();
+  }
+
+  /** Corrida diaria: cobra a todo negocio ACTIVA/PRUEBA vencido con medio de pago guardado. Un intento por negocio por corrida. */
+  async cobrarAutomatico(): Promise<void> {
+    const ahora = new Date();
+    const vencidas = await this.suscripcionesRepository.find({
+      where: [{ estado: EstadoSuscripcion.ACTIVA }, { estado: EstadoSuscripcion.PRUEBA }],
+    });
+
+    for (const suscripcion of vencidas) {
+      if (!suscripcion.fechaFin || suscripcion.fechaFin > ahora) continue;
+
+      const medioPago = await this.medioPagoRepository.findOne({
+        where: { negocioId: suscripcion.negocioId, activo: true },
+      });
+      if (!medioPago) continue; // sin tarjeta guardada — lo maneja marcarVencidas()
+
+      const paquete = await this.paquetesService.findOne(suscripcion.paqueteId);
+      const llavePrivada = process.env.WOMPI_PLATAFORMA_LLAVE_PRIVADA!;
+      const llaveIntegridad = process.env.WOMPI_PLATAFORMA_LLAVE_INTEGRIDAD!;
+      const montoEnCentavos = Math.round(Number(paquete.precioMensual) * 100);
+      const referencia = randomUUID();
+      const currency = 'COP';
+      const signature = createHash('sha256')
+        .update(`${referencia}${montoEnCentavos}${currency}${llaveIntegridad}`)
+        .digest('hex');
+
+      const { wompiTransactionId, status } = await this.wompiClient.crearTransaccionConFuente({
+        llavePrivada,
+        amountInCents: montoEnCentavos,
+        currency,
+        reference: referencia,
+        signature,
+        paymentSourceId: medioPago.wompiPaymentSourceId,
+        customerEmail: 'facturacion@somosaura.dev',
+        recurrente: true,
+      });
+
+      await this.transaccionesRepository.save(
+        this.transaccionesRepository.create({
+          negocioId: suscripcion.negocioId,
+          paqueteId: suscripcion.paqueteId,
+          referencia,
+          wompiTransactionId,
+          metodoPago: 'TARJETA',
+          estado: status === 'APPROVED' ? 'APROBADA' : 'PENDIENTE',
+          montoEnCentavos,
+          origen: 'AUTOMATICO',
+        }),
+      );
+
+      const actual = await this.suscripcionesRepository.findOne({ where: { id: suscripcion.id } });
+      if (!actual) continue;
+
+      if (status === 'APPROVED') {
+        await this.activarTrasPago(actual.negocioId, actual.paqueteId);
+      } else {
+        actual.intentosFallidosCobro += 1;
+        if (actual.intentosFallidosCobro >= 3) {
+          actual.estado = EstadoSuscripcion.VENCIDA;
+        }
+        await this.suscripcionesRepository.save(actual);
+      }
+    }
   }
 }

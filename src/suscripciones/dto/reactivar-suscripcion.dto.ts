@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsIn, IsObject, IsOptional, IsUUID } from 'class-validator';
+import { IsBoolean, IsIn, IsObject, IsOptional, IsString, IsUUID } from 'class-validator';
 import type { MetodoPagoSuscripcion } from '../entities/transaccion-suscripcion.entity';
 
 export class ReactivarSuscripcionDto {
@@ -15,4 +15,14 @@ export class ReactivarSuscripcionDto {
   @ApiProperty()
   @IsObject()
   datosMetodo: Record<string, unknown>;
+
+  @ApiProperty({ required: false, default: false })
+  @IsOptional()
+  @IsBoolean()
+  guardarTarjeta?: boolean;
+
+  @ApiProperty({ required: false, description: 'Requerido si guardarTarjeta=true y metodo=TARJETA' })
+  @IsOptional()
+  @IsString()
+  ultimosCuatroDigitos?: string;
 }
