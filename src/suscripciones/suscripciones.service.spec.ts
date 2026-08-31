@@ -4,6 +4,8 @@ import { SuscripcionesService } from './suscripciones.service';
 import { Suscripcion } from './entities/suscripcion.entity';
 import { EstadoSuscripcion } from './entities/estado-suscripcion.enum';
 import { TransaccionSuscripcion } from './entities/transaccion-suscripcion.entity';
+import { WompiClientService } from '../pagos/wompi-client.service';
+import { PaquetesService } from '../paquetes/paquetes.service';
 
 describe('SuscripcionesService — creación y estaBloqueado', () => {
   let service: SuscripcionesService;
@@ -17,6 +19,8 @@ describe('SuscripcionesService — creación y estaBloqueado', () => {
         SuscripcionesService,
         { provide: getRepositoryToken(Suscripcion), useValue: suscripcionesRepo },
         { provide: getRepositoryToken(TransaccionSuscripcion), useValue: {} },
+        { provide: WompiClientService, useValue: {} },
+        { provide: PaquetesService, useValue: {} },
       ],
     }).compile();
 
