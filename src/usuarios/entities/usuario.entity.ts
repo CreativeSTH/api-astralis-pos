@@ -45,4 +45,18 @@ export class Usuario extends BaseEntity {
 
   @Column({ default: true })
   activo: boolean;
+
+  /**
+   * default: true — un usuario creado por un rol SISTEMA (o ya existente antes
+   * de esta migración) queda verificado de entrada, un humano ya lo dio de
+   * alta. Solo el registro público (registroPublico) lo crea explícitamente en false.
+   */
+  @Column({ name: 'email_verificado', default: true })
+  emailVerificado: boolean;
+
+  @Column({ name: 'token_verificacion', nullable: true })
+  tokenVerificacion?: string;
+
+  @Column({ name: 'token_verificacion_expira', type: 'timestamptz', nullable: true })
+  tokenVerificacionExpira?: Date;
 }
