@@ -136,7 +136,28 @@ export class NegociosService {
       tokenVerificacion,
       tokenVerificacionExpira,
     });
-    await this.usuariosRepository.save(admin);
+    try {
+      await this.usuariosRepository.save(admin);
+    } catch (error) {
+      // Race sobre el índice único de `email`: dos registros públicos
+      // concurrentes con el mismo correo pasan ambos el chequeo de arriba
+      // (que no está en la misma transacción), y solo uno de los dos
+      // INSERT finales sobrevive. Sin este catch, el perdedor de la carrera
+      // dejaba negocio+suscripción+roles+métodos huérfanos — un endpoint
+      // público y anónimo, así que este escenario es provocable a voluntad,
+      // no solo una casualidad rara. Se limpia lo ya creado (roles cae por
+      // ON DELETE CASCADE de `negocios`; suscripciones/métodos_pago no
+      // tienen esa FK, se borran a mano) y se responde el mismo 409 que
+      // hubiera dado el chequeo si hubiera llegado a tiempo.
+      const esViolacionUnica = (error as { code?: string })?.code === '23505';
+      await this.negociosRepository.manager.query('DELETE FROM metodos_pago WHERE negocio_id = $1', [negocio.id]);
+      await this.negociosRepository.manager.query('DELETE FROM suscripciones WHERE negocio_id = $1', [negocio.id]);
+      await this.negociosRepository.delete(negocio.id);
+      if (esViolacionUnica) {
+        throw new ConflictException(`Ya existe un usuario con el email ${dto.adminEmail}`);
+      }
+      throw error;
+    }
 
     const linkVerificacion = `${process.env.FRONTEND_URL}/verificar-email?token=${tokenVerificacion}`;
     const { subject, html } = construirCorreoConfirmacion(dto.adminNombre, linkVerificacion);

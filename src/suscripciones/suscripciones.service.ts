@@ -61,10 +61,20 @@ export class SuscripcionesService {
   }
 
   /** Fail-closed: sin Suscripcion, o VENCIDA, el negocio está bloqueado. */
+  /**
+   * No confía únicamente en `estado === VENCIDA` — ese campo solo lo escribe
+   * el cron (`marcarVencidas()`, corre cada hora). Si el scheduler no corre
+   * por cualquier motivo, una PRUEBA/ACTIVA con `fechaFin` ya pasada seguiría
+   * dando acceso indefinido sin esta segunda condición — el paywall completo
+   * dependería de que un job en segundo plano nunca falle, lo cual contradice
+   * el fail-closed que exige el spec. Peor caso sin esto: hasta 1h de acceso
+   * gratis extra (tolerable); sin el chequeo, potencialmente indefinido.
+   */
   async estaBloqueado(negocioId: string): Promise<boolean> {
     const suscripcion = await this.suscripcionesRepository.findOne({ where: { negocioId } });
     if (!suscripcion) return true;
-    return suscripcion.estado === EstadoSuscripcion.VENCIDA;
+    if (suscripcion.estado === EstadoSuscripcion.VENCIDA) return true;
+    return suscripcion.fechaFin !== null && suscripcion.fechaFin < new Date();
   }
 
   async miEstado(negocioId: string): Promise<Suscripcion> {
@@ -79,6 +89,24 @@ export class SuscripcionesService {
   }
 
   async iniciarReactivacion(negocioId: string, dto: ReactivarSuscripcionDto) {
+    // Idempotencia acotada en el tiempo: sin este chequeo, dos clics del cajero (o un reintento
+    // del frontend tras un timeout) crean dos transacciones distintas en Wompi — dos cobros
+    // reales por la misma reactivación. Se bloquea solo mientras la última PENDIENTE sea
+    // "reciente" (mismo criterio que usa `reconciliarPendientes` para considerar una transacción
+    // todavía viva) — pasada esa ventana se asume abandonada (QR nunca escaneado) y se permite
+    // generar una nueva, para no dejar a un negocio bloqueado para siempre por un intento viejo
+    // que nunca se completó.
+    const VENTANA_PENDIENTE_MS = 10 * 60 * 1000;
+    const pendiente = await this.transaccionesRepository.findOne({
+      where: { negocioId, estado: 'PENDIENTE' },
+      order: { createdAt: 'DESC' },
+    });
+    if (pendiente && pendiente.createdAt.getTime() > Date.now() - VENTANA_PENDIENTE_MS) {
+      throw new BadRequestException(
+        'Ya hay un pago de reactivación en curso — esperá a que se confirme antes de intentar de nuevo',
+      );
+    }
+
     const suscripcion = await this.miEstado(negocioId);
     const paqueteId = dto.paqueteId ?? suscripcion.paqueteId;
     const paquete = await this.paquetesService.findOne(paqueteId);
@@ -186,7 +214,14 @@ export class SuscripcionesService {
     const transaccion = await this.transaccionesRepository.findOne({ where: { referencia } });
     if (!transaccion || transaccion.estado !== 'PENDIENTE') return;
 
-    const secreto = process.env.WOMPI_PLATAFORMA_LLAVE_SECRETA_EVENTOS!;
+    const secreto = process.env.WOMPI_PLATAFORMA_LLAVE_SECRETA_EVENTOS;
+    // Sin esto, `secreto` es `undefined`, la concatenación produce la cadena
+    // literal "undefined" (conocida por cualquiera), y un checksum forjado
+    // con ese "secreto" pasa la verificación — un webhook falso podía activar
+    // una suscripción de 30 días sin ningún pago real. Bug de seguridad real
+    // encontrado en la revisión final de rama, probado en vivo contra el
+    // endpoint público antes de este fix.
+    if (!secreto) return;
     const properties = payload.signature?.properties;
     if (!Array.isArray(properties) || !properties.includes('transaction.id') || !properties.includes('transaction.status')) {
       return;
@@ -270,7 +305,13 @@ export class SuscripcionesService {
     const suscripcion = await this.suscripcionesRepository.findOne({ where: { negocioId } });
     if (!suscripcion) throw new BadRequestException(`Negocio ${negocioId} sin suscripción — no se puede activar`);
 
-    const fechaFin = new Date();
+    // Extiende desde la fecha MÁS TARDÍA entre ahora y el vencimiento actual — no desde `now()`
+    // a secas. Un negocio todavía ACTIVA que renueva/cambia de plan antes de vencer no debe
+    // perder los días que ya pagó y le quedaban; uno VENCIDA (o sin fechaFin) simplemente cuenta
+    // los 30 días desde hoy, que es el caso `Math.max` cubre solo comparando contra `ahora`.
+    const ahora = new Date();
+    const base = suscripcion.fechaFin && suscripcion.fechaFin > ahora ? suscripcion.fechaFin : ahora;
+    const fechaFin = new Date(base);
     fechaFin.setDate(fechaFin.getDate() + 30);
 
     suscripcion.paqueteId = paqueteId;

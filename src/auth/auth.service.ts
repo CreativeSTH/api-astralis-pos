@@ -168,7 +168,20 @@ export class AuthService {
   }
 
   async verificarEmail(token: string) {
-    const usuario = await this.usuariosRepository.findOne({ where: { tokenVerificacion: token } });
+    // `token` vacío/ausente daría un `where: { tokenVerificacion: undefined }` — TypeORM 1.1.0
+    // lo rechaza con un 500 (invalidWhereValuesBehavior), pero no vale la pena depender de ese
+    // comportamiento por defecto: se valida acá explícito, con el mismo mensaje que un token
+    // inválido (no hay razón para distinguirlos hacia el cliente).
+    if (!token) {
+      throw new BadRequestException('El link de verificación es inválido o expiró');
+    }
+
+    // `activo: true` — sin este filtro, un usuario desactivado (ver Usuario.activo/soft delete)
+    // con un token de verificación todavía sin expirar podría verificarse y obtener sesión,
+    // saltándose el chequeo de `activo` que sí hace `login()`.
+    const usuario = await this.usuariosRepository.findOne({
+      where: { tokenVerificacion: token, activo: true },
+    });
     if (
       !usuario ||
       !usuario.tokenVerificacionExpira ||

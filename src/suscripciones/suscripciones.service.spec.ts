@@ -51,15 +51,24 @@ describe('SuscripcionesService — creación y estaBloqueado', () => {
     });
 
     it('true si el estado es VENCIDA', async () => {
-      suscripcionesRepo.findOne.mockResolvedValue({ estado: EstadoSuscripcion.VENCIDA });
+      suscripcionesRepo.findOne.mockResolvedValue({ estado: EstadoSuscripcion.VENCIDA, fechaFin: null });
       expect(await service.estaBloqueado('neg-1')).toBe(true);
     });
 
-    it('false si el estado es PRUEBA o ACTIVA', async () => {
-      suscripcionesRepo.findOne.mockResolvedValue({ estado: EstadoSuscripcion.PRUEBA });
+    it('false si el estado es PRUEBA o ACTIVA con fechaFin futura (o sin vencimiento)', async () => {
+      const fechaFutura = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      suscripcionesRepo.findOne.mockResolvedValue({ estado: EstadoSuscripcion.PRUEBA, fechaFin: fechaFutura });
       expect(await service.estaBloqueado('neg-1')).toBe(false);
-      suscripcionesRepo.findOne.mockResolvedValue({ estado: EstadoSuscripcion.ACTIVA });
+      suscripcionesRepo.findOne.mockResolvedValue({ estado: EstadoSuscripcion.ACTIVA, fechaFin: null });
       expect(await service.estaBloqueado('neg-1')).toBe(false);
+    });
+
+    it('true si estado es PRUEBA/ACTIVA pero fechaFin ya pasó — no depende de que el cron haya corrido', async () => {
+      const fechaPasada = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      suscripcionesRepo.findOne.mockResolvedValue({ estado: EstadoSuscripcion.PRUEBA, fechaFin: fechaPasada });
+      expect(await service.estaBloqueado('neg-1')).toBe(true);
+      suscripcionesRepo.findOne.mockResolvedValue({ estado: EstadoSuscripcion.ACTIVA, fechaFin: fechaPasada });
+      expect(await service.estaBloqueado('neg-1')).toBe(true);
     });
   });
 });
