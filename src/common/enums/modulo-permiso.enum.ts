@@ -25,4 +25,5 @@ export enum ModuloPermiso {
   CUPONES = 'CUPONES',
   PAGOS = 'PAGOS',
   TIENDA_ONLINE = 'TIENDA_ONLINE',
+  PAQUETES = 'PAQUETES',
 }

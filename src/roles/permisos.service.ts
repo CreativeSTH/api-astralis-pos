@@ -72,7 +72,9 @@ export class PermisosService {
     const nuevos: Partial<Permiso>[] = [];
     for (const modulo of Object.values(ModuloPermiso)) {
       const tier =
-        modulo === ModuloPermiso.NEGOCIOS ? RolTier.SISTEMA : RolTier.NEGOCIO;
+        modulo === ModuloPermiso.NEGOCIOS || modulo === ModuloPermiso.PAQUETES
+          ? RolTier.SISTEMA
+          : RolTier.NEGOCIO;
       for (const accion of Object.values(AccionPermiso)) {
         const key = `${modulo}:${accion}`;
         if (!existeSet.has(key)) {
@@ -99,6 +101,20 @@ export class PermisosService {
       }
       if (administradores.length > 0) {
         await this.rolesRepository.save(administradores);
+      }
+    }
+
+    const nuevosDeSistema = guardados.filter((p) => p.tier === RolTier.SISTEMA);
+    if (nuevosDeSistema.length > 0) {
+      const superAdmins = await this.rolesRepository.find({
+        where: { tier: RolTier.SISTEMA, esDefault: true, nombre: 'Super Administrador' },
+        relations: { permisos: true },
+      });
+      for (const rol of superAdmins) {
+        rol.permisos = [...rol.permisos, ...nuevosDeSistema];
+      }
+      if (superAdmins.length > 0) {
+        await this.rolesRepository.save(superAdmins);
       }
     }
 
