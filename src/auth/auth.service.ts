@@ -178,8 +178,8 @@ export class AuthService {
     }
 
     usuario.emailVerificado = true;
-    usuario.tokenVerificacion = undefined;
-    usuario.tokenVerificacionExpira = undefined;
+    usuario.tokenVerificacion = null;
+    usuario.tokenVerificacionExpira = null;
     await this.usuariosRepository.save(usuario);
 
     return this.emitirSesion(usuario);

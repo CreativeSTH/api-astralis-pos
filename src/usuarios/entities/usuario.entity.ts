@@ -54,9 +54,15 @@ export class Usuario extends BaseEntity {
   @Column({ name: 'email_verificado', default: true })
   emailVerificado: boolean;
 
-  @Column({ name: 'token_verificacion', nullable: true })
-  tokenVerificacion?: string;
+  /**
+   * Tipado `| null` (no solo `?: string`) a propósito: TypeORM's `save()`
+   * ignora las propiedades en `undefined` (no las incluye en el UPDATE), así
+   * que asignar `undefined` para "borrar" el token nunca llega a limpiar la
+   * columna — hay que asignar `null` explícito. Ver AuthService.verificarEmail.
+   */
+  @Column({ name: 'token_verificacion', type: 'varchar', nullable: true })
+  tokenVerificacion?: string | null;
 
   @Column({ name: 'token_verificacion_expira', type: 'timestamptz', nullable: true })
-  tokenVerificacionExpira?: Date;
+  tokenVerificacionExpira?: Date | null;
 }
