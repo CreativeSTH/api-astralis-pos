@@ -9,6 +9,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, Not, Repository } from 'typeorm';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
+import * as crypto from 'crypto';
 import { Usuario } from '../usuarios/entities/usuario.entity';
 import { Rol } from '../roles/entities/rol.entity';
 import { Negocio } from '../negocios/entities/negocio.entity';
@@ -18,6 +19,8 @@ import { AccionPermiso } from '../common/enums/accion-permiso.enum';
 import { RolTier } from '../common/enums/rol-tier.enum';
 import { LoginDto } from './dto/login.dto';
 import { PinLoginDto } from './dto/pin-login.dto';
+import { EmailService } from '../email/email.service';
+import { construirCorreoConfirmacion } from '../email/templates/confirmacion-registro.template';
 
 @Injectable()
 export class AuthService {
@@ -30,6 +33,7 @@ export class AuthService {
     private readonly negociosRepository: Repository<Negocio>,
     private readonly permisos: PermisosService,
     private readonly jwtService: JwtService,
+    private readonly emailService: EmailService,
   ) {}
 
   /**
@@ -50,6 +54,10 @@ export class AuthService {
     );
     if (!passwordValida) {
       throw new UnauthorizedException('Credenciales inválidas');
+    }
+
+    if (!usuario.emailVerificado) {
+      throw new UnauthorizedException('Confirmá tu correo antes de iniciar sesión');
     }
 
     return this.emitirSesion(usuario);
@@ -157,6 +165,42 @@ export class AuthService {
     }
 
     return this.emitirSesion(usuario);
+  }
+
+  async verificarEmail(token: string) {
+    const usuario = await this.usuariosRepository.findOne({ where: { tokenVerificacion: token } });
+    if (
+      !usuario ||
+      !usuario.tokenVerificacionExpira ||
+      usuario.tokenVerificacionExpira.getTime() < Date.now()
+    ) {
+      throw new BadRequestException('El link de verificación es inválido o expiró');
+    }
+
+    usuario.emailVerificado = true;
+    usuario.tokenVerificacion = undefined;
+    usuario.tokenVerificacionExpira = undefined;
+    await this.usuariosRepository.save(usuario);
+
+    return this.emitirSesion(usuario);
+  }
+
+  /**
+   * Responde igual (sin excepción) exista o no ese email, y esté o no ya
+   * verificado — evita que este endpoint sirva para averiguar qué correos
+   * están registrados en la plataforma.
+   */
+  async reenviarVerificacion(email: string): Promise<void> {
+    const usuario = await this.usuariosRepository.findOne({ where: { email, activo: true } });
+    if (!usuario || usuario.emailVerificado) return;
+
+    usuario.tokenVerificacion = crypto.randomBytes(32).toString('hex');
+    usuario.tokenVerificacionExpira = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    await this.usuariosRepository.save(usuario);
+
+    const linkVerificacion = `${process.env.FRONTEND_URL}/verificar-email?token=${usuario.tokenVerificacion}`;
+    const { subject, html } = construirCorreoConfirmacion(usuario.nombre, linkVerificacion);
+    await this.emailService.enviar({ to: usuario.email, subject, html });
   }
 
   private async emitirSesion(usuario: Usuario) {

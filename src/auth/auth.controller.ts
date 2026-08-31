@@ -1,17 +1,20 @@
 import {
   Body,
   Controller,
+  Get,
   HttpCode,
   HttpStatus,
   Param,
   ParseUUIDPipe,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { PinLoginDto } from './dto/pin-login.dto';
+import { ReenviarVerificacionDto } from './dto/reenviar-verificacion.dto';
 import { Public } from '../common/decorators/public.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
@@ -60,5 +63,21 @@ export class AuthController {
   })
   entrarComoNegocio(@Param('negocioId', ParseUUIDPipe) negocioId: string) {
     return this.authService.entrarComoNegocio(negocioId);
+  }
+
+  @Public()
+  @Get('verificar-email')
+  @ApiOperation({ summary: 'Confirma el correo de una cuenta recién registrada e inicia sesión' })
+  verificarEmail(@Query('token') token: string) {
+    return this.authService.verificarEmail(token);
+  }
+
+  @Public()
+  @Post('reenviar-verificacion')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Reenvía el correo de confirmación de cuenta' })
+  async reenviarVerificacion(@Body() dto: ReenviarVerificacionDto) {
+    await this.authService.reenviarVerificacion(dto.email);
+    return { mensaje: 'Si el correo existe y no está verificado, te reenviamos el link.' };
   }
 }

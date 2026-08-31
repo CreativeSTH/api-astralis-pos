@@ -10,11 +10,13 @@ import { Usuario } from '../usuarios/entities/usuario.entity';
 import { Rol } from '../roles/entities/rol.entity';
 import { Negocio } from '../negocios/entities/negocio.entity';
 import { RolesModule } from '../roles/roles.module';
+import { EmailModule } from '../email/email.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Usuario, Rol, Negocio]),
     RolesModule,
+    EmailModule,
     PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
