@@ -7,9 +7,10 @@ import { Suscripcion } from './entities/suscripcion.entity';
 import { TransaccionSuscripcion } from './entities/transaccion-suscripcion.entity';
 import { WompiClientService } from '../pagos/wompi-client.service';
 import { PaquetesModule } from '../paquetes/paquetes.module';
+import { RealtimeModule } from '../realtime/realtime.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Suscripcion, TransaccionSuscripcion]), PaquetesModule],
+  imports: [TypeOrmModule.forFeature([Suscripcion, TransaccionSuscripcion]), PaquetesModule, RealtimeModule],
   controllers: [SuscripcionesController],
   providers: [SuscripcionesService, WompiClientService, SuscripcionesCronService],
   exports: [SuscripcionesService],

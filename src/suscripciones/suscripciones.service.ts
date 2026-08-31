@@ -7,6 +7,7 @@ import { EstadoSuscripcion } from './entities/estado-suscripcion.enum';
 import { TransaccionSuscripcion, MetodoPagoSuscripcion } from './entities/transaccion-suscripcion.entity';
 import { WompiClientService } from '../pagos/wompi-client.service';
 import { PaquetesService } from '../paquetes/paquetes.service';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { ReactivarSuscripcionDto } from './dto/reactivar-suscripcion.dto';
 
 const DIAS_PRUEBA = 20;
@@ -27,6 +28,7 @@ export class SuscripcionesService {
     private readonly transaccionesRepository: Repository<TransaccionSuscripcion>,
     private readonly wompiClient: WompiClientService,
     private readonly paquetesService: PaquetesService,
+    private readonly realtimeGateway: RealtimeGateway,
   ) {}
 
   async crearSuscripcionPrueba(negocioId: string, paqueteId: string): Promise<Suscripcion> {
@@ -103,7 +105,7 @@ export class SuscripcionesService {
       .update(`${referencia}${montoEnCentavos}${currency}${llaveIntegridad}`)
       .digest('hex');
 
-    const { wompiTransactionId, status, extra } = await this.wompiClient.crearTransaccion({
+    const { wompiTransactionId, status, extra: extraInicial } = await this.wompiClient.crearTransaccion({
       llavePrivada,
       amountInCents: montoEnCentavos,
       currency,
@@ -114,6 +116,17 @@ export class SuscripcionesService {
       paymentMethod,
       customerEmail: 'facturacion@somosaura.dev',
     });
+
+    // Wompi no manda `qr_image` en la respuesta de POST /transactions para
+    // BANCOLOMBIA_QR — se genera async y solo aparece consultando
+    // GET /transactions/{id} un rato después. Mismo bug y mismo fix que
+    // PagosService.iniciarPago/esperarQrImagen (ver ese archivo): sin este
+    // polling, el frontend siempre recibía `extra` vacío y no podía mostrar
+    // ningún QR para pagar.
+    const extra =
+      wompiType === 'BANCOLOMBIA_QR' && !extraInicial?.['qr_image']
+        ? await this.esperarQrImagen(wompiTransactionId, llavePublica)
+        : extraInicial;
 
     await this.transaccionesRepository.save(
       this.transaccionesRepository.create({
@@ -132,6 +145,30 @@ export class SuscripcionesService {
     }
 
     return { referencia, wompiTransactionId, extra };
+  }
+
+  /**
+   * Polling corto (no long-polling real) contra `GET /transactions/{id}` hasta que Wompi termine de
+   * generar el QR o se agote el presupuesto de tiempo — mismo método, mismos parámetros, que
+   * `PagosService.esperarQrImagen` (`pos-backend/src/pagos/pagos.service.ts`), copiado acá en vez de
+   * extraído a un helper compartido porque `PagosService` es tenant-scoped (usa credenciales por
+   * negocio) y este servicio usa las credenciales de la PLATAFORMA — mismo algoritmo, distinto
+   * origen de credenciales, no vale la pena forzar una abstracción compartida para eso.
+   */
+  private async esperarQrImagen(
+    wompiTransactionId: string,
+    llavePublica: string,
+  ): Promise<Record<string, unknown> | undefined> {
+    const INTENTOS = 8;
+    const ESPERA_MS = 500;
+    let extra: Record<string, unknown> | undefined;
+    for (let intento = 0; intento < INTENTOS; intento++) {
+      await new Promise((resolve) => setTimeout(resolve, ESPERA_MS));
+      const resultado = await this.wompiClient.obtenerTransaccion(wompiTransactionId, llavePublica);
+      extra = resultado.extra;
+      if (extra?.['qr_image']) break;
+    }
+    return extra;
   }
 
   /** Mismo patrón de verificación que `PagosService.procesarWebhook` — checksum SHA256 sobre las properties firmadas + timestamp + secreto, comparación a tiempo constante. */
@@ -184,6 +221,12 @@ export class SuscripcionesService {
 
     if (status === 'APPROVED') {
       await this.activarTrasPago(transaccion.negocioId, transaccion.paqueteId);
+    } else {
+      // Mismo motivo que el fix ya aplicado en PagosService.resolverTransaccionTerminal: sin avisar
+      // también el rechazo, el frontend queda esperando para siempre un evento que nunca llega.
+      this.realtimeGateway.emitToNegocio(transaccion.negocioId, 'suscripcion:pago-declinado', {
+        referencia: transaccion.referencia,
+      });
     }
   }
 
@@ -208,11 +251,21 @@ export class SuscripcionesService {
 
       if (status === 'APPROVED') {
         await this.activarTrasPago(actual.negocioId, actual.paqueteId);
+      } else {
+        this.realtimeGateway.emitToNegocio(actual.negocioId, 'suscripcion:pago-declinado', {
+          referencia: actual.referencia,
+        });
       }
     }
   }
 
-  /** ACTIVA con fechaFin = ahora + 30 días — comparte lógica entre el camino síncrono (aprobación inmediata), el webhook, y el polling de respaldo. */
+  /**
+   * ACTIVA con fechaFin = ahora + 30 días — comparte lógica entre el camino síncrono (aprobación
+   * inmediata), el webhook, y el polling de respaldo. Avisa por realtime (mismo canal genérico que
+   * ya usan Alertas/Domicilios/Pagos — ver RealtimeGateway) para que el frontend, que quedó
+   * esperando en la pantalla de reactivación, se entere apenas se aprueba sin tener que adivinar
+   * cuándo volver a preguntar.
+   */
   private async activarTrasPago(negocioId: string, paqueteId: string): Promise<void> {
     const suscripcion = await this.suscripcionesRepository.findOne({ where: { negocioId } });
     if (!suscripcion) throw new BadRequestException(`Negocio ${negocioId} sin suscripción — no se puede activar`);
@@ -224,6 +277,8 @@ export class SuscripcionesService {
     suscripcion.estado = EstadoSuscripcion.ACTIVA;
     suscripcion.fechaFin = fechaFin;
     await this.suscripcionesRepository.save(suscripcion);
+
+    this.realtimeGateway.emitToNegocio(negocioId, 'suscripcion:cambio', { estado: EstadoSuscripcion.ACTIVA });
   }
 
   /** Corrida periódica (ver SuscripcionesCronService): PRUEBA/ACTIVA vencidas pasan a VENCIDA. */
