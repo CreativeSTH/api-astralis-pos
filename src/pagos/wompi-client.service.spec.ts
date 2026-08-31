@@ -265,3 +265,89 @@ describe('WompiClientService', () => {
     ).rejects.toThrow('Wompi rechazó la creación de la transacción');
   });
 });
+
+describe('WompiClientService — payment sources', () => {
+  let service: WompiClientService;
+  const fetchMock = jest.fn();
+
+  beforeEach(() => {
+    service = new WompiClientService();
+    global.fetch = fetchMock as unknown as typeof fetch;
+    fetchMock.mockReset();
+  });
+
+  it('crearFuentePago devuelve el id de la fuente creada', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: { id: 3891, type: 'CARD', status: 'AVAILABLE' } }),
+    });
+
+    const resultado = await service.crearFuentePago({
+      llavePrivada: 'priv_test',
+      token: 'tok_prod_1_abc',
+      customerEmail: 'facturacion@somosaura.dev',
+      acceptanceToken: 'acc_token',
+      acceptPersonalAuth: 'auth_token',
+    });
+
+    expect(resultado).toEqual({ paymentSourceId: 3891 });
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/payment_sources'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('crearFuentePago lanza error cuando Wompi retorna ok: false', async () => {
+    fetchMock.mockResolvedValue({ ok: false, json: async () => ({}) });
+
+    await expect(
+      service.crearFuentePago({
+        llavePrivada: 'priv_test',
+        token: 'tok_prod_1_abc',
+        customerEmail: 'facturacion@somosaura.dev',
+        acceptanceToken: 'acc_token',
+        acceptPersonalAuth: 'auth_token',
+      }),
+    ).rejects.toThrow('Wompi rechazó la creación de la fuente de pago');
+  });
+
+  it('crearTransaccionConFuente devuelve id y estado de la transacción', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: { id: 'txn-1', status: 'APPROVED' } }),
+    });
+
+    const resultado = await service.crearTransaccionConFuente({
+      llavePrivada: 'priv_test',
+      amountInCents: 13990000,
+      currency: 'COP',
+      reference: 'ref-1',
+      signature: 'sig-1',
+      paymentSourceId: 3891,
+      customerEmail: 'facturacion@somosaura.dev',
+      recurrente: true,
+    });
+
+    expect(resultado).toEqual({ wompiTransactionId: 'txn-1', status: 'APPROVED' });
+    const [, opciones] = fetchMock.mock.calls[0];
+    const body = JSON.parse(opciones.body as string);
+    expect(body.payment_source_id).toBe(3891);
+    expect(body.recurrent).toBe(true);
+  });
+
+  it('crearTransaccionConFuente lanza error cuando Wompi retorna ok: false', async () => {
+    fetchMock.mockResolvedValue({ ok: false, json: async () => ({}) });
+
+    await expect(
+      service.crearTransaccionConFuente({
+        llavePrivada: 'priv_test',
+        amountInCents: 13990000,
+        currency: 'COP',
+        reference: 'ref-1',
+        signature: 'sig-1',
+        paymentSourceId: 3891,
+        customerEmail: 'facturacion@somosaura.dev',
+      }),
+    ).rejects.toThrow('Wompi rechazó la transacción con la fuente de pago guardada');
+  });
+});
