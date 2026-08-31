@@ -42,3 +42,6 @@ coverage
 # Temp
 tmp
 temp
+
+# Worktrees locales de skills de desarrollo (no versionar)
+.worktrees/
