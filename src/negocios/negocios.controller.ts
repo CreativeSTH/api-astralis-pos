@@ -14,6 +14,7 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { NegociosService } from './negocios.service';
 import { CreateNegocioDto } from './dto/create-negocio.dto';
 import { UpdateNegocioDto } from './dto/update-negocio.dto';
+import { RegistroPublicoDto } from './dto/registro-publico.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { RequierePermiso } from '../common/decorators/requiere-permiso.decorator';
@@ -21,6 +22,7 @@ import { ModuloPermiso } from '../common/enums/modulo-permiso.enum';
 import { AccionPermiso } from '../common/enums/accion-permiso.enum';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { JwtUserPayload } from '../common/decorators/current-user.decorator';
+import { Public } from '../common/decorators/public.decorator';
 
 @ApiTags('Negocios')
 @ApiBearerAuth('JWT-auth')
@@ -28,6 +30,13 @@ import type { JwtUserPayload } from '../common/decorators/current-user.decorator
 @Controller('negocios')
 export class NegociosController {
   constructor(private readonly negociosService: NegociosService) {}
+
+  @Public()
+  @Post('registro-publico')
+  @ApiOperation({ summary: 'Registro público de un negocio nuevo — sin autenticación previa' })
+  registroPublico(@Body() dto: RegistroPublicoDto) {
+    return this.negociosService.registroPublico(dto);
+  }
 
   @Post()
   @RequierePermiso(ModuloPermiso.NEGOCIOS, AccionPermiso.CREAR)

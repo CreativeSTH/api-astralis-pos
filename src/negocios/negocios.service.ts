@@ -6,12 +6,18 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
+import * as crypto from 'crypto';
 import { Negocio } from './entities/negocio.entity';
 import { Usuario } from '../usuarios/entities/usuario.entity';
 import { RolesService } from '../roles/roles.service';
 import { MetodosPagoService } from '../metodos-pago/metodos-pago.service';
+import { PaquetesService } from '../paquetes/paquetes.service';
+import { SuscripcionesService } from '../suscripciones/suscripciones.service';
+import { EmailService } from '../email/email.service';
+import { construirCorreoConfirmacion } from '../email/templates/confirmacion-registro.template';
 import { CreateNegocioDto } from './dto/create-negocio.dto';
 import { UpdateNegocioDto } from './dto/update-negocio.dto';
+import { RegistroPublicoDto } from './dto/registro-publico.dto';
 
 @Injectable()
 export class NegociosService {
@@ -23,6 +29,9 @@ export class NegociosService {
     private readonly dataSource: DataSource,
     private readonly rolesService: RolesService,
     private readonly metodosPagoService: MetodosPagoService,
+    private readonly paquetesService: PaquetesService,
+    private readonly suscripcionesService: SuscripcionesService,
+    private readonly emailService: EmailService,
   ) {}
 
   findAll(): Promise<Negocio[]> {
@@ -58,6 +67,8 @@ export class NegociosService {
       );
     }
 
+    const paqueteFree = await this.paquetesService.asegurarPaqueteFreePorDefecto();
+
     const negocio = await this.dataSource.transaction(async (manager) => {
       const negocio = manager.create(Negocio, {
         nombre: dto.nombre,
@@ -70,6 +81,8 @@ export class NegociosService {
       return manager.save(negocio);
     });
 
+    await this.suscripcionesService.crearSuscripcionSinVencimiento(negocio.id, paqueteFree.id);
+
     const { administrador } = await this.rolesService.asegurarRolesPorDefecto(
       negocio.id,
     );
@@ -81,10 +94,55 @@ export class NegociosService {
       email: dto.adminInicial.email,
       passwordHash,
       rolId: administrador.id,
+      // emailVerificado: true por default en la entidad — un negocio creado
+      // por SISTEMA no necesita el flujo de verificación.
     });
     await this.usuariosRepository.save(admin);
 
     return negocio;
+  }
+
+  async registroPublico(dto: RegistroPublicoDto): Promise<{ mensaje: string }> {
+    const emailExistente = await this.usuariosRepository.findOne({
+      where: { email: dto.adminEmail },
+    });
+    if (emailExistente) {
+      throw new ConflictException(`Ya existe un usuario con el email ${dto.adminEmail}`);
+    }
+
+    await this.paquetesService.findOne(dto.paqueteId); // valida que el paquete elegido exista
+
+    const negocio = await this.dataSource.transaction(async (manager) => {
+      const negocio = manager.create(Negocio, { nombre: dto.nombreNegocio });
+      return manager.save(negocio);
+    });
+
+    await this.suscripcionesService.crearSuscripcionPrueba(negocio.id, dto.paqueteId);
+
+    const { administrador } = await this.rolesService.asegurarRolesPorDefecto(negocio.id);
+    await this.metodosPagoService.asegurarMetodosPorDefecto(negocio.id);
+
+    const passwordHash = await bcrypt.hash(dto.adminPassword, 12);
+    const tokenVerificacion = crypto.randomBytes(32).toString('hex');
+    const tokenVerificacionExpira = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+    const admin = this.usuariosRepository.create({
+      negocioId: negocio.id,
+      nombre: dto.adminNombre,
+      email: dto.adminEmail,
+      passwordHash,
+      rolId: administrador.id,
+      emailVerificado: false,
+      tokenVerificacion,
+      tokenVerificacionExpira,
+    });
+    await this.usuariosRepository.save(admin);
+
+    const linkVerificacion = `${process.env.FRONTEND_URL}/verificar-email?token=${tokenVerificacion}`;
+    const { subject, html } = construirCorreoConfirmacion(dto.adminNombre, linkVerificacion);
+    await this.emailService.enviar({ to: dto.adminEmail, subject, html });
+
+    return { mensaje: 'Cuenta creada — revisá tu correo para confirmarla.' };
   }
 
   async update(id: string, dto: UpdateNegocioDto): Promise<Negocio> {
