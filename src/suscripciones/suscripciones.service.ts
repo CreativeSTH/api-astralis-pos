@@ -62,9 +62,9 @@ export class SuscripcionesService {
     );
   }
 
-  /** Fail-closed: sin Suscripcion, o VENCIDA, el negocio está bloqueado. */
   /**
-   * No confía únicamente en `estado === VENCIDA` — ese campo solo lo escribe
+   * Fail-closed: sin Suscripcion, o VENCIDA, el negocio está bloqueado. Tampoco confía
+   * únicamente en `estado === VENCIDA` — ese campo solo lo escribe
    * el cron (`marcarVencidas()`, corre cada hora). Si el scheduler no corre
    * por cualquier motivo, una PRUEBA/ACTIVA con `fechaFin` ya pasada seguiría
    * dando acceso indefinido sin esta segunda condición — el paywall completo
@@ -107,12 +107,21 @@ export class SuscripcionesService {
     // `iniciarReactivacion` genera su propia `referencia` (randomUUID), así que ni el índice
     // único de `referencia` ni la idempotencia de Wompi las deduplican. El fix de raíz sería un
     // índice único parcial `(negocio_id) WHERE estado='PENDIENTE'` a nivel de esquema.
-    const VENTANA_PENDIENTE_MS = 10 * 60 * 1000;
-    const pendiente = await this.transaccionesRepository.findOne({
-      where: { negocioId, estado: 'PENDIENTE' },
-      order: { createdAt: 'DESC' },
-    });
-    if (pendiente && pendiente.createdAt.getTime() > Date.now() - VENTANA_PENDIENTE_MS) {
+    // El chequeo compara contra el reloj de la PROPIA base de datos (`now()` en SQL), no contra
+    // `Date.now()` de Node — `created_at` es un `timestamp` SIN zona horaria (`@CreateDateColumn`
+    // sin `type: 'timestamptz'`, ver BaseEntity), así que `pg` lo parsea como hora LOCAL del
+    // proceso Node al traerlo a JS. En un servidor corriendo en `America/Bogota` (UTC-5) contra
+    // una DB en UTC, comparar ese `Date` contra `Date.now()` corre la ventana real a ~5h10m en vez
+    // de 10 minutos — bug real encontrado en la revisión final (medido en vivo: una transacción de
+    // 5h05m de antigüedad real todavía bloqueaba, una de 5h20m ya no). Todo el cálculo de "cuánto
+    // hace" se resuelve en SQL para no depender de en qué zona horaria corra el proceso de Node.
+    const pendiente = await this.transaccionesRepository
+      .createQueryBuilder('t')
+      .where('t.negocio_id = :negocioId', { negocioId })
+      .andWhere('t.estado = :estado', { estado: 'PENDIENTE' })
+      .andWhere("t.created_at > now() - interval '10 minutes'")
+      .getOne();
+    if (pendiente) {
       throw new BadRequestException(
         'Ya hay un pago de reactivación en curso — esperá a que se confirme antes de intentar de nuevo',
       );
