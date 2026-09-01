@@ -6,9 +6,13 @@ import { Suscripcion } from './entities/suscripcion.entity';
 import { EstadoSuscripcion } from './entities/estado-suscripcion.enum';
 import { TransaccionSuscripcion } from './entities/transaccion-suscripcion.entity';
 import { MedioPagoGuardado } from './entities/medio-pago-guardado.entity';
+import { Negocio } from '../negocios/entities/negocio.entity';
+import { Usuario } from '../usuarios/entities/usuario.entity';
+import { Alerta } from '../alertas/entities/alerta.entity';
 import { WompiClientService } from '../pagos/wompi-client.service';
 import { PaquetesService } from '../paquetes/paquetes.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
+import { EmailService } from '../email/email.service';
 
 describe('SuscripcionesService — creación y estaBloqueado', () => {
   let service: SuscripcionesService;
@@ -26,6 +30,10 @@ describe('SuscripcionesService — creación y estaBloqueado', () => {
         { provide: WompiClientService, useValue: {} },
         { provide: PaquetesService, useValue: {} },
         { provide: RealtimeGateway, useValue: { emitToNegocio: jest.fn() } },
+        { provide: getRepositoryToken(Negocio), useValue: {} },
+        { provide: getRepositoryToken(Usuario), useValue: {} },
+        { provide: getRepositoryToken(Alerta), useValue: {} },
+        { provide: EmailService, useValue: { enviar: jest.fn() } },
       ],
     }).compile();
 
@@ -111,6 +119,10 @@ describe('SuscripcionesService — iniciarReactivacion con guardarTarjeta', () =
         { provide: WompiClientService, useValue: wompiClient },
         { provide: PaquetesService, useValue: paquetesService },
         { provide: RealtimeGateway, useValue: { emitToNegocio: jest.fn() } },
+        { provide: getRepositoryToken(Negocio), useValue: {} },
+        { provide: getRepositoryToken(Usuario), useValue: {} },
+        { provide: getRepositoryToken(Alerta), useValue: {} },
+        { provide: EmailService, useValue: { enviar: jest.fn() } },
       ],
     }).compile();
 
@@ -163,6 +175,10 @@ describe('SuscripcionesService — cobrarAutomatico', () => {
         { provide: WompiClientService, useValue: wompiClient },
         { provide: PaquetesService, useValue: paquetesService },
         { provide: RealtimeGateway, useValue: { emitToNegocio: jest.fn() } },
+        { provide: getRepositoryToken(Negocio), useValue: {} },
+        { provide: getRepositoryToken(Usuario), useValue: {} },
+        { provide: getRepositoryToken(Alerta), useValue: {} },
+        { provide: EmailService, useValue: { enviar: jest.fn() } },
       ],
     }).compile();
 
@@ -316,6 +332,10 @@ describe('SuscripcionesService — marcarVencidas', () => {
         { provide: WompiClientService, useValue: {} },
         { provide: PaquetesService, useValue: {} },
         { provide: RealtimeGateway, useValue: { emitToNegocio: jest.fn() } },
+        { provide: getRepositoryToken(Negocio), useValue: {} },
+        { provide: getRepositoryToken(Usuario), useValue: {} },
+        { provide: getRepositoryToken(Alerta), useValue: {} },
+        { provide: EmailService, useValue: { enviar: jest.fn() } },
       ],
     }).compile();
 
@@ -348,6 +368,10 @@ describe('SuscripcionesService — marcarVencidas', () => {
         { provide: WompiClientService, useValue: {} },
         { provide: PaquetesService, useValue: {} },
         { provide: RealtimeGateway, useValue: { emitToNegocio: jest.fn() } },
+        { provide: getRepositoryToken(Negocio), useValue: {} },
+        { provide: getRepositoryToken(Usuario), useValue: {} },
+        { provide: getRepositoryToken(Alerta), useValue: {} },
+        { provide: EmailService, useValue: { enviar: jest.fn() } },
       ],
     }).compile();
 
@@ -400,6 +424,10 @@ describe('SuscripcionesService — procesarWebhookWompi cuenta el fallo de un co
         { provide: WompiClientService, useValue: {} },
         { provide: PaquetesService, useValue: {} },
         { provide: RealtimeGateway, useValue: { emitToNegocio: jest.fn() } },
+        { provide: getRepositoryToken(Negocio), useValue: {} },
+        { provide: getRepositoryToken(Usuario), useValue: {} },
+        { provide: getRepositoryToken(Alerta), useValue: {} },
+        { provide: EmailService, useValue: { enviar: jest.fn() } },
       ],
     }).compile();
 
@@ -426,6 +454,10 @@ describe('SuscripcionesService — procesarWebhookWompi cuenta el fallo de un co
         { provide: WompiClientService, useValue: {} },
         { provide: PaquetesService, useValue: {} },
         { provide: RealtimeGateway, useValue: { emitToNegocio: jest.fn() } },
+        { provide: getRepositoryToken(Negocio), useValue: {} },
+        { provide: getRepositoryToken(Usuario), useValue: {} },
+        { provide: getRepositoryToken(Alerta), useValue: {} },
+        { provide: EmailService, useValue: { enviar: jest.fn() } },
       ],
     }).compile();
 
@@ -460,6 +492,10 @@ describe('SuscripcionesService — reconciliarPendientes cuenta el fallo de un c
         { provide: WompiClientService, useValue: wompiClient },
         { provide: PaquetesService, useValue: {} },
         { provide: RealtimeGateway, useValue: { emitToNegocio: jest.fn() } },
+        { provide: getRepositoryToken(Negocio), useValue: {} },
+        { provide: getRepositoryToken(Usuario), useValue: {} },
+        { provide: getRepositoryToken(Alerta), useValue: {} },
+        { provide: EmailService, useValue: { enviar: jest.fn() } },
       ],
     }).compile();
 
@@ -467,5 +503,121 @@ describe('SuscripcionesService — reconciliarPendientes cuenta el fallo de un c
     await service.reconciliarPendientes();
 
     expect(suscripcion.intentosFallidosCobro).toBe(1);
+  });
+});
+
+describe('SuscripcionesService — enviarRecordatorios', () => {
+  const enDias = (n: number) => new Date(Date.now() + n * 86400000);
+
+  let service: SuscripcionesService;
+  let suscripcionesRepo: { find: jest.Mock; save: jest.Mock };
+  let negociosRepo: { findOne: jest.Mock };
+  let usuariosRepo: { findOne: jest.Mock };
+  let medioPagoRepo: { findOne: jest.Mock };
+  let alertasRepo: { findOne: jest.Mock; create: jest.Mock; save: jest.Mock };
+  let emailService: { enviar: jest.Mock };
+  let paquetesService: { findOne: jest.Mock };
+
+  beforeEach(async () => {
+    suscripcionesRepo = { find: jest.fn(), save: jest.fn(async (x: unknown) => x) };
+    negociosRepo = { findOne: jest.fn().mockResolvedValue({ id: 'neg-1' }) };
+    usuariosRepo = { findOne: jest.fn().mockResolvedValue({ email: 'admin@negocio.com' }) };
+    medioPagoRepo = { findOne: jest.fn().mockResolvedValue(null) };
+    alertasRepo = { findOne: jest.fn().mockResolvedValue(null), create: jest.fn((x: unknown) => x), save: jest.fn(async (x: unknown) => x) };
+    emailService = { enviar: jest.fn() };
+    paquetesService = { findOne: jest.fn().mockResolvedValue({ id: 'pro-1', nombre: 'Profesional', precioMensual: 139900 }) };
+
+    const moduleRef = await Test.createTestingModule({
+      providers: [
+        SuscripcionesService,
+        { provide: getRepositoryToken(Suscripcion), useValue: suscripcionesRepo },
+        { provide: getRepositoryToken(TransaccionSuscripcion), useValue: {} },
+        { provide: getRepositoryToken(MedioPagoGuardado), useValue: medioPagoRepo },
+        { provide: getRepositoryToken(Negocio), useValue: negociosRepo },
+        { provide: getRepositoryToken(Usuario), useValue: usuariosRepo },
+        { provide: getRepositoryToken(Alerta), useValue: alertasRepo },
+        { provide: WompiClientService, useValue: {} },
+        { provide: PaquetesService, useValue: paquetesService },
+        { provide: RealtimeGateway, useValue: { emitToNegocio: jest.fn() } },
+        { provide: EmailService, useValue: emailService },
+      ],
+    }).compile();
+
+    service = moduleRef.get(SuscripcionesService);
+  });
+
+  it('envía el recordatorio de día -2 y lo marca en recordatoriosEnviados', async () => {
+    const suscripcion = {
+      id: 'sus-1', negocioId: 'neg-1', paqueteId: 'pro-1',
+      estado: 'ACTIVA', fechaFin: enDias(2), recordatoriosEnviados: [],
+    };
+    suscripcionesRepo.find.mockResolvedValue([suscripcion]);
+
+    await service.enviarRecordatorios();
+
+    expect(emailService.enviar).toHaveBeenCalledWith(expect.objectContaining({ to: 'admin@negocio.com' }));
+    const guardado = suscripcionesRepo.save.mock.calls.at(-1)![0];
+    expect(guardado.recordatoriosEnviados).toContain('DIA_-2');
+  });
+
+  it('no reenvía un recordatorio ya marcado', async () => {
+    const suscripcion = {
+      id: 'sus-1', negocioId: 'neg-1', paqueteId: 'pro-1',
+      estado: 'ACTIVA', fechaFin: enDias(2), recordatoriosEnviados: ['DIA_-2'],
+    };
+    suscripcionesRepo.find.mockResolvedValue([suscripcion]);
+
+    await service.enviarRecordatorios();
+
+    expect(emailService.enviar).not.toHaveBeenCalled();
+    expect(suscripcionesRepo.save).not.toHaveBeenCalled();
+  });
+
+  it('envía el recordatorio de día 0 con tono de auto-débito cuando hay MedioPagoGuardado activo', async () => {
+    const suscripcion = {
+      id: 'sus-1', negocioId: 'neg-1', paqueteId: 'pro-1',
+      estado: 'ACTIVA', fechaFin: enDias(0), recordatoriosEnviados: [],
+    };
+    suscripcionesRepo.find.mockResolvedValue([suscripcion]);
+    medioPagoRepo.findOne.mockResolvedValue({ negocioId: 'neg-1', ultimosCuatroDigitos: '4242', activo: true });
+
+    await service.enviarRecordatorios();
+
+    expect(emailService.enviar).toHaveBeenCalledWith(
+      expect.objectContaining({ subject: expect.stringContaining('Hoy te cobramos') }),
+    );
+    const guardado = suscripcionesRepo.save.mock.calls.at(-1)![0];
+    expect(guardado.recordatoriosEnviados).toContain('DIA_0');
+  });
+
+  it('no manda nada si fechaFin no está a 2, 1 o 0 días', async () => {
+    const suscripcion = {
+      id: 'sus-1', negocioId: 'neg-1', paqueteId: 'pro-1',
+      estado: 'ACTIVA', fechaFin: enDias(5), recordatoriosEnviados: [],
+    };
+    suscripcionesRepo.find.mockResolvedValue([suscripcion]);
+
+    await service.enviarRecordatorios();
+
+    expect(emailService.enviar).not.toHaveBeenCalled();
+  });
+
+  it('un error en un negocio no corta la corrida de recordatorios para el resto', async () => {
+    const suscripcionConError = {
+      id: 'sus-1', negocioId: 'neg-error', paqueteId: 'pro-1',
+      estado: 'ACTIVA', fechaFin: enDias(2), recordatoriosEnviados: [],
+    };
+    const suscripcionSiguiente = {
+      id: 'sus-2', negocioId: 'neg-2', paqueteId: 'pro-1',
+      estado: 'ACTIVA', fechaFin: enDias(2), recordatoriosEnviados: [],
+    };
+    suscripcionesRepo.find.mockResolvedValue([suscripcionConError, suscripcionSiguiente]);
+    paquetesService.findOne
+      .mockRejectedValueOnce(new Error('Paquete borrado'))
+      .mockResolvedValueOnce({ id: 'pro-1', nombre: 'Profesional', precioMensual: 139900 });
+
+    await service.enviarRecordatorios();
+
+    expect(emailService.enviar).toHaveBeenCalledTimes(1);
   });
 });
