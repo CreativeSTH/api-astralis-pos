@@ -4,29 +4,50 @@ import { FacturacionElectronicaService } from './facturacion-electronica.service
 import { HabilitacionFacturacionElectronica } from './entities/habilitacion-facturacion-electronica.entity';
 import { DocumentoElectronico } from './entities/documento-electronico.entity';
 import { EstadoHabilitacion } from './entities/estado-habilitacion.enum';
+import { EstadoDocumentoElectronico } from './entities/estado-documento-electronico.enum';
 import { AlegraClientService } from './alegra-client.service';
 import { Negocio } from '../negocios/entities/negocio.entity';
 import { SuscripcionesService } from '../suscripciones/suscripciones.service';
 
+type AlegraClientMock = {
+  crearCompania: jest.Mock;
+  crearTestSet: jest.Mock;
+  crearDocumentoEquivalentePos: jest.Mock;
+  crearFactura: jest.Mock;
+  crearNotaAjuste: jest.Mock;
+  consultarDocumento: jest.Mock;
+};
+
 describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
   let service: FacturacionElectronicaService;
   let habilitacionRepo: { findOne: jest.Mock; create: jest.Mock; save: jest.Mock };
+  let documentosRepo: { findOne: jest.Mock; create: jest.Mock; save: jest.Mock };
   let negociosRepo: { findOneOrFail: jest.Mock };
-  let alegraClient: { crearCompania: jest.Mock };
+  let alegraClient: AlegraClientMock;
+  let suscripcionesService: { registrarConsumo: jest.Mock };
 
   beforeEach(async () => {
     habilitacionRepo = { findOne: jest.fn(), create: jest.fn((x) => x), save: jest.fn(async (x) => x) };
+    documentosRepo = { findOne: jest.fn(), create: jest.fn((x) => x), save: jest.fn(async (x) => x) };
     negociosRepo = { findOneOrFail: jest.fn().mockResolvedValue({ nit: '900123456' }) };
-    alegraClient = { crearCompania: jest.fn() };
+    alegraClient = {
+      crearCompania: jest.fn(),
+      crearTestSet: jest.fn(),
+      crearDocumentoEquivalentePos: jest.fn(),
+      crearFactura: jest.fn(),
+      crearNotaAjuste: jest.fn(),
+      consultarDocumento: jest.fn(),
+    };
+    suscripcionesService = { registrarConsumo: jest.fn() };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
         FacturacionElectronicaService,
         { provide: getRepositoryToken(HabilitacionFacturacionElectronica), useValue: habilitacionRepo },
-        { provide: getRepositoryToken(DocumentoElectronico), useValue: {} },
+        { provide: getRepositoryToken(DocumentoElectronico), useValue: documentosRepo },
         { provide: getRepositoryToken(Negocio), useValue: negociosRepo },
         { provide: AlegraClientService, useValue: alegraClient },
-        { provide: SuscripcionesService, useValue: { registrarConsumo: jest.fn() } },
+        { provide: SuscripcionesService, useValue: suscripcionesService },
       ],
     }).compile();
 
@@ -86,5 +107,120 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
         technicalKey: 'k',
       }),
     ).rejects.toThrow();
+  });
+
+  describe('confirmarTestSet', () => {
+    it('emite 2 DEE-POS + 1 nota de ajuste de prueba y pasa a HABILITADO', async () => {
+      habilitacionRepo.findOne.mockResolvedValue({
+        negocioId: 'neg-1',
+        estado: EstadoHabilitacion.RESOLUCION_CARGADA,
+        alegraCompanyId: 'company-1',
+        resolucionRangoDesde: 1,
+        siguienteNumero: 1,
+        ambiente: 'SANDBOX',
+      });
+      alegraClient.crearTestSet.mockResolvedValue({ testSetId: 'testset-1' });
+      alegraClient.crearDocumentoEquivalentePos.mockResolvedValue({ alegraDocumentId: 'doc-1', status: 'REGISTERED' });
+      alegraClient.crearNotaAjuste.mockResolvedValue({ alegraDocumentId: 'nota-1', status: 'REGISTERED' });
+
+      const resultado = await service.confirmarTestSet('neg-1');
+
+      expect(alegraClient.crearDocumentoEquivalentePos).toHaveBeenCalledTimes(2);
+      expect(alegraClient.crearNotaAjuste).toHaveBeenCalledTimes(1);
+      expect(resultado.estado).toBe(EstadoHabilitacion.HABILITADO);
+      expect(resultado.ambiente).toBe('PRODUCCION');
+    });
+
+    it('deja el estado en ERROR con el mensaje si Alegra rechaza el testset', async () => {
+      habilitacionRepo.findOne.mockResolvedValue({
+        negocioId: 'neg-1',
+        estado: EstadoHabilitacion.RESOLUCION_CARGADA,
+        alegraCompanyId: 'company-1',
+        resolucionRangoDesde: 1,
+        siguienteNumero: 1,
+        ambiente: 'SANDBOX',
+      });
+      alegraClient.crearTestSet.mockRejectedValue(new Error('testset rechazado'));
+
+      const resultado = await service.confirmarTestSet('neg-1');
+
+      expect(resultado.estado).toBe(EstadoHabilitacion.ERROR);
+      expect(resultado.errorMensaje).toBe('testset rechazado');
+    });
+  });
+
+  describe('emitirDocumento — fail-closed', () => {
+    it('no crea DocumentoElectronico si el negocio no está HABILITADO', async () => {
+      habilitacionRepo.findOne.mockResolvedValue({ negocioId: 'neg-1', estado: EstadoHabilitacion.RESOLUCION_CARGADA });
+
+      await service.emitirDocumento({ id: 'venta-1', negocioId: 'neg-1', tipoComprobanteEmitido: 'RECIBO' } as any);
+
+      expect(documentosRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('crea el documento en PENDIENTE y llama a intentarEmitir si el negocio está HABILITADO', async () => {
+      habilitacionRepo.findOne.mockResolvedValue({
+        negocioId: 'neg-1',
+        estado: EstadoHabilitacion.HABILITADO,
+        alegraCompanyId: 'company-1',
+        siguienteNumero: 5,
+        ambiente: 'PRODUCCION',
+      });
+      alegraClient.crearDocumentoEquivalentePos.mockResolvedValue({
+        alegraDocumentId: 'doc-9',
+        cude: 'cude-9',
+        status: 'REGISTERED',
+        legalStatus: 'ACCEPTED',
+      });
+
+      await service.emitirDocumento({ id: 'venta-1', negocioId: 'neg-1', tipoComprobanteEmitido: 'RECIBO' } as any);
+
+      expect(documentosRepo.save).toHaveBeenCalled();
+      const documentoGuardado = documentosRepo.save.mock.calls.at(-1)![0];
+      expect(documentoGuardado.estado).toBe(EstadoDocumentoElectronico.ACEPTADO);
+      expect(documentoGuardado.cude).toBe('cude-9');
+      expect(suscripcionesService.registrarConsumo).toHaveBeenCalledWith('neg-1', 'documentosDianPorMes');
+    });
+  });
+
+  describe('intentarEmitir — numeración correlativa real', () => {
+    it('usa habilitacion.siguienteNumero (no documento.intentos) y lo avanza tras un envío exitoso', async () => {
+      const documento = {
+        id: 'doc-x', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'DEE_POS' as const,
+        estado: EstadoDocumentoElectronico.PENDIENTE, intentos: 7, // deliberadamente distinto de siguienteNumero
+      };
+      const habilitacion = {
+        negocioId: 'neg-1', estado: EstadoHabilitacion.HABILITADO, alegraCompanyId: 'company-1',
+        siguienteNumero: 42, ambiente: 'PRODUCCION' as const,
+      };
+      alegraClient.crearDocumentoEquivalentePos.mockResolvedValue({
+        alegraDocumentId: 'doc-42', status: 'REGISTERED', legalStatus: 'ACCEPTED',
+      });
+
+      await service.intentarEmitir(documento as any, habilitacion as any);
+
+      expect(alegraClient.crearDocumentoEquivalentePos).toHaveBeenCalledWith(
+        expect.objectContaining({ number: 42 }),
+      );
+      expect(habilitacion.siguienteNumero).toBe(43);
+      expect(habilitacionRepo.save).toHaveBeenCalledWith(expect.objectContaining({ siguienteNumero: 43 }));
+    });
+
+    it('no avanza siguienteNumero si la llamada a Alegra falla (no se consumió el número)', async () => {
+      const documento = {
+        id: 'doc-x', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'DEE_POS' as const,
+        estado: EstadoDocumentoElectronico.PENDIENTE, intentos: 0,
+      };
+      const habilitacion = {
+        negocioId: 'neg-1', estado: EstadoHabilitacion.HABILITADO, alegraCompanyId: 'company-1',
+        siguienteNumero: 10, ambiente: 'PRODUCCION' as const,
+      };
+      alegraClient.crearDocumentoEquivalentePos.mockRejectedValue(new Error('timeout'));
+
+      await service.intentarEmitir(documento as any, habilitacion as any);
+
+      expect(habilitacion.siguienteNumero).toBe(10);
+      expect(habilitacionRepo.save).not.toHaveBeenCalled();
+    });
   });
 });
