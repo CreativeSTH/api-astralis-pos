@@ -175,8 +175,8 @@ describe('SuscripcionesService — cobrarAutomatico', () => {
         { provide: WompiClientService, useValue: wompiClient },
         { provide: PaquetesService, useValue: paquetesService },
         { provide: RealtimeGateway, useValue: { emitToNegocio: jest.fn() } },
-        { provide: getRepositoryToken(Negocio), useValue: {} },
-        { provide: getRepositoryToken(Usuario), useValue: {} },
+        { provide: getRepositoryToken(Negocio), useValue: { findOne: jest.fn().mockResolvedValue(null) } },
+        { provide: getRepositoryToken(Usuario), useValue: { findOne: jest.fn().mockResolvedValue(null) } },
         { provide: getRepositoryToken(Alerta), useValue: {} },
         { provide: EmailService, useValue: { enviar: jest.fn() } },
       ],
@@ -311,6 +311,108 @@ describe('SuscripcionesService — cobrarAutomatico', () => {
   });
 });
 
+describe('SuscripcionesService — aviso de cobro fallido', () => {
+  async function crearServicio(overrides: { alertaExistente?: unknown } = {}) {
+    const suscripcionesRepo = { find: jest.fn(), findOne: jest.fn(), save: jest.fn(async (x: unknown) => x) };
+    const medioPagoRepo = { findOne: jest.fn() };
+    const wompiClient = { crearTransaccionConFuente: jest.fn() };
+    const sinIntentoHoyQueryBuilder = {
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(null),
+    };
+    const paquetesService = { findOne: jest.fn().mockResolvedValue({ id: 'pro-1', precioMensual: 139900, nombre: 'Profesional' }) };
+    const negociosRepo = { findOne: jest.fn().mockResolvedValue({ id: 'neg-1' }) };
+    const usuariosRepo = { findOne: jest.fn().mockResolvedValue({ email: 'admin@negocio.com' }) };
+    const alertasRepo = {
+      findOne: jest.fn().mockResolvedValue(overrides.alertaExistente ?? null),
+      create: jest.fn((x: unknown) => x),
+      save: jest.fn(async (x: unknown) => x),
+    };
+    const emailService = { enviar: jest.fn() };
+
+    const moduleRef = await Test.createTestingModule({
+      providers: [
+        SuscripcionesService,
+        { provide: getRepositoryToken(Suscripcion), useValue: suscripcionesRepo },
+        {
+          provide: getRepositoryToken(TransaccionSuscripcion),
+          useValue: {
+            save: jest.fn(async (x: unknown) => x),
+            create: jest.fn((x: unknown) => x),
+            createQueryBuilder: jest.fn(() => sinIntentoHoyQueryBuilder),
+          },
+        },
+        { provide: getRepositoryToken(MedioPagoGuardado), useValue: medioPagoRepo },
+        { provide: WompiClientService, useValue: wompiClient },
+        { provide: PaquetesService, useValue: paquetesService },
+        { provide: RealtimeGateway, useValue: { emitToNegocio: jest.fn() } },
+        { provide: getRepositoryToken(Negocio), useValue: negociosRepo },
+        { provide: getRepositoryToken(Usuario), useValue: usuariosRepo },
+        { provide: getRepositoryToken(Alerta), useValue: alertasRepo },
+        { provide: EmailService, useValue: emailService },
+      ],
+    }).compile();
+
+    return { service: moduleRef.get(SuscripcionesService), suscripcionesRepo, medioPagoRepo, wompiClient, emailService, alertasRepo };
+  }
+
+  it('avisa por correo y alerta en cada fallo, con tono distinto en el 3er intento', async () => {
+    const { service, suscripcionesRepo, medioPagoRepo, wompiClient, emailService } = await crearServicio();
+    const suscripcion = {
+      id: 'sus-1', negocioId: 'neg-1', paqueteId: 'pro-1',
+      estado: 'ACTIVA', fechaFin: new Date(Date.now() - 86400000), intentosFallidosCobro: 2,
+    };
+    suscripcionesRepo.find.mockResolvedValue([suscripcion]);
+    suscripcionesRepo.findOne.mockResolvedValue(suscripcion);
+    medioPagoRepo.findOne.mockResolvedValue({ negocioId: 'neg-1', wompiPaymentSourceId: 3891, activo: true });
+    wompiClient.crearTransaccionConFuente.mockResolvedValue({ wompiTransactionId: 'txn-x', status: 'DECLINED' });
+
+    await service.cobrarAutomatico();
+
+    expect(emailService.enviar).toHaveBeenCalledWith(
+      expect.objectContaining({ subject: expect.stringContaining('bloqueada') }),
+    );
+  });
+
+  it('en el primer/segundo fallo el correo tiene tono de reintento, no de bloqueo', async () => {
+    const { service, suscripcionesRepo, medioPagoRepo, wompiClient, emailService } = await crearServicio();
+    const suscripcion = {
+      id: 'sus-1', negocioId: 'neg-1', paqueteId: 'pro-1',
+      estado: 'ACTIVA', fechaFin: new Date(Date.now() - 86400000), intentosFallidosCobro: 0,
+    };
+    suscripcionesRepo.find.mockResolvedValue([suscripcion]);
+    suscripcionesRepo.findOne.mockResolvedValue(suscripcion);
+    medioPagoRepo.findOne.mockResolvedValue({ negocioId: 'neg-1', wompiPaymentSourceId: 3891, activo: true });
+    wompiClient.crearTransaccionConFuente.mockResolvedValue({ wompiTransactionId: 'txn-x', status: 'DECLINED' });
+
+    await service.cobrarAutomatico();
+
+    expect(emailService.enviar).toHaveBeenCalledWith(
+      expect.objectContaining({ subject: 'No pudimos cobrar tu tarjeta' }),
+    );
+  });
+
+  it('no duplica la alerta si ya existe una activa del mismo tipo+referencia', async () => {
+    const { service, suscripcionesRepo, medioPagoRepo, wompiClient, alertasRepo } = await crearServicio({
+      alertaExistente: { id: 'alerta-1', negocioId: 'neg-1', tipo: 'SUSCRIPCION_COBRO_FALLIDO', referenciaId: 'sus-1', resuelta: false },
+    });
+    const suscripcion = {
+      id: 'sus-1', negocioId: 'neg-1', paqueteId: 'pro-1',
+      estado: 'ACTIVA', fechaFin: new Date(Date.now() - 86400000), intentosFallidosCobro: 0,
+    };
+    suscripcionesRepo.find.mockResolvedValue([suscripcion]);
+    suscripcionesRepo.findOne.mockResolvedValue(suscripcion);
+    medioPagoRepo.findOne.mockResolvedValue({ negocioId: 'neg-1', wompiPaymentSourceId: 3891, activo: true });
+    wompiClient.crearTransaccionConFuente.mockResolvedValue({ wompiTransactionId: 'txn-x', status: 'DECLINED' });
+
+    await service.cobrarAutomatico();
+
+    expect(alertasRepo.create).not.toHaveBeenCalled();
+    expect(alertasRepo.save).toHaveBeenCalledWith(expect.objectContaining({ id: 'alerta-1' }));
+  });
+});
+
 describe('SuscripcionesService — marcarVencidas', () => {
   it('excluye de la actualización a los negocios con medio de pago activo', async () => {
     const queryBuilder = {
@@ -424,8 +526,8 @@ describe('SuscripcionesService — procesarWebhookWompi cuenta el fallo de un co
         { provide: WompiClientService, useValue: {} },
         { provide: PaquetesService, useValue: {} },
         { provide: RealtimeGateway, useValue: { emitToNegocio: jest.fn() } },
-        { provide: getRepositoryToken(Negocio), useValue: {} },
-        { provide: getRepositoryToken(Usuario), useValue: {} },
+        { provide: getRepositoryToken(Negocio), useValue: { findOne: jest.fn().mockResolvedValue(null) } },
+        { provide: getRepositoryToken(Usuario), useValue: { findOne: jest.fn().mockResolvedValue(null) } },
         { provide: getRepositoryToken(Alerta), useValue: {} },
         { provide: EmailService, useValue: { enviar: jest.fn() } },
       ],
@@ -492,8 +594,8 @@ describe('SuscripcionesService — reconciliarPendientes cuenta el fallo de un c
         { provide: WompiClientService, useValue: wompiClient },
         { provide: PaquetesService, useValue: {} },
         { provide: RealtimeGateway, useValue: { emitToNegocio: jest.fn() } },
-        { provide: getRepositoryToken(Negocio), useValue: {} },
-        { provide: getRepositoryToken(Usuario), useValue: {} },
+        { provide: getRepositoryToken(Negocio), useValue: { findOne: jest.fn().mockResolvedValue(null) } },
+        { provide: getRepositoryToken(Usuario), useValue: { findOne: jest.fn().mockResolvedValue(null) } },
         { provide: getRepositoryToken(Alerta), useValue: {} },
         { provide: EmailService, useValue: { enviar: jest.fn() } },
       ],

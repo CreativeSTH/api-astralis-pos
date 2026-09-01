@@ -17,6 +17,7 @@ import { EmailService } from '../email/email.service';
 import { ReactivarSuscripcionDto } from './dto/reactivar-suscripcion.dto';
 import { construirCorreoRecordatorioProximo } from '../email/templates/recordatorio-proximo-cobro.template';
 import { construirCorreoRecordatorioDia0 } from '../email/templates/recordatorio-dia-cobro.template';
+import { construirCorreoCobroFallido } from '../email/templates/cobro-fallido.template';
 
 const DIAS_PRUEBA = 20;
 
@@ -572,6 +573,14 @@ export class SuscripcionesService {
     }
   }
 
+  /**
+   * Único punto donde se cuenta un fallo real de `cobrarAutomatico()` — llamado tanto por el
+   * DECLINED síncrono (raro) como por el webhook y `reconciliarPendientes()` cuando confirman
+   * DECLINED de forma asíncrona (el caso real y común, confirmado en vivo contra el sandbox de
+   * Wompi: un cobro con `payment_source_id` casi siempre responde PENDING primero). El aviso de
+   * "cobro fallido" vive acá, no repartido en cada call site, para no perderlo en el camino
+   * asíncrono que en la práctica es el que más ocurre.
+   */
   private async registrarIntentoFallido(negocioId: string): Promise<void> {
     const actual = await this.suscripcionesRepository.findOne({ where: { negocioId } });
     if (!actual) return;
@@ -580,6 +589,28 @@ export class SuscripcionesService {
       actual.estado = EstadoSuscripcion.VENCIDA;
     }
     await this.suscripcionesRepository.save(actual);
+
+    const negocio = await this.negociosRepository.findOne({ where: { id: negocioId } });
+    const admin = await this.usuariosRepository.findOne({
+      where: { negocioId, activo: true },
+      order: { createdAt: 'ASC' },
+    });
+    if (!negocio || !admin) return;
+
+    const paquete = await this.paquetesService.findOne(actual.paqueteId);
+    const { subject, html } = construirCorreoCobroFallido(
+      paquete.nombre,
+      actual.intentosFallidosCobro,
+      `${process.env.FRONTEND_URL}/suscripcion-vencida`,
+    );
+    await this.emailService.enviar({ to: admin.email, subject, html });
+    await this.crearOActualizarAlerta(
+      negocioId,
+      actual.id,
+      TipoAlerta.SUSCRIPCION_COBRO_FALLIDO,
+      actual.intentosFallidosCobro >= 3 ? SeveridadAlerta.CRITICA : SeveridadAlerta.ALTA,
+      subject,
+    );
   }
 
   /** Corrida diaria a la 1am (antes del cobro automático de las 2am): correo + alerta in-app en día -2/-1/0, sin duplicar por ciclo. */
