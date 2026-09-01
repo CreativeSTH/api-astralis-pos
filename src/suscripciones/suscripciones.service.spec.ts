@@ -757,3 +757,88 @@ describe('SuscripcionesService — enviarRecordatorios', () => {
     expect(emailService.enviar).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('SuscripcionesService — gating por feature y cupo/consumo', () => {
+  let service: SuscripcionesService;
+  let suscripcionesRepo: { findOne: jest.Mock; findOneOrFail: jest.Mock; save: jest.Mock };
+  let paquetesService: { findOne: jest.Mock };
+
+  beforeEach(async () => {
+    suscripcionesRepo = { findOne: jest.fn(), findOneOrFail: jest.fn(), save: jest.fn(async (x) => x) };
+    paquetesService = {
+      findOne: jest.fn().mockResolvedValue({
+        id: 'pro-1',
+        nombre: 'Profesional',
+        facturacionDianHabilitada: true,
+        documentosDianPorMes: 12000,
+      }),
+    };
+
+    const moduleRef = await Test.createTestingModule({
+      providers: [
+        SuscripcionesService,
+        { provide: getRepositoryToken(Suscripcion), useValue: suscripcionesRepo },
+        { provide: getRepositoryToken(TransaccionSuscripcion), useValue: {} },
+        { provide: getRepositoryToken(MedioPagoGuardado), useValue: {} },
+        { provide: WompiClientService, useValue: {} },
+        { provide: PaquetesService, useValue: paquetesService },
+        { provide: RealtimeGateway, useValue: { emitToNegocio: jest.fn() } },
+        { provide: getRepositoryToken(Negocio), useValue: {} },
+        { provide: getRepositoryToken(Usuario), useValue: {} },
+        { provide: getRepositoryToken(Alerta), useValue: {} },
+        { provide: EmailService, useValue: { enviar: jest.fn() } },
+      ],
+    }).compile();
+
+    service = moduleRef.get(SuscripcionesService);
+  });
+
+  it('tieneFeature true cuando el paquete tiene la feature booleana activa', async () => {
+    suscripcionesRepo.findOneOrFail.mockResolvedValue({ negocioId: 'neg-1', paqueteId: 'pro-1' });
+    await expect(service.tieneFeature('neg-1', 'facturacionDianHabilitada')).resolves.toBe(true);
+  });
+
+  it('tieneFeature false cuando el paquete no la tiene', async () => {
+    paquetesService.findOne.mockResolvedValue({ id: 'free-1', facturacionDianHabilitada: false });
+    suscripcionesRepo.findOneOrFail.mockResolvedValue({ negocioId: 'neg-1', paqueteId: 'free-1' });
+    await expect(service.tieneFeature('neg-1', 'facturacionDianHabilitada')).resolves.toBe(false);
+  });
+
+  it('obtenerCupoYConsumo devuelve consumo 0 si el mes de referencia no es el actual', async () => {
+    suscripcionesRepo.findOneOrFail.mockResolvedValue({
+      negocioId: 'neg-1',
+      paqueteId: 'pro-1',
+      consumoMensual: { documentosDianPorMes: 999 },
+      consumoMesReferencia: '2020-01',
+    });
+    const resultado = await service.obtenerCupoYConsumo('neg-1', 'documentosDianPorMes');
+    expect(resultado).toEqual({ cupo: 12000, consumo: 0 });
+  });
+
+  it('registrarConsumo incrementa el contador del mes actual', async () => {
+    const mesActual = `${new Date().getUTCFullYear()}-${String(new Date().getUTCMonth() + 1).padStart(2, '0')}`;
+    suscripcionesRepo.findOneOrFail.mockResolvedValue({
+      negocioId: 'neg-1',
+      consumoMensual: { documentosDianPorMes: 3 },
+      consumoMesReferencia: mesActual,
+    });
+
+    await service.registrarConsumo('neg-1', 'documentosDianPorMes');
+
+    const guardado = suscripcionesRepo.save.mock.calls[0][0];
+    expect(guardado.consumoMensual.documentosDianPorMes).toBe(4);
+  });
+
+  it('registrarConsumo resetea el contador si el mes de referencia cambió', async () => {
+    suscripcionesRepo.findOneOrFail.mockResolvedValue({
+      negocioId: 'neg-1',
+      consumoMensual: { documentosDianPorMes: 999 },
+      consumoMesReferencia: '2020-01',
+    });
+
+    await service.registrarConsumo('neg-1', 'documentosDianPorMes');
+
+    const guardado = suscripcionesRepo.save.mock.calls[0][0];
+    expect(guardado.consumoMensual.documentosDianPorMes).toBe(1);
+  });
+});

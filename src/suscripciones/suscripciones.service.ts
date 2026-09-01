@@ -12,6 +12,7 @@ import { Alerta } from '../alertas/entities/alerta.entity';
 import { TipoAlerta, SeveridadAlerta } from '../common/enums/alerta.enum';
 import { WompiClientService } from '../pagos/wompi-client.service';
 import { PaquetesService } from '../paquetes/paquetes.service';
+import { Paquete } from '../paquetes/entities/paquete.entity';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { EmailService } from '../email/email.service';
 import { ReactivarSuscripcionDto } from './dto/reactivar-suscripcion.dto';
@@ -724,5 +725,48 @@ export class SuscripcionesService {
       this.alertasRepository.create({ negocioId, tipo, referenciaId, severidad, mensaje }),
     );
     this.realtimeGateway.emitToNegocio(negocioId, 'alertas:cambio', creada);
+  }
+
+  private mesActual(): string {
+    const ahora = new Date();
+    return `${ahora.getUTCFullYear()}-${String(ahora.getUTCMonth() + 1).padStart(2, '0')}`;
+  }
+
+  private async obtenerSuscripcionConPaquete(negocioId: string): Promise<Suscripcion & { paquete: Paquete }> {
+    const suscripcion = await this.suscripcionesRepository.findOneOrFail({
+      where: { negocioId },
+      relations: { paquete: true },
+    });
+    const paquete = suscripcion.paquete ?? (await this.paquetesService.findOne(suscripcion.paqueteId));
+    return Object.assign(suscripcion, { paquete });
+  }
+
+  /** Gating genérico por feature del paquete contratado (ej. 'facturacionDianHabilitada', 'tiendaOnlineHabilitada'). */
+  async tieneFeature(negocioId: string, feature: keyof Paquete): Promise<boolean> {
+    const { paquete } = await this.obtenerSuscripcionConPaquete(negocioId);
+    return Boolean(paquete[feature]);
+  }
+
+  /**
+   * Cupo del paquete (ej. `Paquete.documentosDianPorMes`) vs. consumo ya registrado este mes
+   * (`Suscripcion.consumoMensual`, reseteado automáticamente al cambiar de mes).
+   */
+  async obtenerCupoYConsumo(negocioId: string, feature: keyof Paquete): Promise<{ cupo: number; consumo: number }> {
+    const { paquete, consumoMensual, consumoMesReferencia } = await this.obtenerSuscripcionConPaquete(negocioId);
+    const cupo = Number(paquete[feature] ?? 0);
+    const consumo = consumoMesReferencia === this.mesActual() ? (consumoMensual[feature as string] ?? 0) : 0;
+    return { cupo, consumo };
+  }
+
+  /** Incrementa en 1 el consumo del mes actual para `feature` — resetea el contador si cambió el mes. */
+  async registrarConsumo(negocioId: string, feature: string): Promise<void> {
+    const suscripcion = await this.suscripcionesRepository.findOneOrFail({ where: { negocioId } });
+    const mesActual = this.mesActual();
+    if (suscripcion.consumoMesReferencia !== mesActual) {
+      suscripcion.consumoMensual = {};
+      suscripcion.consumoMesReferencia = mesActual;
+    }
+    suscripcion.consumoMensual[feature] = (suscripcion.consumoMensual[feature] ?? 0) + 1;
+    await this.suscripcionesRepository.save(suscripcion);
   }
 }

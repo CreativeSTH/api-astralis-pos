@@ -39,4 +39,15 @@ export class Suscripcion extends BaseEntity {
   /** Etiquetas de qué recordatorios ya se mandaron este ciclo ('DIA_-2'|'DIA_-1'|'DIA_0') — se resetea a [] en activarTrasPago. */
   @Column({ name: 'recordatorios_enviados', type: 'jsonb', default: () => "'[]'" })
   recordatoriosEnviados: string[];
+
+  /**
+   * Consumo mensual por feature con cupo numérico en `Paquete` (ej. { documentosDianPorMes: 12 }).
+   * Se resetea a {} cuando `consumoMesReferencia` ya no es el mes actual — ver SuscripcionesService.registrarConsumo.
+   */
+  @Column({ name: 'consumo_mensual', type: 'jsonb', default: () => "'{}'" })
+  consumoMensual: Record<string, number>;
+
+  /** Mes de referencia del contador de arriba, formato 'YYYY-MM' (UTC). null antes del primer registrarConsumo. */
+  @Column({ name: 'consumo_mes_referencia', type: 'varchar', nullable: true })
+  consumoMesReferencia: string | null;
 }
