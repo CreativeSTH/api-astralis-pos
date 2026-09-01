@@ -6,10 +6,18 @@ import { Suscripcion } from './entities/suscripcion.entity';
 import { EstadoSuscripcion } from './entities/estado-suscripcion.enum';
 import { TransaccionSuscripcion, MetodoPagoSuscripcion } from './entities/transaccion-suscripcion.entity';
 import { MedioPagoGuardado } from './entities/medio-pago-guardado.entity';
+import { Negocio } from '../negocios/entities/negocio.entity';
+import { Usuario } from '../usuarios/entities/usuario.entity';
+import { Alerta } from '../alertas/entities/alerta.entity';
+import { TipoAlerta, SeveridadAlerta } from '../common/enums/alerta.enum';
 import { WompiClientService } from '../pagos/wompi-client.service';
 import { PaquetesService } from '../paquetes/paquetes.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
+import { EmailService } from '../email/email.service';
 import { ReactivarSuscripcionDto } from './dto/reactivar-suscripcion.dto';
+import { construirCorreoRecordatorioProximo } from '../email/templates/recordatorio-proximo-cobro.template';
+import { construirCorreoRecordatorioDia0 } from '../email/templates/recordatorio-dia-cobro.template';
+import { construirCorreoCobroFallido } from '../email/templates/cobro-fallido.template';
 
 const DIAS_PRUEBA = 20;
 
@@ -31,9 +39,16 @@ export class SuscripcionesService {
     private readonly transaccionesRepository: Repository<TransaccionSuscripcion>,
     @InjectRepository(MedioPagoGuardado)
     private readonly medioPagoRepository: Repository<MedioPagoGuardado>,
+    @InjectRepository(Negocio)
+    private readonly negociosRepository: Repository<Negocio>,
+    @InjectRepository(Usuario)
+    private readonly usuariosRepository: Repository<Usuario>,
+    @InjectRepository(Alerta)
+    private readonly alertasRepository: Repository<Alerta>,
     private readonly wompiClient: WompiClientService,
     private readonly paquetesService: PaquetesService,
     private readonly realtimeGateway: RealtimeGateway,
+    private readonly emailService: EmailService,
   ) {}
 
   async crearSuscripcionPrueba(negocioId: string, paqueteId: string): Promise<Suscripcion> {
@@ -436,6 +451,10 @@ export class SuscripcionesService {
     // acumulando el contador en el próximo fallo aislado, marcando VENCIDA mucho antes de las 3
     // fallas CONSECUTIVAS que exige el spec.
     suscripcion.intentosFallidosCobro = 0;
+    // Cada ciclo de facturación empieza limpio — sin esto, un negocio que renovó recién no
+    // volvería a recibir el recordatorio de "día -2" del próximo ciclo porque la etiqueta de
+    // este ciclo ya estaría marcada.
+    suscripcion.recordatoriosEnviados = [];
     await this.suscripcionesRepository.save(suscripcion);
 
     this.realtimeGateway.emitToNegocio(negocioId, 'suscripcion:cambio', { estado: EstadoSuscripcion.ACTIVA });
@@ -558,6 +577,14 @@ export class SuscripcionesService {
     }
   }
 
+  /**
+   * Único punto donde se cuenta un fallo real de `cobrarAutomatico()` — llamado tanto por el
+   * DECLINED síncrono (raro) como por el webhook y `reconciliarPendientes()` cuando confirman
+   * DECLINED de forma asíncrona (el caso real y común, confirmado en vivo contra el sandbox de
+   * Wompi: un cobro con `payment_source_id` casi siempre responde PENDING primero). El aviso de
+   * "cobro fallido" vive acá, no repartido en cada call site, para no perderlo en el camino
+   * asíncrono que en la práctica es el que más ocurre.
+   */
   private async registrarIntentoFallido(negocioId: string): Promise<void> {
     const actual = await this.suscripcionesRepository.findOne({ where: { negocioId } });
     if (!actual) return;
@@ -566,5 +593,136 @@ export class SuscripcionesService {
       actual.estado = EstadoSuscripcion.VENCIDA;
     }
     await this.suscripcionesRepository.save(actual);
+
+    // El aviso (correo + alerta) es best-effort — el conteo del fallo de arriba, que es lo que
+    // hace de verdad que la suscripción avance hacia VENCIDA, ya quedó guardado. Sin este
+    // try/catch, un paquete borrado (`paquetesService.findOne` lanza `NotFoundException`) o
+    // cualquier otro error de esta parte se escaparía de acá hacia el `catch` de
+    // `cobrarAutomatico()` que llama a este método — reintroduciendo exactamente el bug de
+    // "limbo permanente" que ese `catch` existe para evitar (corta el resto de la corrida esa
+    // noche). Confirmado real en revisión: `registrarIntentoFallido` no tenía su propio try/catch.
+    try {
+      const negocio = await this.negociosRepository.findOne({ where: { id: negocioId } });
+      const admin = await this.usuariosRepository.findOne({
+        where: { negocioId, activo: true },
+        order: { createdAt: 'ASC' },
+      });
+      if (!negocio || !admin) return;
+
+      const paquete = await this.paquetesService.findOne(actual.paqueteId);
+      const { subject, html } = construirCorreoCobroFallido(
+        paquete.nombre,
+        actual.intentosFallidosCobro,
+        `${process.env.FRONTEND_URL}/suscripcion-vencida`,
+      );
+      await this.emailService.enviar({ to: admin.email, subject, html });
+      await this.crearOActualizarAlerta(
+        negocioId,
+        actual.id,
+        TipoAlerta.SUSCRIPCION_COBRO_FALLIDO,
+        actual.intentosFallidosCobro >= 3 ? SeveridadAlerta.CRITICA : SeveridadAlerta.ALTA,
+        subject,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Error avisando el fallo de cobro al negocio ${negocioId}`,
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
+  }
+
+  /** Corrida diaria a la 1am (antes del cobro automático de las 2am): correo + alerta in-app en día -2/-1/0, sin duplicar por ciclo. */
+  async enviarRecordatorios(): Promise<void> {
+    const candidatas = await this.suscripcionesRepository.find({
+      where: [{ estado: EstadoSuscripcion.PRUEBA }, { estado: EstadoSuscripcion.ACTIVA }],
+    });
+
+    for (const suscripcion of candidatas) {
+      if (!suscripcion.fechaFin) continue;
+
+      const diasRestantes = Math.round(
+        (suscripcion.fechaFin.getTime() - Date.now()) / (24 * 60 * 60 * 1000),
+      );
+      if (![2, 1, 0].includes(diasRestantes)) continue;
+
+      const etiqueta = `DIA_-${diasRestantes}`.replace('DIA_-0', 'DIA_0');
+      if (suscripcion.recordatoriosEnviados.includes(etiqueta)) continue;
+
+      // Un error puntual en un negocio (paquete borrado, correo mal configurado) no puede cortar
+      // el resto de la corrida — mismo bug de "limbo permanente" ya encontrado y corregido en
+      // `cobrarAutomatico()`: sin este try/catch, una excepción acá dejaría sin recordatorio a
+      // todos los negocios que vinieran después en el array esa noche.
+      try {
+        const negocio = await this.negociosRepository.findOne({ where: { id: suscripcion.negocioId } });
+        const admin = await this.usuariosRepository.findOne({
+          where: { negocioId: suscripcion.negocioId, activo: true },
+          order: { createdAt: 'ASC' },
+        });
+        if (!negocio || !admin) continue;
+
+        const paquete = await this.paquetesService.findOne(suscripcion.paqueteId);
+        const medioPago = await this.medioPagoRepository.findOne({
+          where: { negocioId: suscripcion.negocioId, activo: true },
+        });
+
+        const { subject, html } =
+          diasRestantes === 0
+            ? construirCorreoRecordatorioDia0(
+                paquete.nombre,
+                !!medioPago,
+                `${process.env.FRONTEND_URL}/suscripcion-vencida`,
+                medioPago?.ultimosCuatroDigitos,
+              )
+            : construirCorreoRecordatorioProximo(paquete.nombre, diasRestantes, !!medioPago, medioPago?.ultimosCuatroDigitos);
+
+        await this.emailService.enviar({ to: admin.email, subject, html });
+
+        await this.crearOActualizarAlerta(
+          suscripcion.negocioId,
+          suscripcion.id,
+          TipoAlerta.SUSCRIPCION_PROXIMO_COBRO,
+          diasRestantes === 0 ? SeveridadAlerta.ALTA : SeveridadAlerta.MEDIA,
+          subject,
+        );
+
+        suscripcion.recordatoriosEnviados = [...suscripcion.recordatoriosEnviados, etiqueta];
+        await this.suscripcionesRepository.save(suscripcion);
+      } catch (error) {
+        this.logger.error(
+          `Error enviando recordatorio de pago al negocio ${suscripcion.negocioId}`,
+          error instanceof Error ? error.stack : String(error),
+        );
+      }
+    }
+  }
+
+  /**
+   * Réplica minimalista de AlertasService.upsert (mismo criterio de idempotencia: no duplica una
+   * alerta activa no resuelta del mismo tipo+referencia) — no se reusa AlertasService directamente
+   * para no introducir un ciclo de dependencia de módulos
+   * (SuscripcionesModule → AlertasModule → NegociosModule → SuscripcionesModule, esta última
+   * arista ya la creó la pieza 2 al inyectar SuscripcionesService en NegociosService).
+   */
+  private async crearOActualizarAlerta(
+    negocioId: string,
+    referenciaId: string,
+    tipo: TipoAlerta,
+    severidad: SeveridadAlerta,
+    mensaje: string,
+  ): Promise<void> {
+    const existente = await this.alertasRepository.findOne({
+      where: { negocioId, tipo, referenciaId, resuelta: false },
+    });
+    if (existente) {
+      existente.severidad = severidad;
+      existente.mensaje = mensaje;
+      const actualizada = await this.alertasRepository.save(existente);
+      this.realtimeGateway.emitToNegocio(negocioId, 'alertas:cambio', actualizada);
+      return;
+    }
+    const creada = await this.alertasRepository.save(
+      this.alertasRepository.create({ negocioId, tipo, referenciaId, severidad, mensaje }),
+    );
+    this.realtimeGateway.emitToNegocio(negocioId, 'alertas:cambio', creada);
   }
 }
