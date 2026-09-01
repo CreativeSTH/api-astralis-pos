@@ -35,4 +35,8 @@ export class Suscripcion extends BaseEntity {
   /** Se resetea a 0 en cualquier cobro exitoso, automático o manual. Al llegar a 3, el cron de cobro automático marca VENCIDA. */
   @Column({ name: 'intentos_fallidos_cobro', default: 0 })
   intentosFallidosCobro: number;
+
+  /** Etiquetas de qué recordatorios ya se mandaron este ciclo ('DIA_-2'|'DIA_-1'|'DIA_0') — se resetea a [] en activarTrasPago. */
+  @Column({ name: 'recordatorios_enviados', type: 'jsonb', default: () => "'[]'" })
+  recordatoriosEnviados: string[];
 }
