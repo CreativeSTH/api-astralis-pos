@@ -1,4 +1,4 @@
-import { Body, Controller, ForbiddenException, Get, HttpCode, HttpStatus, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, ForbiddenException, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { FacturacionElectronicaService } from './facturacion-electronica.service';
 import { SuscripcionesService } from '../suscripciones/suscripciones.service';
@@ -79,5 +79,23 @@ export class FacturacionElectronicaController {
   async webhookAlegra(@Body() payload: any) {
     await this.facturacionService.procesarWebhookAlegra(payload);
     return { received: true };
+  }
+
+  @Get('documentos/:ventaId')
+  @RequierePermiso(ModuloPermiso.VENTAS, AccionPermiso.VER)
+  async miDocumento(@Param('ventaId', ParseUUIDPipe) ventaId: string) {
+    return this.facturacionService.obtenerDocumentoPorVenta(ventaId);
+  }
+
+  @Post('documentos/:ventaId/reintentar')
+  @RequierePermiso(ModuloPermiso.VENTAS, AccionPermiso.EDITAR)
+  async reintentarDocumento(@Param('ventaId', ParseUUIDPipe) ventaId: string) {
+    return this.facturacionService.reintentarPorVenta(ventaId);
+  }
+
+  @Get('documentos/:ventaId/descargar')
+  @RequierePermiso(ModuloPermiso.VENTAS, AccionPermiso.VER)
+  async descargarDocumento(@Param('ventaId', ParseUUIDPipe) ventaId: string) {
+    return this.facturacionService.obtenerLinksDescarga(ventaId);
   }
 }

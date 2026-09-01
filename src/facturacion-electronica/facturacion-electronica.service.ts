@@ -331,4 +331,27 @@ export class FacturacionElectronicaService {
       this.realtimeGateway.emitToNegocio(documento.negocioId, 'alertas:cambio', creada);
     }
   }
+
+  async obtenerDocumentoPorVenta(ventaId: string): Promise<DocumentoElectronico | null> {
+    return this.documentosRepository.findOne({ where: { ventaId } });
+  }
+
+  async reintentarPorVenta(ventaId: string): Promise<DocumentoElectronico> {
+    const documento = await this.documentosRepository.findOneOrFail({ where: { ventaId } });
+    const habilitacion = await this.habilitacionRepository.findOneOrFail({ where: { negocioId: documento.negocioId } });
+    await this.intentarEmitir(documento, habilitacion);
+    return this.documentosRepository.findOneOrFail({ where: { ventaId } });
+  }
+
+  async obtenerLinksDescarga(ventaId: string): Promise<{ urlXml?: string; urlPdf?: string }> {
+    const documento = await this.documentosRepository.findOneOrFail({ where: { ventaId } });
+    if (!documento.alegraDocumentId) return {};
+    const habilitacion = await this.habilitacionRepository.findOneOrFail({ where: { negocioId: documento.negocioId } });
+    const resultado = await this.alegraClient.consultarDocumento({
+      token: process.env.ALEGRA_RESELLER_TOKEN!,
+      baseUrl: baseUrlPara(habilitacion.ambiente),
+      alegraDocumentId: documento.alegraDocumentId,
+    });
+    return { urlXml: resultado.urlXml, urlPdf: resultado.urlPdf };
+  }
 }

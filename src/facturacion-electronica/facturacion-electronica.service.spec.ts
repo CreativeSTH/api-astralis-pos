@@ -23,9 +23,10 @@ type AlegraClientMock = {
 
 describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
   let service: FacturacionElectronicaService;
-  let habilitacionRepo: { findOne: jest.Mock; create: jest.Mock; save: jest.Mock };
+  let habilitacionRepo: { findOne: jest.Mock; findOneOrFail: jest.Mock; create: jest.Mock; save: jest.Mock };
   let documentosRepo: {
     findOne: jest.Mock;
+    findOneOrFail: jest.Mock;
     find: jest.Mock;
     create: jest.Mock;
     save: jest.Mock;
@@ -39,7 +40,7 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
   let qbWhereMock: { where: jest.Mock; andWhere: jest.Mock; getMany: jest.Mock };
 
   beforeEach(async () => {
-    habilitacionRepo = { findOne: jest.fn(), create: jest.fn((x) => x), save: jest.fn(async (x) => x) };
+    habilitacionRepo = { findOne: jest.fn(), findOneOrFail: jest.fn(), create: jest.fn((x) => x), save: jest.fn(async (x) => x) };
     qbWhereMock = {
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
@@ -47,6 +48,7 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
     };
     documentosRepo = {
       findOne: jest.fn(),
+      findOneOrFail: jest.fn(),
       find: jest.fn().mockResolvedValue([]),
       create: jest.fn((x) => x),
       save: jest.fn(async (x) => x),
@@ -350,6 +352,49 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
       const guardada = alertasRepo.save.mock.calls[0][0];
       expect(guardada.id).toBe('alerta-1');
       expect(alertasRepo.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('obtenerDocumentoPorVenta / reintentarPorVenta / obtenerLinksDescarga', () => {
+    it('obtenerDocumentoPorVenta busca por ventaId', async () => {
+      documentosRepo.findOne.mockResolvedValue({ id: 'doc-1', ventaId: 'venta-1' });
+      const resultado = await service.obtenerDocumentoPorVenta('venta-1');
+      expect(documentosRepo.findOne).toHaveBeenCalledWith({ where: { ventaId: 'venta-1' } });
+      expect(resultado).toEqual({ id: 'doc-1', ventaId: 'venta-1' });
+    });
+
+    it('reintentarPorVenta llama a intentarEmitir con el documento y la habilitación del negocio', async () => {
+      const documento = {
+        id: 'doc-1', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'DEE_POS' as const,
+        estado: EstadoDocumentoElectronico.PENDIENTE, intentos: 0,
+      };
+      documentosRepo.findOneOrFail.mockResolvedValue(documento);
+      habilitacionRepo.findOneOrFail.mockResolvedValue({
+        negocioId: 'neg-1', estado: EstadoHabilitacion.HABILITADO, alegraCompanyId: 'company-1',
+        siguienteNumero: 1, ambiente: 'PRODUCCION',
+      });
+      alegraClient.crearDocumentoEquivalentePos.mockResolvedValue({ alegraDocumentId: 'doc-r', status: 'REGISTERED' });
+
+      await service.reintentarPorVenta('venta-1');
+
+      expect(alegraClient.crearDocumentoEquivalentePos).toHaveBeenCalled();
+    });
+
+    it('obtenerLinksDescarga devuelve vacío si el documento no tiene alegraDocumentId todavía', async () => {
+      documentosRepo.findOneOrFail.mockResolvedValue({ id: 'doc-1', negocioId: 'neg-1' });
+      const resultado = await service.obtenerLinksDescarga('venta-1');
+      expect(resultado).toEqual({});
+      expect(alegraClient.consultarDocumento).not.toHaveBeenCalled();
+    });
+
+    it('obtenerLinksDescarga consulta a Alegra si ya hay alegraDocumentId', async () => {
+      documentosRepo.findOneOrFail.mockResolvedValue({ id: 'doc-1', negocioId: 'neg-1', alegraDocumentId: 'alegra-1' });
+      habilitacionRepo.findOneOrFail.mockResolvedValue({ negocioId: 'neg-1', ambiente: 'PRODUCCION' });
+      alegraClient.consultarDocumento.mockResolvedValue({ status: 'REGISTERED', urlXml: 'x.xml', urlPdf: 'x.pdf' });
+
+      const resultado = await service.obtenerLinksDescarga('venta-1');
+
+      expect(resultado).toEqual({ urlXml: 'x.xml', urlPdf: 'x.pdf' });
     });
   });
 });
