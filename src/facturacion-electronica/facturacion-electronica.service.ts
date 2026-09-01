@@ -11,6 +11,9 @@ import { CargarResolucionDto } from './dto/cargar-resolucion.dto';
 import { encriptar } from '../common/utils/cifrado';
 import { Negocio } from '../negocios/entities/negocio.entity';
 import { SuscripcionesService } from '../suscripciones/suscripciones.service';
+import { Alerta } from '../alertas/entities/alerta.entity';
+import { TipoAlerta, SeveridadAlerta } from '../common/enums/alerta.enum';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
 
 export function baseUrlPara(ambiente: 'SANDBOX' | 'PRODUCCION'): string {
   return ambiente === 'PRODUCCION' ? process.env.ALEGRA_BASE_URL_PRODUCCION! : process.env.ALEGRA_BASE_URL_SANDBOX!;
@@ -25,8 +28,11 @@ export class FacturacionElectronicaService {
     private readonly documentosRepository: Repository<DocumentoElectronico>,
     @InjectRepository(Negocio)
     private readonly negociosRepository: Repository<Negocio>,
+    @InjectRepository(Alerta)
+    private readonly alertasRepository: Repository<Alerta>,
     private readonly alegraClient: AlegraClientService,
     private readonly suscripcionesService: SuscripcionesService,
+    private readonly realtimeGateway: RealtimeGateway,
   ) {}
 
   async obtenerOCrearHabilitacion(negocioId: string): Promise<HabilitacionFacturacionElectronica> {
@@ -248,6 +254,81 @@ export class FacturacionElectronicaService {
       documento.estado === EstadoDocumentoElectronico.ACEPTADO_CON_OBSERVACIONES
     ) {
       await this.suscripcionesService.registrarConsumo(documento.negocioId, 'documentosDianPorMes');
+    }
+  }
+
+  async procesarWebhookAlegra(payload: { documentId?: string; status?: string; legalStatus?: string }): Promise<void> {
+    if (!payload?.documentId) return;
+    const documento = await this.documentosRepository.findOne({ where: { alegraDocumentId: payload.documentId } });
+    if (!documento || documento.estado !== EstadoDocumentoElectronico.PENDIENTE) return;
+
+    if (payload.legalStatus === 'ACCEPTED') {
+      documento.estado = EstadoDocumentoElectronico.ACEPTADO;
+    } else if (payload.legalStatus === 'ACCEPTED_WITH_OBSERVATIONS') {
+      documento.estado = EstadoDocumentoElectronico.ACEPTADO_CON_OBSERVACIONES;
+    } else if (payload.legalStatus === 'REJECTED') {
+      documento.estado = EstadoDocumentoElectronico.RECHAZADO;
+    } else {
+      return; // estado intermedio, sin novedad todavía
+    }
+    await this.documentosRepository.save(documento);
+
+    if (
+      documento.estado === EstadoDocumentoElectronico.ACEPTADO ||
+      documento.estado === EstadoDocumentoElectronico.ACEPTADO_CON_OBSERVACIONES
+    ) {
+      await this.suscripcionesService.registrarConsumo(documento.negocioId, 'documentosDianPorMes');
+    }
+  }
+
+  /** Backoff simple: reintenta cada documento PENDIENTE que no se tocó en los últimos 5 minutos. */
+  async reconciliarPendientes(): Promise<void> {
+    const haceCincoMin = new Date(Date.now() - 5 * 60 * 1000);
+    const pendientes = await this.documentosRepository.find({ where: { estado: EstadoDocumentoElectronico.PENDIENTE } });
+
+    for (const documento of pendientes) {
+      if (documento.ultimoIntentoEn && documento.ultimoIntentoEn > haceCincoMin) continue;
+      const habilitacion = await this.habilitacionRepository.findOne({ where: { negocioId: documento.negocioId } });
+      if (!habilitacion || habilitacion.estado !== EstadoHabilitacion.HABILITADO) continue;
+      await this.intentarEmitir(documento, habilitacion);
+    }
+  }
+
+  /**
+   * A las 48h de contingencia sin resolver: alerta CRITICA, mismo patrón que la pieza de
+   * notificaciones de pago. El corte de 48h lo calcula Postgres (`NOW() - INTERVAL`), no
+   * un `Date` de Node pasado como parámetro — `created_at` es TIMESTAMP sin tz (igual que el
+   * resto del esquema) y comparar contra un valor calculado del lado del cliente ya causó
+   * una ventana desfasada por huso horario en otra pieza (ver docs/ARQUITECTURA-V2.md fila 0.b).
+   */
+  async alertarDocumentosVencidos(): Promise<void> {
+    const vencidos = await this.documentosRepository
+      .createQueryBuilder('doc')
+      .where('doc.estado = :estado', { estado: EstadoDocumentoElectronico.PENDIENTE })
+      .andWhere(`doc.created_at < NOW() - INTERVAL '48 hours'`)
+      .getMany();
+
+    for (const documento of vencidos) {
+      const existente = await this.alertasRepository.findOne({
+        where: { negocioId: documento.negocioId, tipo: TipoAlerta.FACTURACION_DIAN_VENCIDA, referenciaId: documento.id, resuelta: false },
+      });
+      const mensaje = `Documento electrónico de la venta ${documento.ventaId} sin emitir hace más de 48h — revisar manualmente`;
+      if (existente) {
+        existente.mensaje = mensaje;
+        const actualizada = await this.alertasRepository.save(existente);
+        this.realtimeGateway.emitToNegocio(documento.negocioId, 'alertas:cambio', actualizada);
+        continue;
+      }
+      const creada = await this.alertasRepository.save(
+        this.alertasRepository.create({
+          negocioId: documento.negocioId,
+          tipo: TipoAlerta.FACTURACION_DIAN_VENCIDA,
+          referenciaId: documento.id,
+          severidad: SeveridadAlerta.CRITICA,
+          mensaje,
+        }),
+      );
+      this.realtimeGateway.emitToNegocio(documento.negocioId, 'alertas:cambio', creada);
     }
   }
 }

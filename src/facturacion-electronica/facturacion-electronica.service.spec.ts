@@ -8,6 +8,9 @@ import { EstadoDocumentoElectronico } from './entities/estado-documento-electron
 import { AlegraClientService } from './alegra-client.service';
 import { Negocio } from '../negocios/entities/negocio.entity';
 import { SuscripcionesService } from '../suscripciones/suscripciones.service';
+import { Alerta } from '../alertas/entities/alerta.entity';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
+import { TipoAlerta } from '../common/enums/alerta.enum';
 
 type AlegraClientMock = {
   crearCompania: jest.Mock;
@@ -21,14 +24,34 @@ type AlegraClientMock = {
 describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
   let service: FacturacionElectronicaService;
   let habilitacionRepo: { findOne: jest.Mock; create: jest.Mock; save: jest.Mock };
-  let documentosRepo: { findOne: jest.Mock; create: jest.Mock; save: jest.Mock };
+  let documentosRepo: {
+    findOne: jest.Mock;
+    find: jest.Mock;
+    create: jest.Mock;
+    save: jest.Mock;
+    createQueryBuilder: jest.Mock;
+  };
   let negociosRepo: { findOneOrFail: jest.Mock };
   let alegraClient: AlegraClientMock;
   let suscripcionesService: { registrarConsumo: jest.Mock };
+  let alertasRepo: { findOne: jest.Mock; create: jest.Mock; save: jest.Mock };
+  let realtimeGateway: { emitToNegocio: jest.Mock };
+  let qbWhereMock: { where: jest.Mock; andWhere: jest.Mock; getMany: jest.Mock };
 
   beforeEach(async () => {
     habilitacionRepo = { findOne: jest.fn(), create: jest.fn((x) => x), save: jest.fn(async (x) => x) };
-    documentosRepo = { findOne: jest.fn(), create: jest.fn((x) => x), save: jest.fn(async (x) => x) };
+    qbWhereMock = {
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      getMany: jest.fn().mockResolvedValue([]),
+    };
+    documentosRepo = {
+      findOne: jest.fn(),
+      find: jest.fn().mockResolvedValue([]),
+      create: jest.fn((x) => x),
+      save: jest.fn(async (x) => x),
+      createQueryBuilder: jest.fn().mockReturnValue(qbWhereMock),
+    };
     negociosRepo = { findOneOrFail: jest.fn().mockResolvedValue({ nit: '900123456' }) };
     alegraClient = {
       crearCompania: jest.fn(),
@@ -39,6 +62,8 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
       consultarDocumento: jest.fn(),
     };
     suscripcionesService = { registrarConsumo: jest.fn() };
+    alertasRepo = { findOne: jest.fn().mockResolvedValue(null), create: jest.fn((x) => x), save: jest.fn(async (x) => x) };
+    realtimeGateway = { emitToNegocio: jest.fn() };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -46,8 +71,10 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
         { provide: getRepositoryToken(HabilitacionFacturacionElectronica), useValue: habilitacionRepo },
         { provide: getRepositoryToken(DocumentoElectronico), useValue: documentosRepo },
         { provide: getRepositoryToken(Negocio), useValue: negociosRepo },
+        { provide: getRepositoryToken(Alerta), useValue: alertasRepo },
         { provide: AlegraClientService, useValue: alegraClient },
         { provide: SuscripcionesService, useValue: suscripcionesService },
+        { provide: RealtimeGateway, useValue: realtimeGateway },
       ],
     }).compile();
 
@@ -221,6 +248,108 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
 
       expect(habilitacion.siguienteNumero).toBe(10);
       expect(habilitacionRepo.save).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('procesarWebhookAlegra', () => {
+    it('ignora un payload sin documentId', async () => {
+      await service.procesarWebhookAlegra({});
+      expect(documentosRepo.findOne).not.toHaveBeenCalled();
+    });
+
+    it('marca ACEPTADO y registra consumo cuando legalStatus es ACCEPTED', async () => {
+      documentosRepo.findOne.mockResolvedValue({
+        id: 'doc-1', negocioId: 'neg-1', estado: EstadoDocumentoElectronico.PENDIENTE,
+      });
+
+      await service.procesarWebhookAlegra({ documentId: 'alegra-doc-1', legalStatus: 'ACCEPTED' });
+
+      expect(documentosRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ estado: EstadoDocumentoElectronico.ACEPTADO }),
+      );
+      expect(suscripcionesService.registrarConsumo).toHaveBeenCalledWith('neg-1', 'documentosDianPorMes');
+    });
+
+    it('no toca un documento que ya no está PENDIENTE (idempotente)', async () => {
+      documentosRepo.findOne.mockResolvedValue({
+        id: 'doc-1', negocioId: 'neg-1', estado: EstadoDocumentoElectronico.ACEPTADO,
+      });
+
+      await service.procesarWebhookAlegra({ documentId: 'alegra-doc-1', legalStatus: 'REJECTED' });
+
+      expect(documentosRepo.save).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('reconciliarPendientes', () => {
+    it('reintenta un PENDIENTE sin tocar hace más de 5 minutos si el negocio está HABILITADO', async () => {
+      const documentoViejo = {
+        id: 'doc-1', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'DEE_POS' as const,
+        estado: EstadoDocumentoElectronico.PENDIENTE, intentos: 1,
+        ultimoIntentoEn: new Date(Date.now() - 10 * 60 * 1000),
+      };
+      documentosRepo.find.mockResolvedValue([documentoViejo]);
+      habilitacionRepo.findOne.mockResolvedValue({
+        negocioId: 'neg-1', estado: EstadoHabilitacion.HABILITADO, alegraCompanyId: 'company-1',
+        siguienteNumero: 1, ambiente: 'PRODUCCION',
+      });
+      alegraClient.crearDocumentoEquivalentePos.mockResolvedValue({ alegraDocumentId: 'doc-r', status: 'REGISTERED' });
+
+      await service.reconciliarPendientes();
+
+      expect(alegraClient.crearDocumentoEquivalentePos).toHaveBeenCalled();
+    });
+
+    it('no reintenta uno tocado hace menos de 5 minutos', async () => {
+      documentosRepo.find.mockResolvedValue([
+        {
+          id: 'doc-1', negocioId: 'neg-1', tipo: 'DEE_POS' as const, estado: EstadoDocumentoElectronico.PENDIENTE,
+          intentos: 1, ultimoIntentoEn: new Date(),
+        },
+      ]);
+
+      await service.reconciliarPendientes();
+
+      expect(alegraClient.crearDocumentoEquivalentePos).not.toHaveBeenCalled();
+    });
+
+    it('salta un documento cuyo negocio ya no está HABILITADO', async () => {
+      documentosRepo.find.mockResolvedValue([
+        {
+          id: 'doc-1', negocioId: 'neg-1', tipo: 'DEE_POS' as const, estado: EstadoDocumentoElectronico.PENDIENTE,
+          intentos: 1, ultimoIntentoEn: null,
+        },
+      ]);
+      habilitacionRepo.findOne.mockResolvedValue({ negocioId: 'neg-1', estado: EstadoHabilitacion.ERROR });
+
+      await service.reconciliarPendientes();
+
+      expect(alegraClient.crearDocumentoEquivalentePos).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('alertarDocumentosVencidos', () => {
+    it('crea una alerta CRITICA para un documento vencido sin alerta previa', async () => {
+      qbWhereMock.getMany.mockResolvedValue([{ id: 'doc-1', negocioId: 'neg-1', ventaId: 'venta-1' }]);
+      alertasRepo.findOne.mockResolvedValue(null);
+
+      await service.alertarDocumentosVencidos();
+
+      expect(alertasRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ tipo: TipoAlerta.FACTURACION_DIAN_VENCIDA, negocioId: 'neg-1' }),
+      );
+      expect(realtimeGateway.emitToNegocio).toHaveBeenCalledWith('neg-1', 'alertas:cambio', expect.anything());
+    });
+
+    it('actualiza (no duplica) una alerta ya existente para el mismo documento', async () => {
+      qbWhereMock.getMany.mockResolvedValue([{ id: 'doc-1', negocioId: 'neg-1', ventaId: 'venta-1' }]);
+      alertasRepo.findOne.mockResolvedValue({ id: 'alerta-1', mensaje: 'vieja' });
+
+      await service.alertarDocumentosVencidos();
+
+      const guardada = alertasRepo.save.mock.calls[0][0];
+      expect(guardada.id).toBe('alerta-1');
+      expect(alertasRepo.create).not.toHaveBeenCalled();
     });
   });
 });

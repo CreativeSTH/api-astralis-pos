@@ -1,4 +1,4 @@
-import { Body, Controller, ForbiddenException, Get, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, ForbiddenException, Get, HttpCode, HttpStatus, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { FacturacionElectronicaService } from './facturacion-electronica.service';
 import { SuscripcionesService } from '../suscripciones/suscripciones.service';
@@ -7,6 +7,7 @@ import { CargarResolucionDto } from './dto/cargar-resolucion.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { RequierePermiso } from '../common/decorators/requiere-permiso.decorator';
+import { Public } from '../common/decorators/public.decorator';
 import { ModuloPermiso } from '../common/enums/modulo-permiso.enum';
 import { AccionPermiso } from '../common/enums/accion-permiso.enum';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -66,5 +67,17 @@ export class FacturacionElectronicaController {
   async confirmarTestSet(@CurrentUser() usuario: JwtUserPayload) {
     await this.exigirFeatureHabilitada(usuario.negocioId!);
     return this.facturacionService.confirmarTestSet(usuario.negocioId!);
+  }
+
+  @Public()
+  @Post('webhook-alegra')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary:
+      'Webhook de Alegra — endpoint público. Sin verificación de firma todavía (ver nota de la Task 7 del plan): confirmar contra el sandbox real si Alegra firma sus eventos antes de exponer esto en producción.',
+  })
+  async webhookAlegra(@Body() payload: any) {
+    await this.facturacionService.procesarWebhookAlegra(payload);
+    return { received: true };
   }
 }
