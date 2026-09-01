@@ -25,4 +25,13 @@ export class SuscripcionesCronService {
       this.logger.error('Error reconciliando transacciones de suscripción pendientes', error instanceof Error ? error.stack : String(error));
     }
   }
+
+  @Cron(CronExpression.EVERY_DAY_AT_2AM)
+  async cobrarAutomatico(): Promise<void> {
+    try {
+      await this.suscripcionesService.cobrarAutomatico();
+    } catch (error) {
+      this.logger.error('Error en el cobro automático de suscripciones', error instanceof Error ? error.stack : String(error));
+    }
+  }
 }

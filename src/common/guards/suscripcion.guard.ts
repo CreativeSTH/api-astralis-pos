@@ -19,6 +19,8 @@ import { SuscripcionesService } from '../../suscripciones/suscripciones.service'
 const RUTAS_PERMITIDAS_BLOQUEADO = new Set([
   'GET /api/suscripcion/mi-estado',
   'POST /api/suscripcion/reactivar',
+  'GET /api/suscripcion/medio-pago',
+  'DELETE /api/suscripcion/medio-pago',
   'POST /api/auth/logout',
 ]);
 

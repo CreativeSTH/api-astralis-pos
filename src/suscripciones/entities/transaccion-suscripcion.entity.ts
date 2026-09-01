@@ -32,4 +32,8 @@ export class TransaccionSuscripcion extends BaseEntity {
 
   @Column({ name: 'confirmed_at', type: 'timestamptz', nullable: true })
   confirmedAt?: Date;
+
+  /** Distingue un cobro disparado por el usuario (reactivar a mano) de uno disparado por el cron diario. */
+  @Column({ default: 'MANUAL' })
+  origen: 'MANUAL' | 'AUTOMATICO';
 }

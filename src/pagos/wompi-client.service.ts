@@ -129,4 +129,77 @@ export class WompiClientService {
       extra: data.payment_method?.extra as Record<string, unknown> | undefined,
     };
   }
+
+  /** `POST /payment_sources` — crea una fuente de pago reusable a partir de un token ya tokenizado (tarjeta u otro método). */
+  async crearFuentePago(params: {
+    llavePrivada: string;
+    token: string;
+    customerEmail: string;
+    acceptanceToken: string;
+    acceptPersonalAuth: string;
+  }): Promise<{ paymentSourceId: number }> {
+    const res = await fetch(`${BASE_URL}/payment_sources`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${params.llavePrivada}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        type: 'CARD',
+        token: params.token,
+        customer_email: params.customerEmail,
+        acceptance_token: params.acceptanceToken,
+        accept_personal_auth: params.acceptPersonalAuth,
+      }),
+    });
+    if (!res.ok) {
+      throw new BadGatewayException(
+        await extraerMensajeError(res, 'Wompi rechazó la creación de la fuente de pago'),
+      );
+    }
+    const { data } = await res.json();
+    return { paymentSourceId: data.id as number };
+  }
+
+  /** `POST /transactions` usando una fuente de pago ya guardada — camino usado tanto por el primer cobro con "guardar tarjeta" como por el cron de cobro automático (con `recurrente: true`). */
+  async crearTransaccionConFuente(params: {
+    llavePrivada: string;
+    amountInCents: number;
+    currency: string;
+    reference: string;
+    signature: string;
+    paymentSourceId: number;
+    customerEmail: string;
+    recurrente?: boolean;
+  }): Promise<{ wompiTransactionId: string; status: string }> {
+    const res = await fetch(`${BASE_URL}/transactions`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${params.llavePrivada}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        amount_in_cents: params.amountInCents,
+        currency: params.currency,
+        reference: params.reference,
+        signature: params.signature,
+        customer_email: params.customerEmail,
+        payment_source_id: params.paymentSourceId,
+        // Sin `payment_method.installments`, Wompi rechaza el POST con 422 "No se especificó el
+        // número de cuotas (installments)" — confirmado en vivo contra el sandbox real antes de
+        // este fix: sin esto, TODO cobro con fuente de pago (guardado inicial Y cobro automático
+        // recurrente) fallaba siempre, encubierto porque el error nunca se probó contra Wompi de
+        // verdad hasta este punto. Suscripciones siempre se cobran de una sola vez.
+        payment_method: { installments: 1 },
+        recurrent: params.recurrente ?? false,
+      }),
+    });
+    if (!res.ok) {
+      throw new BadGatewayException(
+        await extraerMensajeError(res, 'Wompi rechazó la transacción con la fuente de pago guardada'),
+      );
+    }
+    const { data } = await res.json();
+    return { wompiTransactionId: data.id as string, status: data.status as string };
+  }
 }

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { SuscripcionesService } from './suscripciones.service';
 import { ReactivarSuscripcionDto } from './dto/reactivar-suscripcion.dto';
@@ -27,6 +27,27 @@ export class SuscripcionesController {
   @ApiOperation({ summary: 'Reactiva (o cambia de plan) con un cobro único — alcanzable aunque esté VENCIDA' })
   reactivar(@CurrentUser() usuario: JwtUserPayload, @Body() dto: ReactivarSuscripcionDto) {
     return this.suscripcionesService.iniciarReactivacion(usuario.negocioId!, dto);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @Get('medio-pago')
+  @ApiOperation({ summary: 'Estado del medio de pago guardado para débito automático' })
+  async medioPago(@CurrentUser() usuario: JwtUserPayload) {
+    const medioPago = await this.suscripcionesService.obtenerMedioPago(usuario.negocioId!);
+    return medioPago
+      ? { activo: true, ultimosCuatroDigitos: medioPago.ultimosCuatroDigitos }
+      : { activo: false, ultimosCuatroDigitos: null };
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @Delete('medio-pago')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Quita el medio de pago guardado — vuelve a reactivación manual' })
+  async quitarMedioPago(@CurrentUser() usuario: JwtUserPayload) {
+    await this.suscripcionesService.quitarMedioPago(usuario.negocioId!);
+    return { mensaje: 'Medio de pago quitado' };
   }
 
   @Public()

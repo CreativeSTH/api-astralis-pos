@@ -31,4 +31,8 @@ export class Suscripcion extends BaseEntity {
    */
   @Column({ name: 'fecha_fin', type: 'timestamptz', nullable: true })
   fechaFin: Date | null;
+
+  /** Se resetea a 0 en cualquier cobro exitoso, automático o manual. Al llegar a 3, el cron de cobro automático marca VENCIDA. */
+  @Column({ name: 'intentos_fallidos_cobro', default: 0 })
+  intentosFallidosCobro: number;
 }
