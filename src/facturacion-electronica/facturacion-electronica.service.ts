@@ -5,19 +5,31 @@ import { HabilitacionFacturacionElectronica } from './entities/habilitacion-fact
 import { DocumentoElectronico } from './entities/documento-electronico.entity';
 import { EstadoHabilitacion } from './entities/estado-habilitacion.enum';
 import { EstadoDocumentoElectronico } from './entities/estado-documento-electronico.enum';
-import { AlegraClientService } from './alegra-client.service';
+import { AlegraClientService, ItemAlegra, PaymentAlegra, ResolutionAlegra, TotalAmountsAlegra } from './alegra-client.service';
 import { ActualizarDatosNegocioDto } from './dto/actualizar-datos-negocio.dto';
 import { CargarResolucionDto } from './dto/cargar-resolucion.dto';
-import { encriptar } from '../common/utils/cifrado';
+import { encriptar, desencriptar } from '../common/utils/cifrado';
 import { Negocio } from '../negocios/entities/negocio.entity';
 import { SuscripcionesService } from '../suscripciones/suscripciones.service';
 import { Alerta } from '../alertas/entities/alerta.entity';
 import { TipoAlerta, SeveridadAlerta } from '../common/enums/alerta.enum';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
+import { Venta } from '../ventas/entities/venta.entity';
+import { calcularDigitoVerificacion, limpiarNit } from '../common/utils/nit';
 
 export function baseUrlPara(ambiente: 'SANDBOX' | 'PRODUCCION'): string {
   return ambiente === 'PRODUCCION' ? process.env.ALEGRA_BASE_URL_PRODUCCION! : process.env.ALEGRA_BASE_URL_SANDBOX!;
 }
+
+/**
+ * Persona Jurídica (catálogo DIAN de tipo de organización) — el POS no distingue
+ * persona natural/jurídica hoy, y la enorme mayoría de negocios que facturan con
+ * NIT son personas jurídicas. Confirmado en vivo que sin este campo Alegra
+ * rechaza la emisión con AEP6012 aunque la empresa se haya creado "bien".
+ */
+const ORGANIZATION_TYPE_PERSONA_JURIDICA = 1;
+/** NIT (catálogo DIAN de tipo de identificación) — mismo criterio que arriba. */
+const IDENTIFICATION_TYPE_NIT = '31';
 
 @Injectable()
 export class FacturacionElectronicaService {
@@ -30,6 +42,8 @@ export class FacturacionElectronicaService {
     private readonly negociosRepository: Repository<Negocio>,
     @InjectRepository(Alerta)
     private readonly alertasRepository: Repository<Alerta>,
+    @InjectRepository(Venta)
+    private readonly ventasRepository: Repository<Venta>,
     private readonly alegraClient: AlegraClientService,
     private readonly suscripcionesService: SuscripcionesService,
     private readonly realtimeGateway: RealtimeGateway,
@@ -50,7 +64,9 @@ export class FacturacionElectronicaService {
     const habilitacion = await this.obtenerOCrearHabilitacion(negocioId);
     habilitacion.razonSocial = dto.razonSocial;
     habilitacion.direccion = dto.direccion;
-    habilitacion.ciudad = dto.ciudad;
+    habilitacion.ciudad = dto.ciudadNombre;
+    habilitacion.ciudadCodigo = dto.ciudadCodigo;
+    habilitacion.departamentoCodigo = dto.departamentoCodigo;
     habilitacion.useAlegraCertificate = dto.useAlegraCertificate;
     if (!dto.useAlegraCertificate) {
       if (!dto.certificadoPfxBase64 || !dto.certificadoPassword) {
@@ -90,20 +106,42 @@ export class FacturacionElectronicaService {
     habilitacion.resolucionRangoDesde = dto.rangoDesde;
     habilitacion.resolucionRangoHasta = dto.rangoHasta;
     habilitacion.resolucionTechnicalKey = dto.technicalKey;
+    habilitacion.governmentTestSetId = dto.governmentTestSetId;
     // Arranca la numeración correlativa real en el piso del rango autorizado —
     // no confundir con documento.intentos (contador de reintentos de red, ver intentarEmitir).
     habilitacion.siguienteNumero = dto.rangoDesde;
 
     const negocio = await this.negociosRepository.findOneOrFail({ where: { id: negocioId } });
+    if (!negocio.nit) {
+      throw new BadRequestException('El negocio no tiene NIT cargado — completalo en Datos del negocio antes de seguir');
+    }
+    // El NIT del negocio debe estar SIN el dígito de verificación acá (solo la
+    // base) — el dv se calcula siempre con el algoritmo oficial DIAN, nunca se
+    // confía en uno que el usuario haya podido tipear pegado al NIT.
+    const identification = limpiarNit(negocio.nit);
+    const dv = calcularDigitoVerificacion(identification);
 
     const { companyId } = await this.alegraClient.crearCompania({
       token: process.env.ALEGRA_RESELLER_TOKEN!,
       baseUrl: baseUrlPara(habilitacion.ambiente),
-      nit: negocio.nit!,
+      identification,
+      dv,
+      identificationType: IDENTIFICATION_TYPE_NIT,
+      organizationType: ORGANIZATION_TYPE_PERSONA_JURIDICA,
       razonSocial: habilitacion.razonSocial,
       direccion: habilitacion.direccion!,
-      ciudad: habilitacion.ciudad!,
+      ciudadCodigo: habilitacion.ciudadCodigo!,
+      departamentoCodigo: habilitacion.departamentoCodigo!,
+      email: negocio.email,
       useAlegraCertificate: habilitacion.useAlegraCertificate,
+      // El certificado propio se cargó y cifró en el Paso 1 (actualizarDatosNegocio) —
+      // acá solo se descifra para el envío puntual a Alegra, nunca se persiste en claro.
+      certificadoPfxBase64: habilitacion.useAlegraCertificate
+        ? undefined
+        : desencriptar(habilitacion.certificadoPfxCifrado!),
+      certificadoPassword: habilitacion.useAlegraCertificate
+        ? undefined
+        : desencriptar(habilitacion.certificadoPasswordCifrado!),
     });
 
     habilitacion.alegraCompanyId = companyId;
@@ -111,47 +149,121 @@ export class FacturacionElectronicaService {
     return this.habilitacionRepository.save(habilitacion);
   }
 
+  /** Arma el objeto `resolution` de Alegra a partir de los datos de la resolución DIAN ya cargados. */
+  private resolutionDesdeHabilitacion(habilitacion: HabilitacionFacturacionElectronica): ResolutionAlegra {
+    return {
+      prefix: habilitacion.resolucionPrefijo!,
+      resolutionNumber: habilitacion.resolucionNumero!,
+      startDate: habilitacion.resolucionFechaInicio!,
+      endDate: habilitacion.resolucionFechaFin!,
+      minNumber: habilitacion.resolucionRangoDesde!,
+      maxNumber: habilitacion.resolucionRangoHasta!,
+      technicalKey: habilitacion.resolucionTechnicalKey!,
+    };
+  }
+
+  /**
+   * La autorización de la DIAN tras crear el testset no es instantánea —
+   * confirmado en vivo: la primera emisión inmediatamente después de
+   * `crearTestSet` puede rechazar con "company is not authorized" aunque
+   * unos segundos después ya figure autorizada. Sondea con backoff corto en
+   * vez de asumir que el 200 de `crearTestSet` ya significa listo para emitir.
+   */
+  private async esperarAutorizacionGobierno(token: string, baseUrl: string, companyId: string): Promise<void> {
+    const intentosMaximos = 5;
+    for (let intento = 1; intento <= intentosMaximos; intento++) {
+      const { posAutorizado } = await this.alegraClient.consultarCompania({ token, baseUrl, companyId });
+      if (posAutorizado) return;
+      if (intento < intentosMaximos) await new Promise((resolve) => setTimeout(resolve, 1500));
+    }
+    throw new Error('La DIAN no autorizó la empresa a tiempo — intentá confirmar el testset de nuevo en un momento');
+  }
+
   async confirmarTestSet(negocioId: string): Promise<HabilitacionFacturacionElectronica> {
     const habilitacion = await this.obtenerOCrearHabilitacion(negocioId);
     if (habilitacion.estado !== EstadoHabilitacion.RESOLUCION_CARGADA) {
       throw new BadRequestException('Completá primero la carga de la resolución (Paso 3)');
+    }
+    if (!habilitacion.governmentTestSetId) {
+      throw new BadRequestException('Falta el TestSetId de la DIAN (Paso 3) — sin eso Alegra no puede activar el testset');
     }
 
     try {
       const token = process.env.ALEGRA_RESELLER_TOKEN!;
       const baseUrl = baseUrlPara(habilitacion.ambiente);
 
-      const { testSetId } = await this.alegraClient.crearTestSet({
-        token,
-        baseUrl,
-        companyId: habilitacion.alegraCompanyId!,
-      });
-      habilitacion.alegraGovernmentTestSetId = testSetId;
+      try {
+        await this.alegraClient.crearTestSet({
+          token,
+          baseUrl,
+          companyId: habilitacion.alegraCompanyId!,
+          tipo: 'pos',
+          governmentId: habilitacion.governmentTestSetId,
+        });
+      } catch (error) {
+        // Idempotencia real: un reintento tras timeout (Alegra recibió el alta
+        // pero la respuesta no llegó) no debe tratarse como fallo — el testset
+        // ya está aprobado, que es justo el estado que este paso busca lograr.
+        const mensaje = error instanceof Error ? error.message : String(error);
+        if (!mensaje.includes('already been approved')) throw error;
+      }
 
-      const numeroPrueba = habilitacion.siguienteNumero ?? habilitacion.resolucionRangoDesde!;
-      const documentoPrueba = () =>
+      await this.esperarAutorizacionGobierno(token, baseUrl, habilitacion.alegraCompanyId!);
+
+      const numeroInicial = habilitacion.siguienteNumero ?? habilitacion.resolucionRangoDesde!;
+      const resolution = this.resolutionDesdeHabilitacion(habilitacion);
+      const itemPrueba: ItemAlegra = {
+        description: 'Producto de prueba',
+        quantity: 1,
+        price: 10000,
+        unitCode: '94',
+        subtotal: 10000,
+        total: 10000,
+      };
+      const totalesPrueba: TotalAmountsAlegra = {
+        total: 10000,
+        grossTotal: 10000,
+        taxableTotal: 10000,
+        taxTotal: 0,
+        payableTotal: 10000,
+      };
+      const pagoPrueba: PaymentAlegra = {
+        type: 'CASH',
+        amount: 10000,
+        paymentForm: '1',
+        paymentMethod: '10',
+        paymentDueDate: new Date().toISOString().slice(0, 10),
+      };
+      const documentoPrueba = (numero: number) =>
         this.alegraClient.crearDocumentoEquivalentePos({
           token,
           baseUrl,
           companyId: habilitacion.alegraCompanyId!,
-          number: numeroPrueba,
-          items: [{ description: 'Producto de prueba', quantity: 1, price: 10000 }],
-          totalAmounts: { total: 10000 },
-          payments: [{ type: 'CASH', amount: 10000 }],
+          number: String(numero),
+          resolution,
+          items: [itemPrueba],
+          totalAmounts: totalesPrueba,
+          payments: [pagoPrueba],
         });
 
-      const doc1 = await documentoPrueba();
-      await documentoPrueba();
+      // Dos documentos + 1 nota de ajuste, con numeración correlativa real dentro
+      // del rango — no se reutiliza el mismo número dos veces (DIAN valida
+      // correlatividad una vez que el NIT está realmente autorizado).
+      const doc1 = await documentoPrueba(numeroInicial);
+      await documentoPrueba(numeroInicial + 1);
       await this.alegraClient.crearNotaAjuste({
         token,
         baseUrl,
         companyId: habilitacion.alegraCompanyId!,
-        documentoOrigenId: doc1.alegraDocumentId,
-        motivo: 'Nota de ajuste de prueba — testset de habilitación DIAN',
+        number: String(numeroInicial + 2),
+        discrepancyResponseCode: 1, // "Anulación del documento" (catálogo DIAN) — ver nota de crearNotaAjuste
+        documentoOrigen: { fullNumber: doc1.fullNumber!, cude: doc1.cude!, issueDate: doc1.fecha! },
+        items: [itemPrueba],
+        totalAmounts: totalesPrueba,
+        payments: [pagoPrueba],
       });
+      habilitacion.siguienteNumero = numeroInicial + 3;
 
-      // Los documentos de prueba del testset no consumen numeración real —
-      // Alegra los trata aparte (no quedan en el pool operativo del negocio).
       habilitacion.estado = EstadoHabilitacion.HABILITADO;
       habilitacion.ambiente = 'PRODUCCION';
       habilitacion.errorMensaje = undefined;
@@ -185,6 +297,72 @@ export class FacturacionElectronicaService {
     await this.intentarEmitir(documento, habilitacion);
   }
 
+  /**
+   * DIAN no exige desglose de impuesto por ítem en el body de este endpoint
+   * (confirmado en vivo: el error 400 de campos faltantes nunca pidió `taxes`
+   * en `items[]`) — solo `totalAmounts` a nivel de venta. Por eso alcanza con
+   * los agregados ya persistidos en `Venta` (`subtotal`/`descuentoTotal`/
+   * `impuestoTotal`/`total`), aunque el cálculo real del impuesto sea por
+   * producto (`Producto.porcentajeImpuesto`, ver `procesarItemsYStock` en
+   * `VentasService`) — no hace falta perseguir ese detalle por ítem acá.
+   */
+  private mapearItemsAlegra(venta: Venta): ItemAlegra[] {
+    return venta.items.map((item) => ({
+      description: item.nombreProducto,
+      quantity: Number(item.cantidad),
+      price: Number(item.precioUnitario),
+      // Catálogo UN/CEFACT de unidades de medida — "94" (unidad) confirmado en vivo.
+      // El POS no trackea unidad de medida por producto hoy, así que se asume "unidad" siempre.
+      unitCode: '94',
+      subtotal: Number(item.subtotal),
+      total: Number(item.subtotal),
+    }));
+  }
+
+  private mapearTotalesAlegra(venta: Venta): TotalAmountsAlegra {
+    const subtotal = Number(venta.subtotal);
+    const descuentoTotal = Number(venta.descuentoTotal);
+    const impuestoTotal = Number(venta.impuestoTotal);
+    return {
+      total: Number(venta.total),
+      grossTotal: subtotal,
+      taxableTotal: subtotal - descuentoTotal,
+      taxTotal: impuestoTotal,
+      payableTotal: Number(venta.total),
+    };
+  }
+
+  /**
+   * Catálogo DIAN de medios de pago (10 efectivo, 49 tarjeta débito, 45
+   * transferencia crédito bancario) — mapeo por nombre porque `VentaPago.metodoPago`
+   * es texto libre igual al `MetodoPago.nombre` del negocio, sin un código DIAN
+   * asociado. Nequi/Daviplata/Otro no tienen un código de billetera digital claro
+   * en el catálogo público, así que caen en "1" (instrumento no definido) — punto
+   * a revisar si algún negocio real termina necesitando el código exacto.
+   */
+  private codigoMedioPagoDian(metodoPago: string): string {
+    const nombre = metodoPago.toLowerCase();
+    if (nombre.includes('efectivo')) return '10';
+    if (nombre.includes('tarjeta')) return '49';
+    if (nombre.includes('transferencia')) return '45';
+    return '1';
+  }
+
+  private mapearPagosAlegra(venta: Venta): PaymentAlegra[] {
+    // DIAN exige una fecha de vencimiento del pago — para CONTADO no aplica
+    // realmente, así que se usa la fecha de hoy. CREDITO sí tiene cuotas con
+    // fecha propia (`Cuota.fechaVencimiento`) que esto todavía no está usando
+    // (mapeo simplificado, ver nota de la clase).
+    const fechaVencimiento = new Date().toISOString().slice(0, 10);
+    return (venta.pagos ?? []).map((pago) => ({
+      type: 'PAGO',
+      amount: Number(pago.monto),
+      paymentForm: venta.tipoVenta === 'CREDITO' ? '2' : '1',
+      paymentMethod: this.codigoMedioPagoDian(pago.metodoPago),
+      paymentDueDate: fechaVencimiento,
+    }));
+  }
+
   /** Compartido entre la emisión inicial (arriba) y el cron de reintento (Task 7). */
   async intentarEmitir(
     documento: DocumentoElectronico,
@@ -201,31 +379,46 @@ export class FacturacionElectronicaService {
     const numero = habilitacion.siguienteNumero ?? habilitacion.resolucionRangoDesde ?? 1;
 
     try {
+      const venta = await this.ventasRepository.findOneOrFail({
+        where: { id: documento.ventaId },
+        relations: { items: true, pagos: true },
+      });
+      const resolution = this.resolutionDesdeHabilitacion(habilitacion);
+      const items = this.mapearItemsAlegra(venta);
+      const totalAmounts = this.mapearTotalesAlegra(venta);
+      const payments = this.mapearPagosAlegra(venta);
+
       const resultado =
         documento.tipo === 'DEE_POS'
           ? await this.alegraClient.crearDocumentoEquivalentePos({
               token,
               baseUrl,
               companyId: habilitacion.alegraCompanyId!,
-              number: numero,
-              items: [],
-              totalAmounts: {},
-              payments: [],
+              number: String(numero),
+              resolution,
+              items,
+              totalAmounts,
+              payments,
             })
           : await this.alegraClient.crearFactura({
               token,
               baseUrl,
               companyId: habilitacion.alegraCompanyId!,
-              number: numero,
+              number: String(numero),
               customer: {},
-              items: [],
-              totalAmounts: {},
-              payments: [],
+              items,
+              totalAmounts,
+              payments,
+              resolution,
             });
 
       documento.alegraDocumentId = resultado.alegraDocumentId;
       if ('cude' in resultado) documento.cude = resultado.cude;
       if ('cufe' in resultado) documento.cufe = resultado.cufe;
+      // El envío llegó bien a Alegra (no lanzó) — cualquier errorMensaje de un
+      // intento anterior fallido ya no aplica, se limpia salvo que la DIAN
+      // rechace este intento con un motivo real (ver abajo).
+      documento.errorMensaje = undefined;
 
       if (resultado.legalStatus === 'ACCEPTED') {
         documento.estado = EstadoDocumentoElectronico.ACEPTADO;
@@ -233,6 +426,9 @@ export class FacturacionElectronicaService {
         documento.estado = EstadoDocumentoElectronico.ACEPTADO_CON_OBSERVACIONES;
       } else if (resultado.legalStatus === 'REJECTED') {
         documento.estado = EstadoDocumentoElectronico.RECHAZADO;
+        if ('governmentResponseMessage' in resultado) {
+          documento.errorMensaje = resultado.governmentResponseMessage;
+        }
       } // si no hay legalStatus todavía (WAITING_RESPONSE), documento queda PENDIENTE para el próximo reintento/webhook.
 
       // El envío llegó a Alegra (no lanzó) — el número quedó consumido ante la DIAN,
@@ -351,6 +547,7 @@ export class FacturacionElectronicaService {
       token: process.env.ALEGRA_RESELLER_TOKEN!,
       baseUrl: baseUrlPara(habilitacion.ambiente),
       alegraDocumentId: documento.alegraDocumentId,
+      tipo: documento.tipo,
     });
     return { urlXml: resultado.urlXml, urlPdf: resultado.urlPdf };
   }

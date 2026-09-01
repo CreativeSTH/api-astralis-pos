@@ -17,8 +17,17 @@ export class HabilitacionFacturacionElectronica extends BaseEntity {
   @Column({ nullable: true })
   direccion?: string;
 
+  /** Nombre del municipio, solo para mostrar en la UI — la llamada real a Alegra usa `ciudadCodigo`. */
   @Column({ nullable: true })
   ciudad?: string;
+
+  /** Código DIVIPOLA del municipio (5 dígitos) — Alegra valida `address.city` contra un enum estricto, no nombres libres. */
+  @Column({ name: 'ciudad_codigo', nullable: true })
+  ciudadCodigo?: string;
+
+  /** Código DIVIPOLA del departamento (2 dígitos) — se deriva del municipio elegido, no se pide aparte. */
+  @Column({ name: 'departamento_codigo', nullable: true })
+  departamentoCodigo?: string;
 
   @Column({ name: 'use_alegra_certificate', default: true })
   useAlegraCertificate: boolean;
@@ -61,8 +70,14 @@ export class HabilitacionFacturacionElectronica extends BaseEntity {
   @Column({ name: 'alegra_company_id', nullable: true })
   alegraCompanyId?: string;
 
-  @Column({ name: 'alegra_government_test_set_id', nullable: true })
-  alegraGovernmentTestSetId?: string;
+  /**
+   * TestSetId emitido por la propia DIAN en su portal de Habilitación (no lo
+   * genera Alegra — hay que suministrarlo). Para sandbox existe un id público
+   * documentado que no depende de trámite real; confirmado en vivo 2026-09-01
+   * contra el sandbox real de Alegra.
+   */
+  @Column({ name: 'government_test_set_id', nullable: true })
+  governmentTestSetId?: string;
 
   @Column({ default: 'SANDBOX' })
   ambiente: 'SANDBOX' | 'PRODUCCION';

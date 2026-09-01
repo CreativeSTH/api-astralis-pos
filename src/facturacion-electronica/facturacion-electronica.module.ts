@@ -8,12 +8,13 @@ import { HabilitacionFacturacionElectronica } from './entities/habilitacion-fact
 import { DocumentoElectronico } from './entities/documento-electronico.entity';
 import { Negocio } from '../negocios/entities/negocio.entity';
 import { Alerta } from '../alertas/entities/alerta.entity';
+import { Venta } from '../ventas/entities/venta.entity';
 import { SuscripcionesModule } from '../suscripciones/suscripciones.module';
 import { RealtimeModule } from '../realtime/realtime.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([HabilitacionFacturacionElectronica, DocumentoElectronico, Negocio, Alerta]),
+    TypeOrmModule.forFeature([HabilitacionFacturacionElectronica, DocumentoElectronico, Negocio, Alerta, Venta]),
     SuscripcionesModule,
     RealtimeModule,
   ],

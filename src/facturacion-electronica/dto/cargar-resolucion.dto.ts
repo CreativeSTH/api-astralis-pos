@@ -29,4 +29,11 @@ export class CargarResolucionDto {
   @ApiProperty()
   @IsString()
   technicalKey: string;
+
+  @ApiProperty({
+    description:
+      'TestSetId emitido por la DIAN en su portal de Habilitación (Paso 2 del trámite) — no lo genera Alegra.',
+  })
+  @IsString()
+  governmentTestSetId: string;
 }

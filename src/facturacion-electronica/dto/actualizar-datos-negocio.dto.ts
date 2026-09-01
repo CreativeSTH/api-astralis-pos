@@ -10,9 +10,17 @@ export class ActualizarDatosNegocioDto {
   @IsString()
   direccion: string;
 
-  @ApiProperty()
+  @ApiProperty({ description: 'Nombre del municipio, solo para mostrar — la validación real la hace ciudadCodigo' })
   @IsString()
-  ciudad: string;
+  ciudadNombre: string;
+
+  @ApiProperty({ description: 'Código DIVIPOLA del municipio (5 dígitos) — Alegra lo valida contra un enum estricto' })
+  @IsString()
+  ciudadCodigo: string;
+
+  @ApiProperty({ description: 'Código DIVIPOLA del departamento (2 dígitos), derivado del municipio elegido' })
+  @IsString()
+  departamentoCodigo: string;
 
   @ApiProperty({ default: true })
   @IsBoolean()
