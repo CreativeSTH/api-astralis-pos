@@ -34,4 +34,13 @@ export class SuscripcionesCronService {
       this.logger.error('Error en el cobro automático de suscripciones', error instanceof Error ? error.stack : String(error));
     }
   }
+
+  @Cron('0 1 * * *') // 1am — antes del cron de cobro automático (2am)
+  async enviarRecordatorios(): Promise<void> {
+    try {
+      await this.suscripcionesService.enviarRecordatorios();
+    } catch (error) {
+      this.logger.error('Error enviando recordatorios de pago', error instanceof Error ? error.stack : String(error));
+    }
+  }
 }

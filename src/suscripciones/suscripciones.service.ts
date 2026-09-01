@@ -451,6 +451,10 @@ export class SuscripcionesService {
     // acumulando el contador en el próximo fallo aislado, marcando VENCIDA mucho antes de las 3
     // fallas CONSECUTIVAS que exige el spec.
     suscripcion.intentosFallidosCobro = 0;
+    // Cada ciclo de facturación empieza limpio — sin esto, un negocio que renovó recién no
+    // volvería a recibir el recordatorio de "día -2" del próximo ciclo porque la etiqueta de
+    // este ciclo ya estaría marcada.
+    suscripcion.recordatoriosEnviados = [];
     await this.suscripcionesRepository.save(suscripcion);
 
     this.realtimeGateway.emitToNegocio(negocioId, 'suscripcion:cambio', { estado: EstadoSuscripcion.ACTIVA });

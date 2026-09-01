@@ -185,10 +185,11 @@ describe('SuscripcionesService — cobrarAutomatico', () => {
     service = moduleRef.get(SuscripcionesService);
   });
 
-  it('cobro exitoso resetea intentosFallidosCobro y extiende fechaFin', async () => {
+  it('cobro exitoso resetea intentosFallidosCobro, recordatoriosEnviados y extiende fechaFin', async () => {
     const suscripcionVencida = {
       id: 'sus-1', negocioId: 'neg-1', paqueteId: 'pro-1',
       estado: 'ACTIVA', fechaFin: new Date(Date.now() - 86400000), intentosFallidosCobro: 1,
+      recordatoriosEnviados: ['DIA_-2', 'DIA_-1', 'DIA_0'],
     };
     suscripcionesRepo.find.mockResolvedValue([suscripcionVencida]);
     suscripcionesRepo.findOne.mockResolvedValue(suscripcionVencida);
@@ -201,6 +202,7 @@ describe('SuscripcionesService — cobrarAutomatico', () => {
     const guardado = suscripcionesRepo.save.mock.calls.at(-1)![0];
     expect(guardado.estado).toBe('ACTIVA');
     expect(guardado.fechaFin.getTime()).toBeGreaterThan(Date.now());
+    expect(guardado.recordatoriosEnviados).toEqual([]);
   });
 
   it('al tercer fallo consecutivo marca VENCIDA', async () => {
