@@ -460,52 +460,83 @@ export class SuscripcionesService {
       });
       if (!medioPago) continue; // sin tarjeta guardada — lo maneja marcarVencidas()
 
-      const paquete = await this.paquetesService.findOne(suscripcion.paqueteId);
-      const llavePrivada = process.env.WOMPI_PLATAFORMA_LLAVE_PRIVADA!;
-      const llaveIntegridad = process.env.WOMPI_PLATAFORMA_LLAVE_INTEGRIDAD!;
-      const montoEnCentavos = Math.round(Number(paquete.precioMensual) * 100);
-      const referencia = randomUUID();
-      const currency = 'COP';
-      const signature = createHash('sha256')
-        .update(`${referencia}${montoEnCentavos}${currency}${llaveIntegridad}`)
-        .digest('hex');
+      // Guarda contra doble cobro si el cron corre dos veces el mismo día (ej. el proceso murió
+      // justo después de que Wompi aprobó el cobro pero antes de que este método terminara de
+      // actualizar la Suscripcion, y algo lo reintenta) — mismo criterio de ventana de tiempo que
+      // la idempotencia de `iniciarReactivacion`, pero con una ventana de ~1 día porque este cron
+      // corre una vez por día, no por click de usuario.
+      const yaIntentadoHoy = await this.transaccionesRepository
+        .createQueryBuilder('t')
+        .where('t.negocio_id = :negocioId', { negocioId: suscripcion.negocioId })
+        .andWhere('t.origen = :origen', { origen: 'AUTOMATICO' })
+        .andWhere("t.created_at > now() - interval '20 hours'")
+        .getOne();
+      if (yaIntentadoHoy) continue;
 
-      const { wompiTransactionId, status } = await this.wompiClient.crearTransaccionConFuente({
-        llavePrivada,
-        amountInCents: montoEnCentavos,
-        currency,
-        reference: referencia,
-        signature,
-        paymentSourceId: medioPago.wompiPaymentSourceId,
-        customerEmail: 'facturacion@somosaura.dev',
-        recurrente: true,
-      });
+      try {
+        const paquete = await this.paquetesService.findOne(suscripcion.paqueteId);
+        const llavePrivada = process.env.WOMPI_PLATAFORMA_LLAVE_PRIVADA!;
+        const llaveIntegridad = process.env.WOMPI_PLATAFORMA_LLAVE_INTEGRIDAD!;
+        const montoEnCentavos = Math.round(Number(paquete.precioMensual) * 100);
+        const referencia = randomUUID();
+        const currency = 'COP';
+        const signature = createHash('sha256')
+          .update(`${referencia}${montoEnCentavos}${currency}${llaveIntegridad}`)
+          .digest('hex');
 
-      await this.transaccionesRepository.save(
-        this.transaccionesRepository.create({
-          negocioId: suscripcion.negocioId,
-          paqueteId: suscripcion.paqueteId,
-          referencia,
-          wompiTransactionId,
-          metodoPago: 'TARJETA',
-          estado: status === 'APPROVED' ? 'APROBADA' : 'PENDIENTE',
-          montoEnCentavos,
-          origen: 'AUTOMATICO',
-        }),
-      );
+        const { wompiTransactionId, status } = await this.wompiClient.crearTransaccionConFuente({
+          llavePrivada,
+          amountInCents: montoEnCentavos,
+          currency,
+          reference: referencia,
+          signature,
+          paymentSourceId: medioPago.wompiPaymentSourceId,
+          customerEmail: 'facturacion@somosaura.dev',
+          recurrente: true,
+        });
 
-      const actual = await this.suscripcionesRepository.findOne({ where: { id: suscripcion.id } });
-      if (!actual) continue;
+        await this.transaccionesRepository.save(
+          this.transaccionesRepository.create({
+            negocioId: suscripcion.negocioId,
+            paqueteId: suscripcion.paqueteId,
+            referencia,
+            wompiTransactionId,
+            metodoPago: 'TARJETA',
+            estado: status === 'APPROVED' ? 'APROBADA' : 'PENDIENTE',
+            montoEnCentavos,
+            origen: 'AUTOMATICO',
+          }),
+        );
 
-      if (status === 'APPROVED') {
-        await this.activarTrasPago(actual.negocioId, actual.paqueteId);
-      } else {
-        actual.intentosFallidosCobro += 1;
-        if (actual.intentosFallidosCobro >= 3) {
-          actual.estado = EstadoSuscripcion.VENCIDA;
+        if (status === 'APPROVED') {
+          await this.activarTrasPago(suscripcion.negocioId, suscripcion.paqueteId);
+        } else {
+          await this.registrarIntentoFallido(suscripcion.negocioId);
         }
-        await this.suscripcionesRepository.save(actual);
+      } catch (error) {
+        // Un error acá (Wompi caído, paquete borrado, timeout de red) NO puede tumbar el resto de
+        // la corrida — sin este catch, una sola excepción cortaba el for y dejaba SIN PROCESAR a
+        // todos los negocios que venían después en el array esa noche. Tampoco puede dejar a este
+        // negocio sin contar como intento: sin esto, `intentosFallidosCobro` nunca avanza para un
+        // negocio cuyo error ocurre siempre antes de la línea que lo incrementa, y ese negocio
+        // queda en limbo para siempre (ni se cobra ni llega nunca a los 3 fallos que lo marcarían
+        // VENCIDA — `marcarVencidas()` además lo excluye por tener medio de pago activo).
+        this.logger.error(
+          `Error cobrando automáticamente al negocio ${suscripcion.negocioId}`,
+          error instanceof Error ? error.stack : String(error),
+        );
+        await this.registrarIntentoFallido(suscripcion.negocioId);
       }
     }
+  }
+
+  private async registrarIntentoFallido(negocioId: string): Promise<void> {
+    const actual = await this.suscripcionesRepository.findOne({ where: { negocioId } });
+    if (!actual) return;
+    actual.intentosFallidosCobro += 1;
+    if (actual.intentosFallidosCobro >= 3) {
+      actual.estado = EstadoSuscripcion.VENCIDA;
+    }
+    await this.suscripcionesRepository.save(actual);
   }
 }

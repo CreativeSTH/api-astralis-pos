@@ -133,18 +133,31 @@ describe('SuscripcionesService — cobrarAutomatico', () => {
   let suscripcionesRepo: { find: jest.Mock; findOne: jest.Mock; save: jest.Mock };
   let medioPagoRepo: { find: jest.Mock; findOne: jest.Mock };
   let wompiClient: { crearTransaccionConFuente: jest.Mock };
+  let sinIntentoHoyQueryBuilder: { where: jest.Mock; andWhere: jest.Mock; getOne: jest.Mock };
 
   beforeEach(async () => {
     suscripcionesRepo = { find: jest.fn(), findOne: jest.fn(), save: jest.fn(async (x: unknown) => x) };
     medioPagoRepo = { find: jest.fn(), findOne: jest.fn() };
     wompiClient = { crearTransaccionConFuente: jest.fn() };
+    sinIntentoHoyQueryBuilder = {
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(null),
+    };
     const paquetesService = { findOne: jest.fn().mockResolvedValue({ id: 'pro-1', precioMensual: 139900, nombre: 'Profesional' }) };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
         SuscripcionesService,
         { provide: getRepositoryToken(Suscripcion), useValue: suscripcionesRepo },
-        { provide: getRepositoryToken(TransaccionSuscripcion), useValue: { save: jest.fn(async (x: unknown) => x), create: jest.fn((x: unknown) => x) } },
+        {
+          provide: getRepositoryToken(TransaccionSuscripcion),
+          useValue: {
+            save: jest.fn(async (x: unknown) => x),
+            create: jest.fn((x: unknown) => x),
+            createQueryBuilder: jest.fn(() => sinIntentoHoyQueryBuilder),
+          },
+        },
         { provide: getRepositoryToken(MedioPagoGuardado), useValue: medioPagoRepo },
         { provide: WompiClientService, useValue: wompiClient },
         { provide: PaquetesService, useValue: paquetesService },
@@ -201,5 +214,106 @@ describe('SuscripcionesService — cobrarAutomatico', () => {
     await service.cobrarAutomatico();
 
     expect(wompiClient.crearTransaccionConFuente).not.toHaveBeenCalled();
+  });
+
+  it('no cobra dos veces si ya hay un intento automático reciente (protege contra un cron reiniciado el mismo día)', async () => {
+    const suscripcionVencida = {
+      id: 'sus-1', negocioId: 'neg-1', paqueteId: 'pro-1',
+      estado: 'ACTIVA', fechaFin: new Date(Date.now() - 86400000), intentosFallidosCobro: 0,
+    };
+    suscripcionesRepo.find.mockResolvedValue([suscripcionVencida]);
+    medioPagoRepo.findOne.mockResolvedValue({ negocioId: 'neg-1', wompiPaymentSourceId: 3891, activo: true });
+    sinIntentoHoyQueryBuilder.getOne.mockResolvedValue({ id: 'txn-previa' });
+
+    await service.cobrarAutomatico();
+
+    expect(wompiClient.crearTransaccionConFuente).not.toHaveBeenCalled();
+  });
+
+  it('un error cobrando a un negocio no corta la corrida ni lo deja sin contar como intento fallido', async () => {
+    const suscripcionConError = {
+      id: 'sus-1', negocioId: 'neg-error', paqueteId: 'pro-1',
+      estado: 'ACTIVA', fechaFin: new Date(Date.now() - 86400000), intentosFallidosCobro: 0,
+    };
+    const suscripcionSiguiente = {
+      id: 'sus-2', negocioId: 'neg-2', paqueteId: 'pro-1',
+      estado: 'ACTIVA', fechaFin: new Date(Date.now() - 86400000), intentosFallidosCobro: 0,
+    };
+    suscripcionesRepo.find.mockResolvedValue([suscripcionConError, suscripcionSiguiente]);
+    medioPagoRepo.findOne.mockResolvedValue({ negocioId: 'neg-x', wompiPaymentSourceId: 3891, activo: true });
+    suscripcionesRepo.findOne.mockImplementation(async ({ where }: { where: { negocioId: string } }) =>
+      where.negocioId === 'neg-error' ? suscripcionConError : suscripcionSiguiente,
+    );
+    wompiClient.crearTransaccionConFuente
+      .mockRejectedValueOnce(new Error('Wompi caído'))
+      .mockResolvedValueOnce({ wompiTransactionId: 'txn-2', status: 'APPROVED' });
+
+    await service.cobrarAutomatico();
+
+    expect(wompiClient.crearTransaccionConFuente).toHaveBeenCalledTimes(2);
+    expect(suscripcionConError.intentosFallidosCobro).toBe(1);
+  });
+});
+
+describe('SuscripcionesService — marcarVencidas', () => {
+  it('excluye de la actualización a los negocios con medio de pago activo', async () => {
+    const queryBuilder = {
+      update: jest.fn().mockReturnThis(),
+      set: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      execute: jest.fn().mockResolvedValue(undefined),
+    };
+    const suscripcionesRepo = { createQueryBuilder: jest.fn(() => queryBuilder) };
+    const medioPagoRepo = { find: jest.fn().mockResolvedValue([{ negocioId: 'neg-con-tarjeta', activo: true }]) };
+
+    const moduleRef = await Test.createTestingModule({
+      providers: [
+        SuscripcionesService,
+        { provide: getRepositoryToken(Suscripcion), useValue: suscripcionesRepo },
+        { provide: getRepositoryToken(TransaccionSuscripcion), useValue: {} },
+        { provide: getRepositoryToken(MedioPagoGuardado), useValue: medioPagoRepo },
+        { provide: WompiClientService, useValue: {} },
+        { provide: PaquetesService, useValue: {} },
+        { provide: RealtimeGateway, useValue: { emitToNegocio: jest.fn() } },
+      ],
+    }).compile();
+
+    const service = moduleRef.get(SuscripcionesService);
+    await service.marcarVencidas();
+
+    expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+      'negocio_id NOT IN (:...idsExcluidos)',
+      { idsExcluidos: ['neg-con-tarjeta'] },
+    );
+  });
+
+  it('no agrega el filtro de exclusión si nadie tiene medio de pago activo', async () => {
+    const queryBuilder = {
+      update: jest.fn().mockReturnThis(),
+      set: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      execute: jest.fn().mockResolvedValue(undefined),
+    };
+    const suscripcionesRepo = { createQueryBuilder: jest.fn(() => queryBuilder) };
+    const medioPagoRepo = { find: jest.fn().mockResolvedValue([]) };
+
+    const moduleRef = await Test.createTestingModule({
+      providers: [
+        SuscripcionesService,
+        { provide: getRepositoryToken(Suscripcion), useValue: suscripcionesRepo },
+        { provide: getRepositoryToken(TransaccionSuscripcion), useValue: {} },
+        { provide: getRepositoryToken(MedioPagoGuardado), useValue: medioPagoRepo },
+        { provide: WompiClientService, useValue: {} },
+        { provide: PaquetesService, useValue: {} },
+        { provide: RealtimeGateway, useValue: { emitToNegocio: jest.fn() } },
+      ],
+    }).compile();
+
+    const service = moduleRef.get(SuscripcionesService);
+    await service.marcarVencidas();
+
+    expect(queryBuilder.andWhere).toHaveBeenCalledTimes(1);
   });
 });
