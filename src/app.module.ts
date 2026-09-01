@@ -43,6 +43,7 @@ import { TiendaOnlineModule } from './tienda-online/tienda-online.module';
 import { CatalogoClienteModule } from './catalogo-cliente/catalogo-cliente.module';
 import { PaquetesModule } from './paquetes/paquetes.module';
 import { SuscripcionesModule } from './suscripciones/suscripciones.module';
+import { FacturacionElectronicaModule } from './facturacion-electronica/facturacion-electronica.module';
 
 @Module({
   imports: [
@@ -104,6 +105,7 @@ import { SuscripcionesModule } from './suscripciones/suscripciones.module';
     CatalogoClienteModule,
     PaquetesModule,
     SuscripcionesModule,
+    FacturacionElectronicaModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },
