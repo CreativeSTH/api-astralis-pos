@@ -185,6 +185,12 @@ export class WompiClientService {
         signature: params.signature,
         customer_email: params.customerEmail,
         payment_source_id: params.paymentSourceId,
+        // Sin `payment_method.installments`, Wompi rechaza el POST con 422 "No se especificó el
+        // número de cuotas (installments)" — confirmado en vivo contra el sandbox real antes de
+        // este fix: sin esto, TODO cobro con fuente de pago (guardado inicial Y cobro automático
+        // recurrente) fallaba siempre, encubierto porque el error nunca se probó contra Wompi de
+        // verdad hasta este punto. Suscripciones siempre se cobran de una sola vez.
+        payment_method: { installments: 1 },
         recurrent: params.recurrente ?? false,
       }),
     });

@@ -1,5 +1,6 @@
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { createHash } from 'crypto';
 import { SuscripcionesService } from './suscripciones.service';
 import { Suscripcion } from './entities/suscripcion.entity';
 import { EstadoSuscripcion } from './entities/estado-suscripcion.enum';
@@ -203,6 +204,21 @@ describe('SuscripcionesService — cobrarAutomatico', () => {
     expect(guardado.estado).toBe('VENCIDA');
   });
 
+  it('un status PENDING (confirmado real contra el sandbox de Wompi: así responde un cobro con payment_source) NO cuenta como fallo inmediato', async () => {
+    const suscripcionVencida = {
+      id: 'sus-1', negocioId: 'neg-1', paqueteId: 'pro-1',
+      estado: 'ACTIVA', fechaFin: new Date(Date.now() - 86400000), intentosFallidosCobro: 0,
+    };
+    suscripcionesRepo.find.mockResolvedValue([suscripcionVencida]);
+    medioPagoRepo.findOne.mockResolvedValue({ negocioId: 'neg-1', wompiPaymentSourceId: 3891, activo: true });
+    wompiClient.crearTransaccionConFuente.mockResolvedValue({ wompiTransactionId: 'txn-4', status: 'PENDING' });
+
+    await service.cobrarAutomatico();
+
+    expect(suscripcionesRepo.save).not.toHaveBeenCalled();
+    expect(suscripcionVencida.intentosFallidosCobro).toBe(0);
+  });
+
   it('sin medio de pago activo no intenta cobrar', async () => {
     const suscripcionVencida = {
       id: 'sus-1', negocioId: 'neg-1', paqueteId: 'pro-1',
@@ -339,5 +355,117 @@ describe('SuscripcionesService — marcarVencidas', () => {
     await service.marcarVencidas();
 
     expect(queryBuilder.andWhere).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('SuscripcionesService — procesarWebhookWompi cuenta el fallo de un cobro AUTOMATICO', () => {
+  const SECRETO = 'secreto-test';
+  const OLD_ENV = process.env.WOMPI_PLATAFORMA_LLAVE_SECRETA_EVENTOS;
+
+  beforeEach(() => {
+    process.env.WOMPI_PLATAFORMA_LLAVE_SECRETA_EVENTOS = SECRETO;
+  });
+
+  afterAll(() => {
+    process.env.WOMPI_PLATAFORMA_LLAVE_SECRETA_EVENTOS = OLD_ENV;
+  });
+
+  function payloadPara(status: 'APPROVED' | 'DECLINED', transactionId: string) {
+    const timestamp = 1234567890;
+    const valores = [transactionId, status].join('');
+    const checksum = createHash('sha256').update(valores + timestamp + SECRETO).digest('hex');
+    return {
+      event: 'transaction.updated',
+      data: { transaction: { id: transactionId, reference: 'ref-auto-1', status } },
+      signature: { properties: ['transaction.id', 'transaction.status'], checksum },
+      timestamp,
+    };
+  }
+
+  it('un DECLINED confirmado por webhook sobre una transacción origen=AUTOMATICO incrementa intentosFallidosCobro', async () => {
+    const transaccion = {
+      id: 'txn-1', negocioId: 'neg-1', paqueteId: 'pro-1', referencia: 'ref-auto-1',
+      wompiTransactionId: 'wtx-1', estado: 'PENDIENTE', origen: 'AUTOMATICO',
+    };
+    const suscripcion = { negocioId: 'neg-1', intentosFallidosCobro: 0 };
+    const transaccionesRepo = { findOne: jest.fn().mockResolvedValue(transaccion), save: jest.fn(async (x: unknown) => x) };
+    const suscripcionesRepo = { findOne: jest.fn().mockResolvedValue(suscripcion), save: jest.fn(async (x: unknown) => x) };
+
+    const moduleRef = await Test.createTestingModule({
+      providers: [
+        SuscripcionesService,
+        { provide: getRepositoryToken(Suscripcion), useValue: suscripcionesRepo },
+        { provide: getRepositoryToken(TransaccionSuscripcion), useValue: transaccionesRepo },
+        { provide: getRepositoryToken(MedioPagoGuardado), useValue: {} },
+        { provide: WompiClientService, useValue: {} },
+        { provide: PaquetesService, useValue: {} },
+        { provide: RealtimeGateway, useValue: { emitToNegocio: jest.fn() } },
+      ],
+    }).compile();
+
+    const service = moduleRef.get(SuscripcionesService);
+    await service.procesarWebhookWompi(payloadPara('DECLINED', 'wtx-1'));
+
+    expect(suscripcion.intentosFallidosCobro).toBe(1);
+  });
+
+  it('un DECLINED sobre una transacción origen=MANUAL no toca intentosFallidosCobro', async () => {
+    const transaccion = {
+      id: 'txn-1', negocioId: 'neg-1', paqueteId: 'pro-1', referencia: 'ref-auto-1',
+      wompiTransactionId: 'wtx-1', estado: 'PENDIENTE', origen: 'MANUAL',
+    };
+    const suscripcionesRepo = { findOne: jest.fn(), save: jest.fn(async (x: unknown) => x) };
+    const transaccionesRepo = { findOne: jest.fn().mockResolvedValue(transaccion), save: jest.fn(async (x: unknown) => x) };
+
+    const moduleRef = await Test.createTestingModule({
+      providers: [
+        SuscripcionesService,
+        { provide: getRepositoryToken(Suscripcion), useValue: suscripcionesRepo },
+        { provide: getRepositoryToken(TransaccionSuscripcion), useValue: transaccionesRepo },
+        { provide: getRepositoryToken(MedioPagoGuardado), useValue: {} },
+        { provide: WompiClientService, useValue: {} },
+        { provide: PaquetesService, useValue: {} },
+        { provide: RealtimeGateway, useValue: { emitToNegocio: jest.fn() } },
+      ],
+    }).compile();
+
+    const service = moduleRef.get(SuscripcionesService);
+    await service.procesarWebhookWompi(payloadPara('DECLINED', 'wtx-1'));
+
+    expect(suscripcionesRepo.findOne).not.toHaveBeenCalled();
+  });
+});
+
+describe('SuscripcionesService — reconciliarPendientes cuenta el fallo de un cobro AUTOMATICO', () => {
+  it('un DECLINED confirmado por polling sobre una transacción origen=AUTOMATICO incrementa intentosFallidosCobro', async () => {
+    const transaccionPendiente = {
+      id: 'txn-1', negocioId: 'neg-1', paqueteId: 'pro-1', referencia: 'ref-auto-1',
+      wompiTransactionId: 'wtx-1', estado: 'PENDIENTE', origen: 'AUTOMATICO', createdAt: new Date(),
+    };
+    const suscripcion = { negocioId: 'neg-1', intentosFallidosCobro: 0 };
+    const transaccionesRepo = {
+      find: jest.fn().mockResolvedValue([transaccionPendiente]),
+      findOne: jest.fn().mockResolvedValue(transaccionPendiente),
+      save: jest.fn(async (x: unknown) => x),
+    };
+    const suscripcionesRepo = { findOne: jest.fn().mockResolvedValue(suscripcion), save: jest.fn(async (x: unknown) => x) };
+    const wompiClient = { obtenerTransaccion: jest.fn().mockResolvedValue({ status: 'DECLINED' }) };
+
+    const moduleRef = await Test.createTestingModule({
+      providers: [
+        SuscripcionesService,
+        { provide: getRepositoryToken(Suscripcion), useValue: suscripcionesRepo },
+        { provide: getRepositoryToken(TransaccionSuscripcion), useValue: transaccionesRepo },
+        { provide: getRepositoryToken(MedioPagoGuardado), useValue: {} },
+        { provide: WompiClientService, useValue: wompiClient },
+        { provide: PaquetesService, useValue: {} },
+        { provide: RealtimeGateway, useValue: { emitToNegocio: jest.fn() } },
+      ],
+    }).compile();
+
+    const service = moduleRef.get(SuscripcionesService);
+    await service.reconciliarPendientes();
+
+    expect(suscripcion.intentosFallidosCobro).toBe(1);
   });
 });

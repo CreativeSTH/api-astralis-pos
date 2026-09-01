@@ -355,6 +355,16 @@ export class SuscripcionesService {
     if (status === 'APPROVED') {
       await this.activarTrasPago(transaccion.negocioId, transaccion.paqueteId);
     } else {
+      // Confirmado en vivo contra el sandbox real: un cobro con tarjeta vía payment_source NO
+      // resuelve APPROVED/DECLINED de forma síncrona — `crearTransaccionConFuente` devuelve
+      // PENDING y esto (el webhook) es lo que confirma el resultado real más adelante. Si el
+      // origen es AUTOMATICO, este es el único lugar (junto con `reconciliarPendientes`, mismo
+      // fix abajo) donde un DECLINED real cuenta como intento fallido — `cobrarAutomatico` ya NO
+      // lo cuenta cuando el estado inicial es PENDING, para no penalizar un cobro que en realidad
+      // puede terminar aprobado segundos después.
+      if (transaccion.origen === 'AUTOMATICO') {
+        await this.registrarIntentoFallido(transaccion.negocioId);
+      }
       // Mismo motivo que el fix ya aplicado en PagosService.resolverTransaccionTerminal: sin avisar
       // también el rechazo, el frontend queda esperando para siempre un evento que nunca llega.
       this.realtimeGateway.emitToNegocio(transaccion.negocioId, 'suscripcion:pago-declinado', {
@@ -385,6 +395,12 @@ export class SuscripcionesService {
       if (status === 'APPROVED') {
         await this.activarTrasPago(actual.negocioId, actual.paqueteId);
       } else {
+        // Mismo motivo que en procesarWebhookWompi: si el webhook nunca llegó y este polling es
+        // el que confirma el DECLINED, sigue siendo el momento real de contar el intento fallido
+        // para el cron de cobro automático.
+        if (actual.origen === 'AUTOMATICO') {
+          await this.registrarIntentoFallido(actual.negocioId);
+        }
         this.realtimeGateway.emitToNegocio(actual.negocioId, 'suscripcion:pago-declinado', {
           referencia: actual.referencia,
         });
@@ -507,15 +523,22 @@ export class SuscripcionesService {
             referencia,
             wompiTransactionId,
             metodoPago: 'TARJETA',
-            estado: status === 'APPROVED' ? 'APROBADA' : 'PENDIENTE',
+            estado: status === 'APPROVED' ? 'APROBADA' : status === 'DECLINED' ? 'DECLINADA' : 'PENDIENTE',
             montoEnCentavos,
             origen: 'AUTOMATICO',
           }),
         );
 
+        // Confirmado en vivo contra el sandbox real de Wompi: un cobro con `payment_source_id`
+        // NO resuelve APPROVED/DECLINED de forma síncrona — la respuesta normal es PENDING, y el
+        // resultado real llega después por webhook (`procesarWebhookWompi`) o por el polling de
+        // respaldo (`reconciliarPendientes`), que ahora son los que cuentan el intento fallido si
+        // termina en DECLINED (ver esos métodos). Contarlo acá también para un PENDING penalizaría
+        // un cobro que en la práctica puede terminar aprobado segundos después — solo un DECLINED
+        // *inmediato y real* (poco común, pero posible) cuenta como fallo en este mismo momento.
         if (status === 'APPROVED') {
           await this.activarTrasPago(suscripcion.negocioId, suscripcion.paqueteId);
-        } else {
+        } else if (status === 'DECLINED') {
           await this.registrarIntentoFallido(suscripcion.negocioId);
         }
       } catch (error) {

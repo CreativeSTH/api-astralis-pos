@@ -333,6 +333,10 @@ describe('WompiClientService — payment sources', () => {
     const body = JSON.parse(opciones.body as string);
     expect(body.payment_source_id).toBe(3891);
     expect(body.recurrent).toBe(true);
+    // Confirmado en vivo contra el sandbox real de Wompi: sin esto, Wompi rechaza el POST con
+    // 422 "No se especificó el número de cuotas (installments)" — bug real que habría tumbado
+    // TODO cobro con fuente de pago en producción.
+    expect(body.payment_method).toEqual({ installments: 1 });
   });
 
   it('crearTransaccionConFuente lanza error cuando Wompi retorna ok: false', async () => {
