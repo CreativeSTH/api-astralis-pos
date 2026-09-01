@@ -455,25 +455,30 @@ export class SuscripcionesService {
     for (const suscripcion of vencidas) {
       if (!suscripcion.fechaFin || suscripcion.fechaFin > ahora) continue;
 
-      const medioPago = await this.medioPagoRepository.findOne({
-        where: { negocioId: suscripcion.negocioId, activo: true },
-      });
-      if (!medioPago) continue; // sin tarjeta guardada — lo maneja marcarVencidas()
-
-      // Guarda contra doble cobro si el cron corre dos veces el mismo día (ej. el proceso murió
-      // justo después de que Wompi aprobó el cobro pero antes de que este método terminara de
-      // actualizar la Suscripcion, y algo lo reintenta) — mismo criterio de ventana de tiempo que
-      // la idempotencia de `iniciarReactivacion`, pero con una ventana de ~1 día porque este cron
-      // corre una vez por día, no por click de usuario.
-      const yaIntentadoHoy = await this.transaccionesRepository
-        .createQueryBuilder('t')
-        .where('t.negocio_id = :negocioId', { negocioId: suscripcion.negocioId })
-        .andWhere('t.origen = :origen', { origen: 'AUTOMATICO' })
-        .andWhere("t.created_at > now() - interval '20 hours'")
-        .getOne();
-      if (yaIntentadoHoy) continue;
-
+      // Todo el cuerpo por negocio, incluidas las dos consultas de guarda de abajo, vive DENTRO
+      // del try — un error de DB puntual en cualquiera de ellas (no solo en la llamada a Wompi)
+      // tiene que contar igual como intento fallido de este negocio, no escaparse del for y dejar
+      // sin procesar a los que vienen después esa noche (mismo bug que el catch de más abajo ya
+      // documenta, pero que originalmente solo cubría la mitad del cuerpo).
       try {
+        const medioPago = await this.medioPagoRepository.findOne({
+          where: { negocioId: suscripcion.negocioId, activo: true },
+        });
+        if (!medioPago) continue; // sin tarjeta guardada — lo maneja marcarVencidas()
+
+        // Guarda contra doble cobro si el cron corre dos veces el mismo día (ej. el proceso murió
+        // justo después de que Wompi aprobó el cobro pero antes de que este método terminara de
+        // actualizar la Suscripcion, y algo lo reintenta) — mismo criterio de ventana de tiempo que
+        // la idempotencia de `iniciarReactivacion`, pero con una ventana de ~1 día porque este cron
+        // corre una vez por día, no por click de usuario.
+        const yaIntentadoHoy = await this.transaccionesRepository
+          .createQueryBuilder('t')
+          .where('t.negocio_id = :negocioId', { negocioId: suscripcion.negocioId })
+          .andWhere('t.origen = :origen', { origen: 'AUTOMATICO' })
+          .andWhere("t.created_at > now() - interval '20 hours'")
+          .getOne();
+        if (yaIntentadoHoy) continue;
+
         const paquete = await this.paquetesService.findOne(suscripcion.paqueteId);
         const llavePrivada = process.env.WOMPI_PLATAFORMA_LLAVE_PRIVADA!;
         const llaveIntegridad = process.env.WOMPI_PLATAFORMA_LLAVE_INTEGRIDAD!;

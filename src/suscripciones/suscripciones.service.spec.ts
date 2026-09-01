@@ -230,6 +230,30 @@ describe('SuscripcionesService — cobrarAutomatico', () => {
     expect(wompiClient.crearTransaccionConFuente).not.toHaveBeenCalled();
   });
 
+  it('un error ANTES de llamar a Wompi (ej. falla la consulta de medio de pago) también cuenta como intento fallido y no corta la corrida', async () => {
+    const suscripcionConError = {
+      id: 'sus-1', negocioId: 'neg-error', paqueteId: 'pro-1',
+      estado: 'ACTIVA', fechaFin: new Date(Date.now() - 86400000), intentosFallidosCobro: 0,
+    };
+    const suscripcionSiguiente = {
+      id: 'sus-2', negocioId: 'neg-2', paqueteId: 'pro-1',
+      estado: 'ACTIVA', fechaFin: new Date(Date.now() - 86400000), intentosFallidosCobro: 0,
+    };
+    suscripcionesRepo.find.mockResolvedValue([suscripcionConError, suscripcionSiguiente]);
+    medioPagoRepo.findOne
+      .mockRejectedValueOnce(new Error('DB caída'))
+      .mockResolvedValueOnce({ negocioId: 'neg-2', wompiPaymentSourceId: 3891, activo: true });
+    suscripcionesRepo.findOne.mockImplementation(async ({ where }: { where: { negocioId: string } }) =>
+      where.negocioId === 'neg-error' ? suscripcionConError : suscripcionSiguiente,
+    );
+    wompiClient.crearTransaccionConFuente.mockResolvedValue({ wompiTransactionId: 'txn-2', status: 'APPROVED' });
+
+    await service.cobrarAutomatico();
+
+    expect(suscripcionConError.intentosFallidosCobro).toBe(1);
+    expect(wompiClient.crearTransaccionConFuente).toHaveBeenCalledTimes(1);
+  });
+
   it('un error cobrando a un negocio no corta la corrida ni lo deja sin contar como intento fallido', async () => {
     const suscripcionConError = {
       id: 'sus-1', negocioId: 'neg-error', paqueteId: 'pro-1',
