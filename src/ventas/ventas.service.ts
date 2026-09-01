@@ -38,6 +38,7 @@ import { DireccionCliente } from '../clientes/entities/direccion-cliente.entity'
 import { EstadoDomicilio } from '../common/enums/estado-domicilio.enum';
 import { Sucursal } from '../sucursales/entities/sucursal.entity';
 import { TipoComprobante } from '../common/enums/tipo-comprobante.enum';
+import { FacturacionElectronicaService } from '../facturacion-electronica/facturacion-electronica.service';
 import { NumeracionComprobanteService } from '../facturacion/numeracion-comprobante.service';
 import { PromocionesPricingService } from '../cupones/promociones-pricing.service';
 import { CuponValidacionService } from '../cupones/cupon-validacion.service';
@@ -69,6 +70,7 @@ export class VentasService {
     private readonly numeracionComprobanteService: NumeracionComprobanteService,
     private readonly promocionesPricingService: PromocionesPricingService,
     private readonly cuponValidacionService: CuponValidacionService,
+    private readonly facturacionElectronicaService: FacturacionElectronicaService,
     private readonly cls: ClsService,
   ) {}
 
@@ -130,6 +132,14 @@ export class VentasService {
         ? await this.crearVentaCredito(dto)
         : await this.crearVentaContado(dto);
     await this.verificarStockPostVenta(venta);
+    // Fire-and-forget a propósito: la venta ya está cobrada y confirmada, la
+    // emisión del documento electrónico nunca debe bloquear ni fallar la
+    // respuesta al cajero — ver FacturacionElectronicaService.emitirDocumento,
+    // que nunca lanza (fail-closed interno + try/catch de red).
+    this.facturacionElectronicaService.emitirDocumento(venta).catch(() => {
+      // emitirDocumento ya loggea/persiste sus propios errores en DocumentoElectronico;
+      // este catch solo evita una promesa rechazada sin manejar.
+    });
     if (domicilio) {
       this.realtimeGateway.emitToNegocio(
         venta.negocioId,

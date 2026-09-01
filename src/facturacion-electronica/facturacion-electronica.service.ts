@@ -164,7 +164,7 @@ export class FacturacionElectronicaService {
    * nunca debe lanzar una excepción que se propague hacia arriba, por eso el
    * try/catch de intentarEmitir envuelve toda la lógica real de red.
    */
-  async emitirDocumento(venta: { id: string; negocioId: string; tipoComprobanteEmitido: string }): Promise<void> {
+  async emitirDocumento(venta: { id: string; negocioId: string; tipoComprobanteEmitido?: string }): Promise<void> {
     const habilitacion = await this.habilitacionRepository.findOne({ where: { negocioId: venta.negocioId } });
     if (!habilitacion || habilitacion.estado !== EstadoHabilitacion.HABILITADO) return;
 

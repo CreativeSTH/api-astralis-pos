@@ -17,6 +17,7 @@ import { Inventario } from '../inventario/entities/inventario.entity';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { MetodosPagoModule } from '../metodos-pago/metodos-pago.module';
 import { FacturacionModule } from '../facturacion/facturacion.module';
+import { FacturacionElectronicaModule } from '../facturacion-electronica/facturacion-electronica.module';
 import { CuponesModule } from '../cupones/cupones.module';
 import { Sucursal } from '../sucursales/entities/sucursal.entity';
 import { Negocio } from '../negocios/entities/negocio.entity';
@@ -43,6 +44,7 @@ import { PlantillaComprobante } from '../facturacion/entities/plantilla-comproba
     RealtimeModule,
     MetodosPagoModule,
     FacturacionModule,
+    FacturacionElectronicaModule,
     CuponesModule,
   ],
   controllers: [VentasController],
