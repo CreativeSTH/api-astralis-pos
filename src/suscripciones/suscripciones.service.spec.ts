@@ -356,7 +356,7 @@ describe('SuscripcionesService — aviso de cobro fallido', () => {
       ],
     }).compile();
 
-    return { service: moduleRef.get(SuscripcionesService), suscripcionesRepo, medioPagoRepo, wompiClient, emailService, alertasRepo };
+    return { service: moduleRef.get(SuscripcionesService), suscripcionesRepo, medioPagoRepo, wompiClient, emailService, alertasRepo, paquetesService };
   }
 
   it('avisa por correo y alerta en cada fallo, con tono distinto en el 3er intento', async () => {
@@ -412,6 +412,38 @@ describe('SuscripcionesService — aviso de cobro fallido', () => {
 
     expect(alertasRepo.create).not.toHaveBeenCalled();
     expect(alertasRepo.save).toHaveBeenCalledWith(expect.objectContaining({ id: 'alerta-1' }));
+  });
+
+  it('si falla el aviso mismo (ej. el paquete fue borrado) no se escapa del catch de cobrarAutomatico ni corta la corrida', async () => {
+    const { service, suscripcionesRepo, medioPagoRepo, wompiClient, paquetesService } = await crearServicio();
+    const suscripcionConError = {
+      id: 'sus-1', negocioId: 'neg-error', paqueteId: 'pro-borrado',
+      estado: 'ACTIVA', fechaFin: new Date(Date.now() - 86400000), intentosFallidosCobro: 0,
+    };
+    const suscripcionSiguiente = {
+      id: 'sus-2', negocioId: 'neg-2', paqueteId: 'pro-1',
+      estado: 'ACTIVA', fechaFin: new Date(Date.now() - 86400000), intentosFallidosCobro: 0,
+    };
+    suscripcionesRepo.find.mockResolvedValue([suscripcionConError, suscripcionSiguiente]);
+    suscripcionesRepo.findOne.mockImplementation(async ({ where }: { where: { negocioId: string } }) =>
+      where.negocioId === 'neg-error' ? suscripcionConError : suscripcionSiguiente,
+    );
+    medioPagoRepo.findOne.mockResolvedValue({ negocioId: 'neg-x', wompiPaymentSourceId: 3891, activo: true });
+    // El cobro en sí falla (DECLINED) para ambos negocios. `paquetesService.findOne` se llama DOS
+    // veces por negocio con DECLINED: una dentro del cuerpo principal de cobrarAutomatico (arma el
+    // monto a cobrar) y otra dentro de registrarIntentoFallido (arma el correo de aviso) — acá se
+    // hace fallar específicamente la SEGUNDA llamada del primer negocio, reproduciendo el hallazgo
+    // real de la revisión: el paquete se borró justo entre que se armó el cobro y se armó el aviso.
+    wompiClient.crearTransaccionConFuente.mockResolvedValue({ wompiTransactionId: 'txn-x', status: 'DECLINED' });
+    paquetesService.findOne
+      .mockResolvedValueOnce({ id: 'pro-borrado', nombre: 'Profesional', precioMensual: 139900 })
+      .mockRejectedValueOnce(new Error('Paquete pro-borrado no encontrado'));
+
+    await service.cobrarAutomatico();
+
+    expect(suscripcionConError.intentosFallidosCobro).toBe(1);
+    expect(suscripcionSiguiente.intentosFallidosCobro).toBe(1);
+    expect(wompiClient.crearTransaccionConFuente).toHaveBeenCalledTimes(2);
   });
 });
 

@@ -594,27 +594,41 @@ export class SuscripcionesService {
     }
     await this.suscripcionesRepository.save(actual);
 
-    const negocio = await this.negociosRepository.findOne({ where: { id: negocioId } });
-    const admin = await this.usuariosRepository.findOne({
-      where: { negocioId, activo: true },
-      order: { createdAt: 'ASC' },
-    });
-    if (!negocio || !admin) return;
+    // El aviso (correo + alerta) es best-effort — el conteo del fallo de arriba, que es lo que
+    // hace de verdad que la suscripción avance hacia VENCIDA, ya quedó guardado. Sin este
+    // try/catch, un paquete borrado (`paquetesService.findOne` lanza `NotFoundException`) o
+    // cualquier otro error de esta parte se escaparía de acá hacia el `catch` de
+    // `cobrarAutomatico()` que llama a este método — reintroduciendo exactamente el bug de
+    // "limbo permanente" que ese `catch` existe para evitar (corta el resto de la corrida esa
+    // noche). Confirmado real en revisión: `registrarIntentoFallido` no tenía su propio try/catch.
+    try {
+      const negocio = await this.negociosRepository.findOne({ where: { id: negocioId } });
+      const admin = await this.usuariosRepository.findOne({
+        where: { negocioId, activo: true },
+        order: { createdAt: 'ASC' },
+      });
+      if (!negocio || !admin) return;
 
-    const paquete = await this.paquetesService.findOne(actual.paqueteId);
-    const { subject, html } = construirCorreoCobroFallido(
-      paquete.nombre,
-      actual.intentosFallidosCobro,
-      `${process.env.FRONTEND_URL}/suscripcion-vencida`,
-    );
-    await this.emailService.enviar({ to: admin.email, subject, html });
-    await this.crearOActualizarAlerta(
-      negocioId,
-      actual.id,
-      TipoAlerta.SUSCRIPCION_COBRO_FALLIDO,
-      actual.intentosFallidosCobro >= 3 ? SeveridadAlerta.CRITICA : SeveridadAlerta.ALTA,
-      subject,
-    );
+      const paquete = await this.paquetesService.findOne(actual.paqueteId);
+      const { subject, html } = construirCorreoCobroFallido(
+        paquete.nombre,
+        actual.intentosFallidosCobro,
+        `${process.env.FRONTEND_URL}/suscripcion-vencida`,
+      );
+      await this.emailService.enviar({ to: admin.email, subject, html });
+      await this.crearOActualizarAlerta(
+        negocioId,
+        actual.id,
+        TipoAlerta.SUSCRIPCION_COBRO_FALLIDO,
+        actual.intentosFallidosCobro >= 3 ? SeveridadAlerta.CRITICA : SeveridadAlerta.ALTA,
+        subject,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Error avisando el fallo de cobro al negocio ${negocioId}`,
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
   }
 
   /** Corrida diaria a la 1am (antes del cobro automático de las 2am): correo + alerta in-app en día -2/-1/0, sin duplicar por ciclo. */
