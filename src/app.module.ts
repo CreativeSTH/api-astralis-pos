@@ -44,6 +44,7 @@ import { CatalogoClienteModule } from './catalogo-cliente/catalogo-cliente.modul
 import { PaquetesModule } from './paquetes/paquetes.module';
 import { SuscripcionesModule } from './suscripciones/suscripciones.module';
 import { FacturacionElectronicaModule } from './facturacion-electronica/facturacion-electronica.module';
+import { OnboardingModule } from './onboarding/onboarding.module';
 
 @Module({
   imports: [
@@ -106,6 +107,7 @@ import { FacturacionElectronicaModule } from './facturacion-electronica/facturac
     PaquetesModule,
     SuscripcionesModule,
     FacturacionElectronicaModule,
+    OnboardingModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },
