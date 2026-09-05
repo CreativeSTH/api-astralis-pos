@@ -3,7 +3,9 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { SuscripcionesService } from './suscripciones.service';
 import { ReactivarSuscripcionDto } from './dto/reactivar-suscripcion.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { EmailVerificadoGuard } from '../common/guards/email-verificado.guard';
 import { Public } from '../common/decorators/public.decorator';
+import { RequiereEmailVerificado } from '../common/decorators/requiere-email-verificado.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { JwtUserPayload } from '../common/decorators/current-user.decorator';
 
@@ -20,7 +22,8 @@ export class SuscripcionesController {
     return this.suscripcionesService.miEstado(usuario.negocioId!);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, EmailVerificadoGuard)
+  @RequiereEmailVerificado('guardarTarjeta')
   @ApiBearerAuth('JWT-auth')
   @Post('reactivar')
   @HttpCode(HttpStatus.OK)

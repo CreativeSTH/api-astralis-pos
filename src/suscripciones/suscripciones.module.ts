@@ -13,6 +13,7 @@ import { WompiClientService } from '../pagos/wompi-client.service';
 import { PaquetesModule } from '../paquetes/paquetes.module';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { EmailModule } from '../email/email.module';
+import { EmailVerificadoGuard } from '../common/guards/email-verificado.guard';
 
 @Module({
   imports: [
@@ -22,7 +23,7 @@ import { EmailModule } from '../email/email.module';
     EmailModule,
   ],
   controllers: [SuscripcionesController],
-  providers: [SuscripcionesService, WompiClientService, SuscripcionesCronService],
+  providers: [SuscripcionesService, WompiClientService, SuscripcionesCronService, EmailVerificadoGuard],
   exports: [SuscripcionesService],
 })
 export class SuscripcionesModule {}

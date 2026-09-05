@@ -21,7 +21,7 @@ export class EmailVerificadoGuard implements CanActivate {
     if (metadata === undefined) return true; // endpoint sin el decorator — no aplica
 
     const request = context.switchToHttp().getRequest();
-    const exigeVerificacion = metadata === true ? true : Boolean(request.body?.[metadata]);
+    const exigeVerificacion = typeof metadata === 'string' ? Boolean(request.body?.[metadata]) : metadata;
     if (!exigeVerificacion) return true;
 
     // Rechequea contra la DB, nunca confía en el emailVerificado del JWT —
