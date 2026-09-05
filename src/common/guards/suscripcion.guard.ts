@@ -22,6 +22,10 @@ const RUTAS_PERMITIDAS_BLOQUEADO = new Set([
   'GET /api/suscripcion/medio-pago',
   'DELETE /api/suscripcion/medio-pago',
   'POST /api/auth/logout',
+  // El selector de plan de la pantalla de reactivación (ver SelectorPlanPago) necesita
+  // listar los paquetes disponibles incluso con el negocio bloqueado — sin esto, un negocio
+  // VENCIDA no puede ver ni elegir otro plan al pagar, solo reactivar a ciegas el mismo de antes.
+  'GET /api/paquetes/disponibles',
 ]);
 
 @Injectable()
