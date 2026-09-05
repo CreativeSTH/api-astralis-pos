@@ -2,6 +2,7 @@ import { Column, Entity, Index, JoinColumn, ManyToOne } from 'typeorm';
 import { BaseEntity } from '../../common/entities/base.entity';
 import { EstadoSuscripcion } from './estado-suscripcion.enum';
 import { Paquete } from '../../paquetes/entities/paquete.entity';
+import { CicloFacturacion } from './ciclo-facturacion.enum';
 
 @Entity('suscripciones')
 export class Suscripcion extends BaseEntity {
@@ -62,4 +63,8 @@ export class Suscripcion extends BaseEntity {
    */
   @Column({ name: 'estado_pre_cancelacion', type: 'enum', enum: EstadoSuscripcion, nullable: true })
   estadoPreCancelacion?: EstadoSuscripcion | null;
+
+  /** Se fija al pagar/reactivar (nunca cambia a mitad de un ciclo ACTIVA vigente — ver Global Constraints del plan). */
+  @Column({ name: 'ciclo_facturacion', type: 'enum', enum: CicloFacturacion, default: CicloFacturacion.MENSUAL })
+  cicloFacturacion: CicloFacturacion;
 }
