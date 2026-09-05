@@ -712,6 +712,8 @@ export class VentasService {
           precioUnitario: precioEfectivo,
           descuento,
           subtotal: baseImponible + impuesto,
+          baseImponible,
+          impuesto,
           costoUnitario: producto.costo,
           promocionId,
         }),

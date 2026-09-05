@@ -27,6 +27,15 @@ export class Negocio extends BaseEntity {
   @Column({ nullable: true })
   direccion?: string;
 
+  @Column({ name: 'ciudad_nombre', nullable: true })
+  ciudadNombre?: string;
+
+  @Column({ name: 'ciudad_codigo', nullable: true })
+  ciudadCodigo?: string;
+
+  @Column({ name: 'departamento_codigo', nullable: true })
+  departamentoCodigo?: string;
+
   @Column({ type: 'enum', enum: PlanNegocio, default: PlanNegocio.FREE })
   plan: PlanNegocio;
 

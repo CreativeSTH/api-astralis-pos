@@ -19,6 +19,9 @@ type AlegraClientMock = {
   consultarCompania: jest.Mock;
   crearDocumentoEquivalentePos: jest.Mock;
   crearFactura: jest.Mock;
+  consultarFactura: jest.Mock;
+  crearNotaCredito: jest.Mock;
+  crearNotaDebito: jest.Mock;
   crearNotaAjuste: jest.Mock;
   consultarDocumento: jest.Mock;
 };
@@ -32,8 +35,17 @@ function ventaDePrueba(overrides: Partial<Venta> = {}): Venta {
     descuentoTotal: 0,
     impuestoTotal: 0,
     total: 10000,
+    cliente: undefined,
     items: [
-      { nombreProducto: 'Producto de prueba', cantidad: 1, precioUnitario: 10000, subtotal: 10000 },
+      {
+        productoId: 'prod-1',
+        nombreProducto: 'Producto de prueba',
+        cantidad: 1,
+        precioUnitario: 10000,
+        subtotal: 10000,
+        baseImponible: 10000,
+        impuesto: 0,
+      },
     ],
     pagos: [{ metodoPago: 'Efectivo', monto: 10000 }],
     ...overrides,
@@ -96,7 +108,10 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
       crearTestSet: jest.fn(),
       consultarCompania: jest.fn().mockResolvedValue({ posAutorizado: true }),
       crearDocumentoEquivalentePos: jest.fn(),
-      crearFactura: jest.fn(),
+      crearFactura: jest.fn().mockResolvedValue({ alegraDocumentId: 'inv-1', status: 'SENT', legalStatus: 'ACCEPTED', isFinal: true }),
+      consultarFactura: jest.fn(),
+      crearNotaCredito: jest.fn().mockResolvedValue({ alegraDocumentId: 'cn-1', status: 'SENT', legalStatus: 'ACCEPTED', isFinal: true }),
+      crearNotaDebito: jest.fn().mockResolvedValue({ alegraDocumentId: 'dn-1', status: 'SENT', legalStatus: 'ACCEPTED', isFinal: true }),
       crearNotaAjuste: jest.fn(),
       consultarDocumento: jest.fn(),
     };
@@ -185,7 +200,7 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
   });
 
   describe('confirmarTestSet', () => {
-    it('emite 2 DEE-POS + 1 nota de ajuste de prueba y pasa a HABILITADO', async () => {
+    it('emite 8 facturas + 1 nota crédito + 1 nota débito de prueba (tamaño real exigido por la DIAN para Factura) y pasa a HABILITADO', async () => {
       habilitacionRepo.findOne.mockResolvedValue({
         ...HABILITACION_CON_RESOLUCION,
         estado: EstadoHabilitacion.RESOLUCION_CARGADA,
@@ -193,21 +208,21 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
         governmentTestSetId: 'a70562e0-631e-4ceb-aa65-36887b57dc17',
       });
       alegraClient.crearTestSet.mockResolvedValue({ testSetId: 'testset-1' });
-      alegraClient.crearDocumentoEquivalentePos.mockResolvedValue({ alegraDocumentId: 'doc-1', status: 'REGISTERED' });
-      alegraClient.crearNotaAjuste.mockResolvedValue({ alegraDocumentId: 'nota-1', status: 'REGISTERED' });
+      alegraClient.crearFactura.mockResolvedValue({ alegraDocumentId: 'inv-1', status: 'SENT', legalStatus: 'ACCEPTED', isFinal: true, cufe: 'cufe-1', fecha: '2026-01-05' });
 
       const resultado = await service.confirmarTestSet('neg-1');
 
       expect(alegraClient.crearTestSet).toHaveBeenCalledWith(
-        expect.objectContaining({ tipo: 'pos', governmentId: 'a70562e0-631e-4ceb-aa65-36887b57dc17' }),
+        expect.objectContaining({ tipo: 'invoices', governmentId: 'a70562e0-631e-4ceb-aa65-36887b57dc17' }),
       );
-      expect(alegraClient.crearDocumentoEquivalentePos).toHaveBeenCalledTimes(2);
-      expect(alegraClient.crearNotaAjuste).toHaveBeenCalledTimes(1);
+      expect(alegraClient.crearFactura).toHaveBeenCalledTimes(8);
+      expect(alegraClient.crearNotaCredito).toHaveBeenCalledTimes(1);
+      expect(alegraClient.crearNotaDebito).toHaveBeenCalledTimes(1);
       expect(resultado.estado).toBe(EstadoHabilitacion.HABILITADO);
       expect(resultado.ambiente).toBe('PRODUCCION');
     });
 
-    it('sondea consultarCompania hasta que la DIAN autoriza antes de emitir (confirmado en vivo: no es instantáneo)', async () => {
+    it('sondea consultarCompania con tipo invoices hasta que la DIAN autoriza antes de emitir (confirmado en vivo: no es instantáneo)', async () => {
       jest.useFakeTimers();
       habilitacionRepo.findOne.mockResolvedValue({
         ...HABILITACION_CON_RESOLUCION,
@@ -219,14 +234,13 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
         .mockResolvedValueOnce({ posAutorizado: false })
         .mockResolvedValueOnce({ posAutorizado: false })
         .mockResolvedValueOnce({ posAutorizado: true });
-      alegraClient.crearDocumentoEquivalentePos.mockResolvedValue({ alegraDocumentId: 'doc-1', status: 'REGISTERED' });
-      alegraClient.crearNotaAjuste.mockResolvedValue({ alegraDocumentId: 'nota-1', status: 'REGISTERED' });
 
       const promesa = service.confirmarTestSet('neg-1');
       await jest.runAllTimersAsync();
       const resultado = await promesa;
 
       expect(alegraClient.consultarCompania).toHaveBeenCalledTimes(3);
+      expect(alegraClient.consultarCompania).toHaveBeenCalledWith(expect.objectContaining({ tipo: 'invoices' }));
       expect(resultado.estado).toBe(EstadoHabilitacion.HABILITADO);
       jest.useRealTimers();
     });
@@ -246,7 +260,7 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
       const resultado = await promesa;
 
       expect(resultado.estado).toBe(EstadoHabilitacion.ERROR);
-      expect(alegraClient.crearDocumentoEquivalentePos).not.toHaveBeenCalled();
+      expect(alegraClient.crearFactura).not.toHaveBeenCalled();
       jest.useRealTimers();
     });
 
@@ -259,8 +273,6 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
       alegraClient.crearTestSet.mockRejectedValue(
         new Error('Test set in this company has already been approved. No additional submissions are required.'),
       );
-      alegraClient.crearDocumentoEquivalentePos.mockResolvedValue({ alegraDocumentId: 'doc-1', status: 'REGISTERED' });
-      alegraClient.crearNotaAjuste.mockResolvedValue({ alegraDocumentId: 'nota-1', status: 'REGISTERED' });
 
       const resultado = await service.confirmarTestSet('neg-1');
 
@@ -302,48 +314,51 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
       expect(documentosRepo.save).not.toHaveBeenCalled();
     });
 
-    it('crea el documento en PENDIENTE y llama a intentarEmitir si el negocio está HABILITADO', async () => {
+    it('crea el documento en PENDIENTE con tipo FACTURA siempre (aunque tipoComprobanteEmitido sea RECIBO) y llama a intentarEmitir si el negocio está HABILITADO', async () => {
       habilitacionRepo.findOne.mockResolvedValue({ ...HABILITACION_CON_RESOLUCION });
-      alegraClient.crearDocumentoEquivalentePos.mockResolvedValue({
+      alegraClient.crearFactura.mockResolvedValue({
         alegraDocumentId: 'doc-9',
-        cude: 'cude-9',
-        status: 'REGISTERED',
+        cufe: 'cufe-9',
+        status: 'SENT',
         legalStatus: 'ACCEPTED',
+        isFinal: true,
       });
 
       await service.emitirDocumento({ id: 'venta-1', negocioId: 'neg-1', tipoComprobanteEmitido: 'RECIBO' } as any);
 
       expect(documentosRepo.save).toHaveBeenCalled();
+      const documentoCreado = documentosRepo.save.mock.calls[0][0];
+      expect(documentoCreado.tipo).toBe('FACTURA');
       const documentoGuardado = documentosRepo.save.mock.calls.at(-1)![0];
       expect(documentoGuardado.estado).toBe(EstadoDocumentoElectronico.ACEPTADO);
-      expect(documentoGuardado.cude).toBe('cude-9');
+      expect(documentoGuardado.cufe).toBe('cufe-9');
       expect(suscripcionesService.registrarConsumo).toHaveBeenCalledWith('neg-1', 'documentosDianPorMes');
     });
   });
 
   describe('intentarEmitir — numeración correlativa real y mapeo de la venta', () => {
-    it('usa habilitacion.siguienteNumero (no documento.intentos) y lo avanza tras un envío exitoso', async () => {
+    it('usa habilitacion.siguienteNumero (no documento.intentos), lo manda como number, y lo avanza tras un envío exitoso', async () => {
       const documento = {
-        id: 'doc-x', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'DEE_POS' as const,
+        id: 'doc-x', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'FACTURA' as const,
         estado: EstadoDocumentoElectronico.PENDIENTE, intentos: 7, // deliberadamente distinto de siguienteNumero
       };
       const habilitacion = { ...HABILITACION_CON_RESOLUCION, siguienteNumero: 42 };
-      alegraClient.crearDocumentoEquivalentePos.mockResolvedValue({
-        alegraDocumentId: 'doc-42', status: 'REGISTERED', legalStatus: 'ACCEPTED',
+      alegraClient.crearFactura.mockResolvedValue({
+        alegraDocumentId: 'doc-42', status: 'SENT', legalStatus: 'ACCEPTED', isFinal: true,
       });
 
       await service.intentarEmitir(documento as any, habilitacion as any);
 
-      expect(alegraClient.crearDocumentoEquivalentePos).toHaveBeenCalledWith(
-        expect.objectContaining({ number: '42' }),
+      expect(alegraClient.crearFactura).toHaveBeenCalledWith(
+        expect.objectContaining({ number: 42 }),
       );
       expect(habilitacion.siguienteNumero).toBe(43);
       expect(habilitacionRepo.save).toHaveBeenCalledWith(expect.objectContaining({ siguienteNumero: 43 }));
     });
 
-    it('mapea items/totales/pagos reales de la Venta al payload de Alegra', async () => {
+    it('mapea items directo desde baseImponible/impuesto persistidos (sin necesitar item.producto), y arma customer genérico sin cliente', async () => {
       const documento = {
-        id: 'doc-x', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'DEE_POS' as const,
+        id: 'doc-x', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'FACTURA' as const,
         estado: EstadoDocumentoElectronico.PENDIENTE, intentos: 0,
       };
       ventasRepo.findOneOrFail.mockResolvedValue(
@@ -352,60 +367,120 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
           descuentoTotal: 2000,
           impuestoTotal: 3420,
           total: 21420,
+          clienteId: undefined,
+          cliente: undefined,
           items: [
-            { nombreProducto: 'Producto A', cantidad: 2, precioUnitario: 10000, subtotal: 20000 } as any,
+            {
+              productoId: 'prod-a',
+              nombreProducto: 'Producto A',
+              cantidad: 2,
+              precioUnitario: 10000,
+              subtotal: 23800,
+              baseImponible: 20000,
+              impuesto: 3800,
+            } as any,
           ],
           pagos: [{ metodoPago: 'Tarjeta', monto: 21420 } as any],
         }),
       );
-      alegraClient.crearDocumentoEquivalentePos.mockResolvedValue({
-        alegraDocumentId: 'doc-1', status: 'SENT', legalStatus: 'ACCEPTED',
+      alegraClient.crearFactura.mockResolvedValue({
+        alegraDocumentId: 'doc-1', status: 'SENT', legalStatus: 'ACCEPTED', isFinal: true,
       });
 
       await service.intentarEmitir(documento as any, { ...HABILITACION_CON_RESOLUCION } as any);
 
-      const [llamado] = alegraClient.crearDocumentoEquivalentePos.mock.calls[0];
+      const [llamado] = alegraClient.crearFactura.mock.calls[0];
       expect(llamado.items).toEqual([
-        { description: 'Producto A', quantity: 2, price: 10000, unitCode: '94', subtotal: 20000, total: 20000 },
+        {
+          description: 'Producto A',
+          quantity: 2,
+          price: 10000,
+          unitCode: '94',
+          code: '999',
+          subtotal: 20000,
+          total: 23800,
+          taxAmount: 3800,
+          taxes: [{ taxCode: '01', taxAmount: 3800, taxPercentage: '19.00', taxableAmount: 20000 }],
+        },
       ]);
       expect(llamado.totalAmounts).toEqual({
-        total: 21420, grossTotal: 20000, taxableTotal: 18000, taxTotal: 3420, payableTotal: 21420,
+        grossTotal: 20000, taxableTotal: 18000, taxTotal: 3420, payableTotal: 21420,
+        discountTotal: 2000, chargeTotal: 0, advanceTotal: 0,
       });
       expect(llamado.payments).toEqual([
-        expect.objectContaining({ amount: 21420, paymentMethod: '49', paymentForm: '1' }),
+        expect.objectContaining({ paymentMethod: '49', paymentForm: '1' }),
       ]);
+      expect(llamado.customer).toEqual({ identificationNumber: '222222222222', identificationType: '13', name: 'Consumidor Final' });
       expect(llamado.resolution).toEqual({
         prefix: 'DE', resolutionNumber: '18760000001', startDate: '2026-01-01',
         endDate: '2027-01-01', minNumber: 1, maxNumber: 100000, technicalKey: 'abc123',
       });
     });
 
-    it('guarda el motivo real de la DIAN cuando legalStatus es REJECTED (confirmado en vivo: governmentResponse.message)', async () => {
+    it('arma customer desde el Cliente real cuando la venta tiene clienteId con documento cargado', async () => {
       const documento = {
-        id: 'doc-x', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'DEE_POS' as const,
+        id: 'doc-x', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'FACTURA' as const,
         estado: EstadoDocumentoElectronico.PENDIENTE, intentos: 0,
       };
-      alegraClient.crearDocumentoEquivalentePos.mockResolvedValue({
-        alegraDocumentId: 'doc-1', status: 'SENT', legalStatus: 'REJECTED',
-        governmentResponseMessage: 'NIT 900559088 no autorizado a enviar documentos para emisor con NIT 454801018.',
+      ventasRepo.findOneOrFail.mockResolvedValue(
+        ventaDePrueba({
+          clienteId: 'cliente-1',
+          cliente: { nombre: 'Juan Pérez', documentoIdentidad: '123456789', tipoDocumentoIdentidad: '13' } as any,
+        }),
+      );
+      alegraClient.crearFactura.mockResolvedValue({ alegraDocumentId: 'inv-1', status: 'SENT', legalStatus: 'ACCEPTED', isFinal: true });
+
+      await service.intentarEmitir(documento as any, { ...HABILITACION_CON_RESOLUCION } as any);
+
+      const [llamado] = alegraClient.crearFactura.mock.calls[0];
+      expect(llamado.customer).toEqual({ identificationNumber: '123456789', identificationType: '13', name: 'Juan Pérez' });
+    });
+
+    it('guarda el motivo real de la DIAN y el detalle completo de reglas cuando legalStatus es REJECTED', async () => {
+      const documento = {
+        id: 'doc-x', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'FACTURA' as const,
+        estado: EstadoDocumentoElectronico.PENDIENTE, intentos: 0,
+      };
+      alegraClient.crearFactura.mockResolvedValue({
+        alegraDocumentId: 'doc-1', status: 'SENT', legalStatus: 'REJECTED', isFinal: true,
+        governmentResponseMessage: 'Validación contiene errores en campos mandatorios.',
+        errorMessages: ['Regla: DEAB10b, Rechazo: El prefijo no corresponde', 'Regla: DEAB12b, Rechazo: Rango no vigente'],
       });
 
       await service.intentarEmitir(documento as any, { ...HABILITACION_CON_RESOLUCION } as any);
 
       expect(documento.estado).toBe(EstadoDocumentoElectronico.RECHAZADO);
-      expect((documento as any).errorMensaje).toBe(
-        'NIT 900559088 no autorizado a enviar documentos para emisor con NIT 454801018.',
-      );
+      expect((documento as any).errorMensaje).toBe('Validación contiene errores en campos mandatorios.');
+      expect((documento as any).erroresDetalle).toEqual([
+        'Regla: DEAB10b, Rechazo: El prefijo no corresponde',
+        'Regla: DEAB12b, Rechazo: Rango no vigente',
+      ]);
+    });
+
+    it('cuando la DIAN no responde al instante (isFinal false), deja el documento PENDIENTE con el trackingReference guardado', async () => {
+      const documento = {
+        id: 'doc-x', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'FACTURA' as const,
+        estado: EstadoDocumentoElectronico.PENDIENTE, intentos: 0,
+      };
+      alegraClient.crearFactura.mockResolvedValue({
+        alegraDocumentId: 'inv-2', status: 'SENT', isFinal: false,
+        trackingReference: { flow: 'co.invoice', environment: 'sandbox', documentId: 'inv-2' },
+      });
+
+      await service.intentarEmitir(documento as any, { ...HABILITACION_CON_RESOLUCION } as any);
+
+      expect(documento.estado).toBe(EstadoDocumentoElectronico.PENDIENTE);
+      expect((documento as any).trackingReference).toEqual({ flow: 'co.invoice', environment: 'sandbox', documentId: 'inv-2' });
     });
 
     it('limpia un errorMensaje de un intento anterior si el reintento llega bien a Alegra', async () => {
       const documento = {
-        id: 'doc-x', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'DEE_POS' as const,
+        id: 'doc-x', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'FACTURA' as const,
         estado: EstadoDocumentoElectronico.PENDIENTE, intentos: 3,
         errorMensaje: 'Forbidden', // stale, de un intento anterior contra la URL/token equivocados
       };
-      alegraClient.crearDocumentoEquivalentePos.mockResolvedValue({
-        alegraDocumentId: 'doc-1', status: 'SENT', legalStatus: 'ACCEPTED',
+      alegraClient.crearFactura.mockResolvedValue({
+        alegraDocumentId: 'doc-1', status: 'SENT', legalStatus: 'ACCEPTED', isFinal: true,
       });
 
       await service.intentarEmitir(documento as any, { ...HABILITACION_CON_RESOLUCION } as any);
@@ -415,16 +490,28 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
 
     it('no avanza siguienteNumero si la llamada a Alegra falla (no se consumió el número)', async () => {
       const documento = {
-        id: 'doc-x', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'DEE_POS' as const,
+        id: 'doc-x', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'FACTURA' as const,
         estado: EstadoDocumentoElectronico.PENDIENTE, intentos: 0,
       };
       const habilitacion = { ...HABILITACION_CON_RESOLUCION, siguienteNumero: 10 };
-      alegraClient.crearDocumentoEquivalentePos.mockRejectedValue(new Error('timeout'));
+      alegraClient.crearFactura.mockRejectedValue(new Error('timeout'));
 
       await service.intentarEmitir(documento as any, habilitacion as any);
 
       expect(habilitacion.siguienteNumero).toBe(10);
       expect(habilitacionRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('emite documentos-electronicos:cambio por realtime en cada intento', async () => {
+      const documento = {
+        id: 'doc-x', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'FACTURA' as const,
+        estado: EstadoDocumentoElectronico.PENDIENTE, intentos: 0,
+      };
+      alegraClient.crearFactura.mockResolvedValue({ alegraDocumentId: 'doc-1', status: 'SENT', legalStatus: 'ACCEPTED', isFinal: true });
+
+      await service.intentarEmitir(documento as any, { ...HABILITACION_CON_RESOLUCION } as any);
+
+      expect(realtimeGateway.emitToNegocio).toHaveBeenCalledWith('neg-1', 'documentos-electronicos:cambio', expect.objectContaining({ id: 'doc-x' }));
     });
   });
 
@@ -459,38 +546,77 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
   });
 
   describe('reconciliarPendientes', () => {
-    it('reintenta un PENDIENTE sin tocar hace más de 5 minutos si el negocio está HABILITADO', async () => {
+    it('reintenta el envío completo si el PENDIENTE no tiene trackingReference (falló antes de recibir respuesta)', async () => {
       const documentoViejo = {
-        id: 'doc-1', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'DEE_POS' as const,
-        estado: EstadoDocumentoElectronico.PENDIENTE, intentos: 1,
+        id: 'doc-1', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'FACTURA' as const,
+        estado: EstadoDocumentoElectronico.PENDIENTE, intentos: 1, trackingReference: null,
         ultimoIntentoEn: new Date(Date.now() - 10 * 60 * 1000),
       };
       documentosRepo.find.mockResolvedValue([documentoViejo]);
       habilitacionRepo.findOne.mockResolvedValue({ ...HABILITACION_CON_RESOLUCION });
-      alegraClient.crearDocumentoEquivalentePos.mockResolvedValue({ alegraDocumentId: 'doc-r', status: 'REGISTERED' });
+      alegraClient.crearFactura.mockResolvedValue({ alegraDocumentId: 'doc-r', status: 'SENT', legalStatus: 'ACCEPTED', isFinal: true });
 
       await service.reconciliarPendientes();
 
-      expect(alegraClient.crearDocumentoEquivalentePos).toHaveBeenCalled();
+      expect(alegraClient.crearFactura).toHaveBeenCalled();
+      expect(alegraClient.consultarFactura).not.toHaveBeenCalled();
+    });
+
+    it('si el PENDIENTE tiene trackingReference, consulta en vez de reenviar', async () => {
+      documentosRepo.find.mockResolvedValue([
+        {
+          id: 'doc-1', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'FACTURA' as const,
+          estado: EstadoDocumentoElectronico.PENDIENTE, intentos: 1, ultimoIntentoEn: null,
+          trackingReference: { flow: 'co.invoice', environment: 'sandbox', documentId: 'inv-2' },
+        },
+      ]);
+      habilitacionRepo.findOne.mockResolvedValue({ ...HABILITACION_CON_RESOLUCION });
+      alegraClient.consultarFactura.mockResolvedValue({ alegraDocumentId: 'inv-2', status: 'SENT', legalStatus: 'ACCEPTED', isFinal: true, cufe: 'cufe-2' });
+
+      await service.reconciliarPendientes();
+
+      expect(alegraClient.consultarFactura).toHaveBeenCalledWith(expect.objectContaining({ documentId: 'inv-2' }));
+      expect(alegraClient.crearFactura).not.toHaveBeenCalled();
+      expect(documentosRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ estado: EstadoDocumentoElectronico.ACEPTADO, cufe: 'cufe-2' }),
+      );
+    });
+
+    it('si la consulta todavía no es final, deja el documento PENDIENTE sin tocar el estado', async () => {
+      documentosRepo.find.mockResolvedValue([
+        {
+          id: 'doc-1', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'FACTURA' as const,
+          estado: EstadoDocumentoElectronico.PENDIENTE, intentos: 1, ultimoIntentoEn: null,
+          trackingReference: { flow: 'co.invoice', environment: 'sandbox', documentId: 'inv-2' },
+        },
+      ]);
+      habilitacionRepo.findOne.mockResolvedValue({ ...HABILITACION_CON_RESOLUCION });
+      alegraClient.consultarFactura.mockResolvedValue({ alegraDocumentId: 'inv-2', status: 'SENT', isFinal: false });
+
+      await service.reconciliarPendientes();
+
+      const guardado = documentosRepo.save.mock.calls.at(-1)![0];
+      expect(guardado.estado).toBe(EstadoDocumentoElectronico.PENDIENTE);
     });
 
     it('no reintenta uno tocado hace menos de 5 minutos', async () => {
       documentosRepo.find.mockResolvedValue([
         {
-          id: 'doc-1', negocioId: 'neg-1', tipo: 'DEE_POS' as const, estado: EstadoDocumentoElectronico.PENDIENTE,
+          id: 'doc-1', negocioId: 'neg-1', tipo: 'FACTURA' as const, estado: EstadoDocumentoElectronico.PENDIENTE,
           intentos: 1, ultimoIntentoEn: new Date(),
         },
       ]);
 
       await service.reconciliarPendientes();
 
-      expect(alegraClient.crearDocumentoEquivalentePos).not.toHaveBeenCalled();
+      expect(alegraClient.crearFactura).not.toHaveBeenCalled();
+      expect(alegraClient.consultarFactura).not.toHaveBeenCalled();
     });
 
     it('salta un documento cuyo negocio ya no está HABILITADO', async () => {
       documentosRepo.find.mockResolvedValue([
         {
-          id: 'doc-1', negocioId: 'neg-1', tipo: 'DEE_POS' as const, estado: EstadoDocumentoElectronico.PENDIENTE,
+          id: 'doc-1', negocioId: 'neg-1', tipo: 'FACTURA' as const, estado: EstadoDocumentoElectronico.PENDIENTE,
           intentos: 1, ultimoIntentoEn: null,
         },
       ]);
@@ -498,7 +624,7 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
 
       await service.reconciliarPendientes();
 
-      expect(alegraClient.crearDocumentoEquivalentePos).not.toHaveBeenCalled();
+      expect(alegraClient.crearFactura).not.toHaveBeenCalled();
     });
   });
 
@@ -537,26 +663,41 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
 
     it('reintentarPorVenta llama a intentarEmitir con el documento y la habilitación del negocio', async () => {
       const documento = {
-        id: 'doc-1', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'DEE_POS' as const,
+        id: 'doc-1', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'FACTURA' as const,
         estado: EstadoDocumentoElectronico.PENDIENTE, intentos: 0,
       };
       documentosRepo.findOneOrFail.mockResolvedValue(documento);
       habilitacionRepo.findOneOrFail.mockResolvedValue({ ...HABILITACION_CON_RESOLUCION });
-      alegraClient.crearDocumentoEquivalentePos.mockResolvedValue({ alegraDocumentId: 'doc-r', status: 'REGISTERED' });
+      alegraClient.crearFactura.mockResolvedValue({ alegraDocumentId: 'doc-r', status: 'SENT', legalStatus: 'ACCEPTED', isFinal: true });
 
       await service.reintentarPorVenta('venta-1');
 
-      expect(alegraClient.crearDocumentoEquivalentePos).toHaveBeenCalled();
+      expect(alegraClient.crearFactura).toHaveBeenCalled();
     });
 
     it('obtenerLinksDescarga devuelve vacío si el documento no tiene alegraDocumentId todavía', async () => {
-      documentosRepo.findOneOrFail.mockResolvedValue({ id: 'doc-1', negocioId: 'neg-1', tipo: 'DEE_POS' });
+      documentosRepo.findOneOrFail.mockResolvedValue({ id: 'doc-1', negocioId: 'neg-1', tipo: 'FACTURA' });
       const resultado = await service.obtenerLinksDescarga('venta-1');
       expect(resultado).toEqual({});
+      expect(alegraClient.consultarFactura).not.toHaveBeenCalled();
       expect(alegraClient.consultarDocumento).not.toHaveBeenCalled();
     });
 
-    it('obtenerLinksDescarga consulta a Alegra con el tipo real del documento (equivalent-documents vs invoices)', async () => {
+    it('obtenerLinksDescarga usa consultarFactura (GET /invoices) para documentos tipo FACTURA', async () => {
+      documentosRepo.findOneOrFail.mockResolvedValue({
+        id: 'doc-1', negocioId: 'neg-1', alegraDocumentId: 'alegra-1', tipo: 'FACTURA',
+      });
+      habilitacionRepo.findOneOrFail.mockResolvedValue({ negocioId: 'neg-1', ambiente: 'PRODUCCION' });
+      alegraClient.consultarFactura.mockResolvedValue({ alegraDocumentId: 'alegra-1', status: 'SENT', urlXml: 'x.xml', urlPdf: 'x.pdf' });
+
+      const resultado = await service.obtenerLinksDescarga('venta-1');
+
+      expect(alegraClient.consultarFactura).toHaveBeenCalledWith(expect.objectContaining({ documentId: 'alegra-1' }));
+      expect(alegraClient.consultarDocumento).not.toHaveBeenCalled();
+      expect(resultado).toEqual({ urlXml: 'x.xml', urlPdf: 'x.pdf' });
+    });
+
+    it('obtenerLinksDescarga usa consultarDocumento (legado) para documentos históricos tipo DEE_POS', async () => {
       documentosRepo.findOneOrFail.mockResolvedValue({
         id: 'doc-1', negocioId: 'neg-1', alegraDocumentId: 'alegra-1', tipo: 'DEE_POS',
       });

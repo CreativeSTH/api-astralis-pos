@@ -35,4 +35,12 @@ export class DocumentoElectronico extends BaseEntity {
 
   @Column({ name: 'error_mensaje', nullable: true })
   errorMensaje?: string;
+
+  /** Objeto que Alanube devuelve cuando la emisión queda en curso (`isFinal: false`) — se usa para CONSULTAR el resultado después, nunca para reenviar el documento. */
+  @Column({ name: 'tracking_reference', type: 'jsonb', nullable: true })
+  trackingReference?: Record<string, unknown> | null;
+
+  /** Array completo de `governmentResponse.errorMessages` cuando el documento es rechazado — reemplaza depender solo del mensaje resumido genérico. */
+  @Column({ name: 'errores_detalle', type: 'jsonb', nullable: true })
+  erroresDetalle?: string[] | null;
 }

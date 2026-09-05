@@ -1,10 +1,22 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsBoolean, IsOptional, IsString } from 'class-validator';
+import { IsBoolean, IsEmail, IsOptional, IsString, Matches } from 'class-validator';
 
 export class ActualizarDatosNegocioDto {
   @ApiProperty()
   @IsString()
   razonSocial: string;
+
+  @ApiProperty({
+    description:
+      'NIT del negocio, sin dígito de verificación ni puntos/guiones — obligatorio para facturar, aunque en "Datos del negocio" (/mi-negocio) sea opcional para un negocio que todavía no activó DIAN.',
+  })
+  @IsString()
+  @Matches(/^\d{5,15}$/, { message: 'El NIT debe tener solo dígitos (sin puntos, guiones ni dígito de verificación)' })
+  nit: string;
+
+  @ApiProperty({ description: 'Alegra lo exige como dato de la compañía — obligatorio para facturar.' })
+  @IsEmail()
+  email: string;
 
   @ApiProperty()
   @IsString()

@@ -12,14 +12,33 @@ async function extraerMensajeError(res: Response, fallback: string): Promise<str
   }
 }
 
+/**
+ * `code` (StandardItemIdentification DIAN) es obligatorio — sin él, la DIAN
+ * rechaza con "Regla DEAZ09: StandardItemIdentification no informado" (confirmado
+ * en vivo). `identificationId: '999'` = "Estándar de adopción del contribuyente"
+ * (catálogo DIAN), el valor que corresponde cuando no se declara el producto
+ * contra un catálogo estándar (GTIN/UNSPSC).
+ *
+ * `subtotal` es el valor de la línea SIN impuesto y `total` CON impuesto —
+ * si se manda el mismo valor en ambos (como antes), la DIAN rechaza con
+ * "DEAU02a/DEAU06: el valor bruto no coincide con la suma de las líneas"
+ * (confirmado en vivo). El desglose de impuesto por línea (`taxAmount`/`taxes`)
+ * también es obligatorio pese a que la documentación pública de Alegra no lo
+ * menciona como tal.
+ */
 export interface ItemAlegra {
   description: string;
   quantity: number;
   price: number;
   /** Catálogo UN/CEFACT de unidades de medida — "94" = unidad (confirmado en vivo contra el sandbox real). */
   unitCode: string;
+  code: { identificationId: string; id: string };
+  /** Valor de la línea SIN impuesto. */
   subtotal: number;
+  /** Valor de la línea CON impuesto (subtotal + taxAmount). */
   total: number;
+  taxAmount: number;
+  taxes: { taxCode: string; taxAmount: number; taxPercentage: string; taxableAmount: number }[];
 }
 
 export interface TotalAmountsAlegra {
@@ -28,11 +47,63 @@ export interface TotalAmountsAlegra {
   taxableTotal: number;
   taxTotal: number;
   payableTotal: number;
+  discountTotal: number;
+  chargeTotal: number;
+  advanceTotal: number;
+  currencyCode: string;
+}
+
+/**
+ * Shape de `/invoices` confirmado con `validate_co_payload` contra el
+ * catálogo curado de Alanube (2026-09-01) — distinto del de `ItemAlegra`
+ * (usado por `/equivalent-documents/pos`): `code` es un string simple, no
+ * `{identificationId, id}`.
+ */
+export interface ItemFacturaAlegra {
+  description: string;
+  quantity: number;
+  price: number;
+  unitCode: string;
+  code: string;
+  /** Valor de la línea SIN impuesto. */
+  subtotal: number;
+  /** Valor de la línea CON impuesto (subtotal + taxAmount). */
+  total: number;
+  taxAmount: number;
+  taxes: { taxCode: string; taxAmount: number; taxPercentage: string; taxableAmount: number }[];
+}
+
+/** `totalAmounts` de `/invoices` — sin `total` ni `currencyCode` (`validate_co_payload` los marca `UNSUPPORTED_FIELD`, a diferencia de `TotalAmountsAlegra` de DEE_POS). */
+export interface TotalAmountsFacturaAlegra {
+  grossTotal: number;
+  taxableTotal: number;
+  taxTotal: number;
+  payableTotal: number;
+  discountTotal: number;
+  chargeTotal: number;
+  advanceTotal: number;
+}
+
+/** `customer` de `/invoices`/`/credit-notes`/`/debit-notes` — campo `identificationNumber`, no `identification` (confirmado con `validate_co_payload`). "43" = identificador genérico DIAN de consumidor final. */
+export interface CustomerAlegra {
+  identificationNumber: string;
+  identificationType: string;
+  name: string;
+}
+
+/** Referencia a la factura original que una nota crédito/débito ajusta. */
+export interface DocumentoAsociadoAlegra {
+  prefix: string;
+  number: number;
+  documentType: string;
+  date: string;
+  uuid: string;
 }
 
 export interface PaymentAlegra {
-  type: string;
-  amount: number;
+  /** Solo lo exige `/equivalent-documents/pos` (DEE_POS legado) — `/invoices` no lo acepta (`validate_co_payload` no lo marca ni como campo válido). */
+  type?: string;
+  amount?: number;
   /** "1" contado, "2" crédito (catálogo DIAN, confirmado en vivo). */
   paymentForm: string;
   /** Catálogo DIAN de medios de pago — 10 efectivo, 42 consignación, 45 transferencia crédito, 48 tarjeta crédito, 49 tarjeta débito. */
@@ -162,6 +233,8 @@ export class AlegraClientService {
     token: string;
     baseUrl: string;
     companyId: string;
+    /** Qué tipo de habilitación chequear en `governmentStatus` — cada tipo de documento (pos/invoices) tiene su propia autorización independiente ante la DIAN. */
+    tipo: 'pos' | 'invoices';
   }): Promise<{ posAutorizado: boolean }> {
     const res = await fetch(`${params.baseUrl}/companies/${params.companyId}`, {
       method: 'GET',
@@ -171,49 +244,222 @@ export class AlegraClientService {
       throw new BadGatewayException(await extraerMensajeError(res, 'No se pudo consultar el estado de la empresa en Alegra'));
     }
     const data = await res.json();
-    return { posAutorizado: data.company?.governmentStatus?.pos === 'AUTHORIZED' };
+    return { posAutorizado: data.company?.governmentStatus?.[params.tipo] === 'AUTHORIZED' };
   }
 
   /**
-   * ⚠️ Shape de request NO confirmado en vivo (solo se probó `equivalent-documents/pos`,
-   * ver abajo) — factura electrónica completa probablemente exige campos DIAN
-   * equivalentes o mayores (cliente con identificación completa, impuestos por
-   * ítem, etc.). No usar en producción sin repetir la misma verificación en vivo
-   * que se hizo para el documento equivalente POS.
+   * Shape confirmado con `validate_co_payload` contra el catálogo curado de
+   * Alanube (`co.invoices.create`, 2026-09-01) — reemplaza el `crearFactura`
+   * anterior, que nunca se había verificado. Diferencias clave frente a
+   * `/equivalent-documents/pos`: `number` es NUMBER (no string), `customer`
+   * usa `identificationNumber` (no `identification`), `items[].code` es un
+   * STRING simple (no `{identificationId, id}`), y `totalAmounts` no acepta
+   * `total` ni `currencyCode` (`UNSUPPORTED_FIELD`). La respuesta puede
+   * llegar `isFinal: false` si la DIAN está intermitente — sin `legalStatus`
+   * todavía; hay que guardar el `trackingReference` para consultar después
+   * con `consultarFactura`, nunca reenviar (arriesga duplicar el número).
    */
   async crearFactura(params: {
     token: string;
     baseUrl: string;
     companyId: string;
-    number: string;
-    customer: Record<string, unknown>;
-    items: ItemAlegra[];
-    totalAmounts: TotalAmountsAlegra;
-    payments: PaymentAlegra[];
+    number: number;
     resolution: ResolutionAlegra;
-  }): Promise<{ alegraDocumentId: string; cufe?: string; status: string; legalStatus?: string }> {
+    /** Catálogo DIAN de obligaciones/responsabilidades fiscales del emisor — confirmado en vivo: sin esto la DIAN rechaza con "The 'regimeCode' attribute is required". Enum real: O-13/15/23/47/48/49 o R-99-PN. */
+    regimeCode: string;
+    /** Confirmado en vivo: sin esto la DIAN rechaza con "instance requires property invoicePeriod" pese a que el catálogo curado lo marca opcional — es una regla condicional real no reflejada ahí. Para una venta puntual (no un servicio por suscripción), `startDate`/`endDate` son la misma fecha. */
+    invoicePeriod: { startDate: string; endDate: string };
+    customer: CustomerAlegra;
+    items: ItemFacturaAlegra[];
+    payments: PaymentAlegra[];
+    totalAmounts: TotalAmountsFacturaAlegra;
+  }): Promise<{
+    alegraDocumentId: string;
+    cufe?: string;
+    fullNumber?: string;
+    fecha?: string;
+    status: string;
+    legalStatus?: string;
+    isFinal: boolean;
+    trackingReference?: { flow: 'co.invoice'; environment: string; documentId: string };
+    governmentResponseMessage?: string;
+    errorMessages?: string[];
+    urlPdf?: string;
+    urlXml?: string;
+    urlZip?: string;
+  }> {
     const res = await fetch(`${params.baseUrl}/invoices`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${params.token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        company: { id: params.companyId },
+        documentType: '01',
         number: params.number,
+        invoicePeriod: params.invoicePeriod,
+        resolution: params.resolution,
+        company: { id: params.companyId, regimeCode: params.regimeCode },
         customer: params.customer,
         items: params.items,
-        totalAmounts: params.totalAmounts,
         payments: params.payments,
-        resolution: params.resolution,
+        totalAmounts: params.totalAmounts,
       }),
     });
     if (!res.ok) {
       throw new BadGatewayException(await extraerMensajeError(res, 'Alegra rechazó la creación de la factura'));
     }
     const data = await res.json();
+    const invoice = data.invoice;
+    const isFinal = invoice.isFinal !== false;
     return {
-      alegraDocumentId: data.invoice.id as string,
-      cufe: data.invoice.cufe as string | undefined,
-      status: data.invoice.status as string,
-      legalStatus: data.invoice.legalStatus as string | undefined,
+      alegraDocumentId: invoice.id as string,
+      cufe: invoice.cufe as string | undefined,
+      fullNumber: invoice.fullNumber as string | undefined,
+      fecha: invoice.date as string | undefined,
+      status: invoice.status as string,
+      legalStatus: invoice.legalStatus as string | undefined,
+      isFinal,
+      trackingReference: isFinal
+        ? undefined
+        : { flow: 'co.invoice', environment: params.baseUrl.includes('sandbox') ? 'sandbox' : 'production', documentId: invoice.id as string },
+      governmentResponseMessage: invoice.governmentResponse?.message as string | undefined,
+      errorMessages: invoice.governmentResponse?.errorMessages as string[] | undefined,
+      urlPdf: data.files?.pdf as string | undefined,
+      urlXml: data.files?.xml as string | undefined,
+      urlZip: data.files?.zip as string | undefined,
+    };
+  }
+
+  /** `GET /invoices/{id}` — resuelve el estado de una factura que quedó `isFinal: false`. Mismo shape de respuesta que `crearFactura`. */
+  async consultarFactura(params: { token: string; baseUrl: string; documentId: string }): Promise<{
+    alegraDocumentId: string;
+    cufe?: string;
+    fullNumber?: string;
+    status: string;
+    legalStatus?: string;
+    isFinal: boolean;
+    governmentResponseMessage?: string;
+    errorMessages?: string[];
+    urlPdf?: string;
+    urlXml?: string;
+    urlZip?: string;
+  }> {
+    const res = await fetch(`${params.baseUrl}/invoices/${params.documentId}`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${params.token}` },
+    });
+    if (!res.ok) {
+      throw new BadGatewayException(await extraerMensajeError(res, 'No se pudo consultar la factura en Alegra'));
+    }
+    const data = await res.json();
+    const invoice = data.invoice;
+    return {
+      alegraDocumentId: invoice.id as string,
+      cufe: invoice.cufe as string | undefined,
+      fullNumber: invoice.fullNumber as string | undefined,
+      status: invoice.status as string,
+      legalStatus: invoice.legalStatus as string | undefined,
+      isFinal: invoice.isFinal !== false,
+      governmentResponseMessage: invoice.governmentResponse?.message as string | undefined,
+      errorMessages: invoice.governmentResponse?.errorMessages as string[] | undefined,
+      urlPdf: data.files?.pdf as string | undefined,
+      urlXml: data.files?.xml as string | undefined,
+      urlZip: data.files?.zip as string | undefined,
+    };
+  }
+
+  /**
+   * Shape confirmado con `validate_co_payload` (`co.credit-notes.create`,
+   * 2026-09-01) — usado tanto para notas crédito operativas como para la
+   * nota crédito del testset de habilitación de Factura (8 facturas + 1 NC +
+   * 1 ND, ver `confirmarTestSet`). `conceptCode` "2" = "Anulación de factura
+   * electrónica" (catálogo DIAN), el motivo usado para la nota del testset.
+   */
+  async crearNotaCredito(params: {
+    token: string;
+    baseUrl: string;
+    companyId: string;
+    number: number;
+    conceptCode: string;
+    documentoAsociado: DocumentoAsociadoAlegra;
+    regimeCode: string;
+    invoicePeriod: { startDate: string; endDate: string };
+    customer: CustomerAlegra;
+    items: ItemFacturaAlegra[];
+    payments: PaymentAlegra[];
+    totalAmounts: TotalAmountsFacturaAlegra;
+  }): Promise<{ alegraDocumentId: string; status: string; legalStatus?: string; isFinal: boolean }> {
+    const res = await fetch(`${params.baseUrl}/credit-notes`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${params.token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        conceptCode: params.conceptCode,
+        number: params.number,
+        invoicePeriod: params.invoicePeriod,
+        associatedDocuments: [params.documentoAsociado],
+        company: { id: params.companyId, regimeCode: params.regimeCode },
+        customer: params.customer,
+        items: params.items,
+        payments: params.payments,
+        totalAmounts: params.totalAmounts,
+      }),
+    });
+    if (!res.ok) {
+      throw new BadGatewayException(await extraerMensajeError(res, 'Alegra rechazó la creación de la nota crédito'));
+    }
+    const data = await res.json();
+    const nota = data.invoices?.[0] ?? data;
+    return {
+      alegraDocumentId: nota.id as string,
+      status: nota.status as string,
+      legalStatus: nota.legalStatus as string | undefined,
+      isFinal: nota.isFinal !== false,
+    };
+  }
+
+  /**
+   * Shape confirmado con `validate_co_payload` (`co.debit-notes.create`,
+   * 2026-09-01) — usado solo para el testset de habilitación de Factura
+   * (ver `confirmarTestSet`). `conceptCode` "4" = "Otros" (catálogo DIAN de
+   * conceptos de nota débito), el motivo usado para la nota del testset.
+   */
+  async crearNotaDebito(params: {
+    token: string;
+    baseUrl: string;
+    companyId: string;
+    number: number;
+    conceptCode: string;
+    documentoAsociado: DocumentoAsociadoAlegra;
+    regimeCode: string;
+    invoicePeriod: { startDate: string; endDate: string };
+    customer: CustomerAlegra;
+    items: ItemFacturaAlegra[];
+    payments: PaymentAlegra[];
+    totalAmounts: TotalAmountsFacturaAlegra;
+  }): Promise<{ alegraDocumentId: string; status: string; legalStatus?: string; isFinal: boolean }> {
+    const res = await fetch(`${params.baseUrl}/debit-notes`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${params.token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        conceptCode: params.conceptCode,
+        number: params.number,
+        invoicePeriod: params.invoicePeriod,
+        associatedDocuments: [params.documentoAsociado],
+        company: { id: params.companyId, regimeCode: params.regimeCode },
+        customer: params.customer,
+        items: params.items,
+        payments: params.payments,
+        totalAmounts: params.totalAmounts,
+      }),
+    });
+    if (!res.ok) {
+      throw new BadGatewayException(await extraerMensajeError(res, 'Alegra rechazó la creación de la nota débito'));
+    }
+    const data = await res.json();
+    const nota = data.debitNote ?? data;
+    return {
+      alegraDocumentId: nota.id as string,
+      status: nota.status as string,
+      legalStatus: nota.legalStatus as string | undefined,
+      isFinal: nota.isFinal !== false,
     };
   }
 
@@ -338,6 +584,10 @@ export class AlegraClientService {
    * en vivo). La respuesta reusa el mismo shape que el POST de creación —
    * `{ equivalentDocument: {...}, files: { xml, zip } }` (sin `pdf` confirmado
    * para DEE-POS; factura completa no se probó en vivo).
+   *
+   * Solo para DEE_POS histórico (documentos emitidos antes del rediseño a
+   * Factura Electrónica única). Todo documento nuevo es `FACTURA` y usa
+   * `consultarFactura` (`GET /invoices/{id}`), no este método.
    */
   async consultarDocumento(params: {
     token: string;

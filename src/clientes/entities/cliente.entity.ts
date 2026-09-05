@@ -24,6 +24,10 @@ export class Cliente extends BaseEntity {
   @Column({ name: 'documento_identidad', nullable: true })
   documentoIdentidad?: string;
 
+  /** Catálogo DIAN de tipo de identificación (13 CC, 31 NIT, 22 CE, 41 Pasaporte...) — necesario para el `customer` de Factura Electrónica. */
+  @Column({ name: 'tipo_documento_identidad', nullable: true })
+  tipoDocumentoIdentidad?: string;
+
   @Column({
     name: 'limite_credito',
     type: 'numeric',

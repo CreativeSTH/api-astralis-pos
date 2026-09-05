@@ -42,6 +42,14 @@ export class VentaItem {
   @Column({ type: 'numeric', precision: 12, scale: 2 })
   subtotal: number;
 
+  /** Valor de la línea SIN impuesto — snapshot calculado en `procesarItemsYStock`, mismo patrón que `precioUnitario`/`costoUnitario`. Default 0 solo para no romper filas de ventas ya existentes al migrar; toda venta nueva lo calcula siempre. */
+  @Column({ name: 'base_imponible', type: 'numeric', precision: 12, scale: 2, default: 0 })
+  baseImponible: number;
+
+  /** Impuesto de la línea — `subtotal = baseImponible + impuesto`. */
+  @Column({ type: 'numeric', precision: 12, scale: 2, default: 0 })
+  impuesto: number;
+
   @Column({ name: 'costo_unitario', type: 'numeric', precision: 12, scale: 2 })
   costoUnitario: number;
 

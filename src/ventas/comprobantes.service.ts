@@ -12,6 +12,9 @@ export interface ItemComprobante {
   nombre: string;
   cantidad: number;
   subtotal: number;
+  /** Valor sin impuesto y monto de impuesto de esta línea — para que el comprobante local (recibo o factura) tenga siempre el IVA discriminado, exigido por el Estatuto Tributario (Art. 617) aunque el negocio no tenga facturación electrónica activa. */
+  baseImponible: number;
+  impuesto: number;
 }
 
 export interface PagoComprobante {
@@ -108,6 +111,8 @@ export class ComprobantesService {
         nombre: item.nombreProducto,
         cantidad: Number(item.cantidad),
         subtotal: Number(item.subtotal),
+        baseImponible: Number(item.baseImponible),
+        impuesto: Number(item.impuesto),
       })),
       subtotal: Number(venta.subtotal),
       descuento: Number(venta.descuentoTotal),
