@@ -50,4 +50,8 @@ export class Suscripcion extends BaseEntity {
   /** Mes de referencia del contador de arriba, formato 'YYYY-MM' (UTC). null antes del primer registrarConsumo. */
   @Column({ name: 'consumo_mes_referencia', type: 'varchar', nullable: true })
   consumoMesReferencia: string | null;
+
+  /** Solo se llena al cancelar explícitamente (ver SuscripcionesService.cancelar) — nunca se borra. */
+  @Column({ name: 'motivo_cancelacion', type: 'varchar', nullable: true })
+  motivoCancelacion?: string | null;
 }
