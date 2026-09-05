@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
@@ -840,5 +841,111 @@ describe('SuscripcionesService — gating por feature y cupo/consumo', () => {
 
     const guardado = suscripcionesRepo.save.mock.calls[0][0];
     expect(guardado.consumoMensual.documentosDianPorMes).toBe(1);
+  });
+});
+
+describe('SuscripcionesService — cancelar, revertirCancelacion, cambiarPaqueteEnPrueba', () => {
+  let service: SuscripcionesService;
+  let suscripcionesRepo: { findOne: jest.Mock; save: jest.Mock };
+  let paquetesService: { findOne: jest.Mock };
+  let realtimeGateway: { emitToNegocio: jest.Mock };
+
+  beforeEach(async () => {
+    suscripcionesRepo = { findOne: jest.fn(), save: jest.fn((s) => Promise.resolve(s)) };
+    paquetesService = { findOne: jest.fn() };
+    realtimeGateway = { emitToNegocio: jest.fn() };
+
+    const moduleRef = await Test.createTestingModule({
+      providers: [
+        SuscripcionesService,
+        { provide: getRepositoryToken(Suscripcion), useValue: suscripcionesRepo },
+        { provide: getRepositoryToken(TransaccionSuscripcion), useValue: {} },
+        { provide: getRepositoryToken(MedioPagoGuardado), useValue: {} },
+        { provide: WompiClientService, useValue: {} },
+        { provide: PaquetesService, useValue: paquetesService },
+        { provide: RealtimeGateway, useValue: realtimeGateway },
+        { provide: getRepositoryToken(Negocio), useValue: {} },
+        { provide: getRepositoryToken(Usuario), useValue: {} },
+        { provide: getRepositoryToken(Alerta), useValue: {} },
+        { provide: EmailService, useValue: { enviar: jest.fn() } },
+      ],
+    }).compile();
+
+    service = moduleRef.get(SuscripcionesService);
+  });
+
+  describe('cancelar', () => {
+    it('rechaza si el estado no es ACTIVA ni PRUEBA', async () => {
+      suscripcionesRepo.findOne.mockResolvedValue({ negocioId: 'neg-1', estado: EstadoSuscripcion.VENCIDA });
+      await expect(service.cancelar('neg-1', 'muy caro')).rejects.toThrow(BadRequestException);
+    });
+
+    it('marca CANCELADA con el motivo, sin tocar fechaFin', async () => {
+      const fechaFinOriginal = new Date('2026-10-05');
+      suscripcionesRepo.findOne.mockResolvedValue({ negocioId: 'neg-1', estado: EstadoSuscripcion.ACTIVA, fechaFin: fechaFinOriginal });
+
+      const resultado = await service.cancelar('neg-1', 'muy caro');
+
+      expect(resultado.estado).toBe(EstadoSuscripcion.CANCELADA);
+      expect(resultado.motivoCancelacion).toBe('muy caro');
+      expect(resultado.fechaFin).toBe(fechaFinOriginal);
+    });
+
+    it('permite cancelar sin motivo', async () => {
+      suscripcionesRepo.findOne.mockResolvedValue({ negocioId: 'neg-1', estado: EstadoSuscripcion.PRUEBA, fechaFin: new Date() });
+
+      const resultado = await service.cancelar('neg-1');
+
+      expect(resultado.estado).toBe(EstadoSuscripcion.CANCELADA);
+      expect(resultado.motivoCancelacion).toBeNull();
+    });
+  });
+
+  describe('revertirCancelacion', () => {
+    it('rechaza si fechaFin ya pasó', async () => {
+      suscripcionesRepo.findOne.mockResolvedValue({
+        negocioId: 'neg-1',
+        estado: EstadoSuscripcion.CANCELADA,
+        fechaFin: new Date(Date.now() - 1000),
+      });
+      await expect(service.revertirCancelacion('neg-1')).rejects.toThrow(BadRequestException);
+    });
+
+    it('rechaza si el estado no es CANCELADA', async () => {
+      suscripcionesRepo.findOne.mockResolvedValue({
+        negocioId: 'neg-1',
+        estado: EstadoSuscripcion.ACTIVA,
+        fechaFin: new Date(Date.now() + 100000),
+      });
+      await expect(service.revertirCancelacion('neg-1')).rejects.toThrow(BadRequestException);
+    });
+
+    it('vuelve a ACTIVA sin tocar fechaFin ni cobrar', async () => {
+      const fechaFin = new Date(Date.now() + 1000 * 60 * 60 * 24);
+      suscripcionesRepo.findOne.mockResolvedValue({ negocioId: 'neg-1', estado: EstadoSuscripcion.CANCELADA, fechaFin });
+
+      const resultado = await service.revertirCancelacion('neg-1');
+
+      expect(resultado.estado).toBe(EstadoSuscripcion.ACTIVA);
+      expect(resultado.fechaFin).toBe(fechaFin);
+    });
+  });
+
+  describe('cambiarPaqueteEnPrueba', () => {
+    it('rechaza si el estado no es PRUEBA', async () => {
+      suscripcionesRepo.findOne.mockResolvedValue({ negocioId: 'neg-1', estado: EstadoSuscripcion.ACTIVA });
+      await expect(service.cambiarPaqueteEnPrueba('neg-1', 'paq-2')).rejects.toThrow(BadRequestException);
+    });
+
+    it('cambia el paqueteId sin tocar fechaFin ni cobrar', async () => {
+      const fechaFin = new Date('2026-09-25');
+      suscripcionesRepo.findOne.mockResolvedValue({ negocioId: 'neg-1', estado: EstadoSuscripcion.PRUEBA, paqueteId: 'paq-1', fechaFin });
+      paquetesService.findOne.mockResolvedValue({ id: 'paq-2' });
+
+      const resultado = await service.cambiarPaqueteEnPrueba('neg-1', 'paq-2');
+
+      expect(resultado.paqueteId).toBe('paq-2');
+      expect(resultado.fechaFin).toBe(fechaFin);
+    });
   });
 });

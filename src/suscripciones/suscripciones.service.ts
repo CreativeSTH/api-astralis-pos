@@ -461,6 +461,43 @@ export class SuscripcionesService {
     this.realtimeGateway.emitToNegocio(negocioId, 'suscripcion:cambio', { estado: EstadoSuscripcion.ACTIVA });
   }
 
+  /** Válido en ACTIVA o PRUEBA. Nunca toca fechaFin — ya pagó ese período (o sigue en el trial gratis), no se corta antes de tiempo. */
+  async cancelar(negocioId: string, motivo?: string): Promise<Suscripcion> {
+    const suscripcion = await this.suscripcionesRepository.findOne({ where: { negocioId } });
+    if (!suscripcion || (suscripcion.estado !== EstadoSuscripcion.ACTIVA && suscripcion.estado !== EstadoSuscripcion.PRUEBA)) {
+      throw new BadRequestException('Solo se puede cancelar una suscripción activa o en prueba');
+    }
+    suscripcion.estado = EstadoSuscripcion.CANCELADA;
+    suscripcion.motivoCancelacion = motivo ?? null;
+    const guardada = await this.suscripcionesRepository.save(suscripcion);
+    this.realtimeGateway.emitToNegocio(negocioId, 'suscripcion:cambio', { estado: EstadoSuscripcion.CANCELADA });
+    return guardada;
+  }
+
+  /** Revierte una cancelación mientras el período ya pagado sigue vigente — gratis, no cobra nada de nuevo. */
+  async revertirCancelacion(negocioId: string): Promise<Suscripcion> {
+    const suscripcion = await this.suscripcionesRepository.findOne({ where: { negocioId } });
+    const ahora = new Date();
+    if (!suscripcion || suscripcion.estado !== EstadoSuscripcion.CANCELADA || !suscripcion.fechaFin || suscripcion.fechaFin <= ahora) {
+      throw new BadRequestException('Solo se puede reactivar una cancelación cuyo período pagado no venció todavía');
+    }
+    suscripcion.estado = EstadoSuscripcion.ACTIVA;
+    const guardada = await this.suscripcionesRepository.save(suscripcion);
+    this.realtimeGateway.emitToNegocio(negocioId, 'suscripcion:cambio', { estado: EstadoSuscripcion.ACTIVA });
+    return guardada;
+  }
+
+  /** Solo durante PRUEBA — sigue siendo gratis, no toca fechaFin ni dispara ningún cobro. */
+  async cambiarPaqueteEnPrueba(negocioId: string, nuevoPaqueteId: string): Promise<Suscripcion> {
+    const suscripcion = await this.suscripcionesRepository.findOne({ where: { negocioId } });
+    if (!suscripcion || suscripcion.estado !== EstadoSuscripcion.PRUEBA) {
+      throw new BadRequestException('Solo se puede cambiar de plan sin pagar mientras dure la prueba gratis');
+    }
+    await this.paquetesService.findOne(nuevoPaqueteId); // valida que exista
+    suscripcion.paqueteId = nuevoPaqueteId;
+    return this.suscripcionesRepository.save(suscripcion);
+  }
+
   /** Corrida periódica (ver SuscripcionesCronService): PRUEBA/ACTIVA vencidas pasan a VENCIDA — excluye negocios con medio de pago guardado activo, esos los maneja `cobrarAutomatico()`. */
   async marcarVencidas(): Promise<void> {
     const ahora = new Date();
