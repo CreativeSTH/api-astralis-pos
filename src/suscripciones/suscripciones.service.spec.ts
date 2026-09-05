@@ -517,6 +517,52 @@ describe('SuscripcionesService — marcarVencidas', () => {
 
     expect(queryBuilder.andWhere).toHaveBeenCalledTimes(1);
   });
+
+  it('marca VENCIDA una CANCELADA vencida aunque tenga medio de pago activo (a diferencia de ACTIVA/PRUEBA)', async () => {
+    const queryBuilder = {
+      update: jest.fn().mockReturnThis(),
+      set: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      execute: jest.fn().mockResolvedValue(undefined),
+    };
+    const suscripcionesRepo = { createQueryBuilder: jest.fn(() => queryBuilder) };
+    // El negocio con medio de pago activo debe seguir excluido de la query PRUEBA/ACTIVA,
+    // pero eso no debe impedir que la query CANCELADA (sin exclusión) lo alcance igual.
+    const medioPagoRepo = { find: jest.fn().mockResolvedValue([{ negocioId: 'neg-cancelada', activo: true }]) };
+
+    const moduleRef = await Test.createTestingModule({
+      providers: [
+        SuscripcionesService,
+        { provide: getRepositoryToken(Suscripcion), useValue: suscripcionesRepo },
+        { provide: getRepositoryToken(TransaccionSuscripcion), useValue: {} },
+        { provide: getRepositoryToken(MedioPagoGuardado), useValue: medioPagoRepo },
+        { provide: WompiClientService, useValue: {} },
+        { provide: PaquetesService, useValue: {} },
+        { provide: RealtimeGateway, useValue: { emitToNegocio: jest.fn() } },
+        { provide: getRepositoryToken(Negocio), useValue: {} },
+        { provide: getRepositoryToken(Usuario), useValue: {} },
+        { provide: getRepositoryToken(Alerta), useValue: {} },
+        { provide: EmailService, useValue: { enviar: jest.fn() } },
+      ],
+    }).compile();
+
+    const service = moduleRef.get(SuscripcionesService);
+    await service.marcarVencidas();
+
+    // Dos corridas de query: una para CANCELADA (sin exclusión por negocio_id) y otra para
+    // PRUEBA/ACTIVA (con exclusión) — createQueryBuilder se pide una vez por cada una.
+    expect(suscripcionesRepo.createQueryBuilder).toHaveBeenCalledTimes(2);
+    expect(queryBuilder.where).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ cancelada: 'CANCELADA' }),
+    );
+    // La query CANCELADA nunca debe excluir por negocio_id, aunque haya medios de pago activos.
+    const llamadasWhereConExclusion = queryBuilder.andWhere.mock.calls.filter(([sql]) =>
+      String(sql).includes('negocio_id NOT IN'),
+    );
+    expect(llamadasWhereConExclusion.length).toBe(1); // solo en la corrida PRUEBA/ACTIVA
+  });
 });
 
 describe('SuscripcionesService — procesarWebhookWompi cuenta el fallo de un cobro AUTOMATICO', () => {
@@ -947,5 +993,71 @@ describe('SuscripcionesService — cancelar, revertirCancelacion, cambiarPaquete
       expect(resultado.paqueteId).toBe('paq-2');
       expect(resultado.fechaFin).toBe(fechaFin);
     });
+  });
+});
+
+describe('SuscripcionesService — miEstado enRiesgo', () => {
+  let service: SuscripcionesService;
+  let suscripcionesRepo: { findOne: jest.Mock };
+
+  beforeEach(async () => {
+    suscripcionesRepo = { findOne: jest.fn() };
+
+    const moduleRef = await Test.createTestingModule({
+      providers: [
+        SuscripcionesService,
+        { provide: getRepositoryToken(Suscripcion), useValue: suscripcionesRepo },
+        { provide: getRepositoryToken(TransaccionSuscripcion), useValue: {} },
+        { provide: getRepositoryToken(MedioPagoGuardado), useValue: {} },
+        { provide: WompiClientService, useValue: {} },
+        { provide: PaquetesService, useValue: {} },
+        { provide: RealtimeGateway, useValue: { emitToNegocio: jest.fn() } },
+        { provide: getRepositoryToken(Negocio), useValue: {} },
+        { provide: getRepositoryToken(Usuario), useValue: {} },
+        { provide: getRepositoryToken(Alerta), useValue: {} },
+        { provide: EmailService, useValue: { enviar: jest.fn() } },
+      ],
+    }).compile();
+
+    service = moduleRef.get(SuscripcionesService);
+  });
+
+  it('enRiesgo es true solo con ACTIVA e intentosFallidosCobro > 0', async () => {
+    suscripcionesRepo.findOne.mockResolvedValue({
+      estado: EstadoSuscripcion.ACTIVA,
+      intentosFallidosCobro: 1,
+      paqueteId: 'p1',
+      paquete: { id: 'p1', nombre: 'Básico' },
+    });
+
+    const resultado = await service.miEstado('neg-1');
+
+    expect(resultado.enRiesgo).toBe(true);
+  });
+
+  it('enRiesgo es false si está ACTIVA sin fallos', async () => {
+    suscripcionesRepo.findOne.mockResolvedValue({
+      estado: EstadoSuscripcion.ACTIVA,
+      intentosFallidosCobro: 0,
+      paqueteId: 'p1',
+      paquete: { id: 'p1', nombre: 'Básico' },
+    });
+
+    const resultado = await service.miEstado('neg-1');
+
+    expect(resultado.enRiesgo).toBe(false);
+  });
+
+  it('enRiesgo es false en PRUEBA aunque haya fallos registrados', async () => {
+    suscripcionesRepo.findOne.mockResolvedValue({
+      estado: EstadoSuscripcion.PRUEBA,
+      intentosFallidosCobro: 2,
+      paqueteId: 'p1',
+      paquete: { id: 'p1', nombre: 'Básico' },
+    });
+
+    const resultado = await service.miEstado('neg-1');
+
+    expect(resultado.enRiesgo).toBe(false);
   });
 });

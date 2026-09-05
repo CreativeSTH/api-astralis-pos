@@ -98,7 +98,7 @@ export class SuscripcionesService {
     return suscripcion.fechaFin !== null && suscripcion.fechaFin < new Date();
   }
 
-  async miEstado(negocioId: string): Promise<Suscripcion> {
+  async miEstado(negocioId: string): Promise<Suscripcion & { enRiesgo: boolean }> {
     const suscripcion = await this.suscripcionesRepository.findOne({
       where: { negocioId },
       relations: { paquete: true },
@@ -106,7 +106,12 @@ export class SuscripcionesService {
     if (!suscripcion) {
       throw new NotFoundException(`El negocio ${negocioId} no tiene una suscripción`);
     }
-    return suscripcion;
+    return {
+      ...suscripcion,
+      // Derivado, no persistido — el banner de "en riesgo de pago" del frontend se apoya en
+      // este campo en vez de recalcular la misma regla ahí.
+      enRiesgo: suscripcion.estado === EstadoSuscripcion.ACTIVA && suscripcion.intentosFallidosCobro > 0,
+    };
   }
 
   async iniciarReactivacion(negocioId: string, dto: ReactivarSuscripcionDto) {
@@ -498,9 +503,26 @@ export class SuscripcionesService {
     return this.suscripcionesRepository.save(suscripcion);
   }
 
-  /** Corrida periódica (ver SuscripcionesCronService): PRUEBA/ACTIVA vencidas pasan a VENCIDA — excluye negocios con medio de pago guardado activo, esos los maneja `cobrarAutomatico()`. */
+  /**
+   * Corrida periódica (ver SuscripcionesCronService): PRUEBA/ACTIVA vencidas pasan a VENCIDA —
+   * excluye negocios con medio de pago guardado activo, esos los maneja `cobrarAutomatico()`.
+   * CANCELADA corre en una query separada, SIN esa exclusión — una cancelación nunca debe
+   * derivar en un cobro nuevo, tenga tarjeta guardada o no, así que siempre pasa a VENCIDA al
+   * llegar `fechaFin` sin importar el medio de pago.
+   */
   async marcarVencidas(): Promise<void> {
     const ahora = new Date();
+
+    await this.suscripcionesRepository
+      .createQueryBuilder()
+      .update(Suscripcion)
+      .set({ estado: EstadoSuscripcion.VENCIDA })
+      .where('estado = :cancelada AND fecha_fin IS NOT NULL AND fecha_fin < :ahora', {
+        cancelada: EstadoSuscripcion.CANCELADA,
+        ahora,
+      })
+      .execute();
+
     const negociosConMedioPago = await this.medioPagoRepository.find({ where: { activo: true } });
     const idsExcluidos = negociosConMedioPago.map((m) => m.negocioId);
 
