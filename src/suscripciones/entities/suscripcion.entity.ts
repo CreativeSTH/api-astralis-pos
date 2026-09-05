@@ -54,4 +54,12 @@ export class Suscripcion extends BaseEntity {
   /** Solo se llena al cancelar explícitamente (ver SuscripcionesService.cancelar) — nunca se borra. */
   @Column({ name: 'motivo_cancelacion', type: 'varchar', nullable: true })
   motivoCancelacion?: string | null;
+
+  /**
+   * Estado justo antes de cancelar (PRUEBA o ACTIVA) — revertirCancelacion() vuelve a este estado
+   * exacto en vez de asumir ACTIVA siempre (un trial cancelado y revertido sigue siendo trial).
+   * Se limpia (null) al revertir.
+   */
+  @Column({ name: 'estado_pre_cancelacion', type: 'enum', enum: EstadoSuscripcion, nullable: true })
+  estadoPreCancelacion?: EstadoSuscripcion | null;
 }

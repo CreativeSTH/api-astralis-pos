@@ -98,7 +98,7 @@ export class SuscripcionesService {
     return suscripcion.fechaFin !== null && suscripcion.fechaFin < new Date();
   }
 
-  async miEstado(negocioId: string): Promise<Suscripcion & { enRiesgo: boolean }> {
+  async miEstado(negocioId: string): Promise<Suscripcion & { enRiesgo: boolean; bloqueado: boolean }> {
     const suscripcion = await this.suscripcionesRepository.findOne({
       where: { negocioId },
       relations: { paquete: true },
@@ -111,6 +111,12 @@ export class SuscripcionesService {
       // Derivado, no persistido — el banner de "en riesgo de pago" del frontend se apoya en
       // este campo en vez de recalcular la misma regla ahí.
       enRiesgo: suscripcion.estado === EstadoSuscripcion.ACTIVA && suscripcion.intentosFallidosCobro > 0,
+      // Misma fuente de verdad que SuscripcionGuard — evita que el frontend decida "ya no estoy
+      // bloqueado" mirando solo estado === VENCIDA cuando en realidad sigue bloqueado por fecha
+      // (ej. CANCELADA con fechaFin ya vencida, antes de que el cron la pase a VENCIDA). Sin esto,
+      // SuscripcionVencida redirige a /dashboard, que a su vez recibe 402 de otros endpoints y
+      // rebota de nuevo acá — loop infinito de peticiones (bug real detectado en vivo).
+      bloqueado: await this.estaBloqueado(negocioId),
     };
   }
 
@@ -472,6 +478,7 @@ export class SuscripcionesService {
     if (!suscripcion || (suscripcion.estado !== EstadoSuscripcion.ACTIVA && suscripcion.estado !== EstadoSuscripcion.PRUEBA)) {
       throw new BadRequestException('Solo se puede cancelar una suscripción activa o en prueba');
     }
+    suscripcion.estadoPreCancelacion = suscripcion.estado;
     suscripcion.estado = EstadoSuscripcion.CANCELADA;
     suscripcion.motivoCancelacion = motivo ?? null;
     const guardada = await this.suscripcionesRepository.save(suscripcion);
@@ -479,16 +486,18 @@ export class SuscripcionesService {
     return guardada;
   }
 
-  /** Revierte una cancelación mientras el período ya pagado sigue vigente — gratis, no cobra nada de nuevo. */
+  /** Revierte una cancelación mientras el período ya pagado sigue vigente — gratis, no cobra nada de nuevo. Vuelve al estado (PRUEBA o ACTIVA) que tenía justo antes de cancelar. */
   async revertirCancelacion(negocioId: string): Promise<Suscripcion> {
     const suscripcion = await this.suscripcionesRepository.findOne({ where: { negocioId } });
     const ahora = new Date();
     if (!suscripcion || suscripcion.estado !== EstadoSuscripcion.CANCELADA || !suscripcion.fechaFin || suscripcion.fechaFin <= ahora) {
       throw new BadRequestException('Solo se puede reactivar una cancelación cuyo período pagado no venció todavía');
     }
-    suscripcion.estado = EstadoSuscripcion.ACTIVA;
+    const estadoRestaurado = suscripcion.estadoPreCancelacion ?? EstadoSuscripcion.ACTIVA;
+    suscripcion.estado = estadoRestaurado;
+    suscripcion.estadoPreCancelacion = null;
     const guardada = await this.suscripcionesRepository.save(suscripcion);
-    this.realtimeGateway.emitToNegocio(negocioId, 'suscripcion:cambio', { estado: EstadoSuscripcion.ACTIVA });
+    this.realtimeGateway.emitToNegocio(negocioId, 'suscripcion:cambio', { estado: estadoRestaurado });
     return guardada;
   }
 

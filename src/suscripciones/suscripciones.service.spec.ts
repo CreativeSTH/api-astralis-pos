@@ -926,7 +926,7 @@ describe('SuscripcionesService — cancelar, revertirCancelacion, cambiarPaquete
       await expect(service.cancelar('neg-1', 'muy caro')).rejects.toThrow(BadRequestException);
     });
 
-    it('marca CANCELADA con el motivo, sin tocar fechaFin', async () => {
+    it('marca CANCELADA con el motivo, sin tocar fechaFin, guardando el estado previo', async () => {
       const fechaFinOriginal = new Date('2026-10-05');
       suscripcionesRepo.findOne.mockResolvedValue({ negocioId: 'neg-1', estado: EstadoSuscripcion.ACTIVA, fechaFin: fechaFinOriginal });
 
@@ -935,6 +935,7 @@ describe('SuscripcionesService — cancelar, revertirCancelacion, cambiarPaquete
       expect(resultado.estado).toBe(EstadoSuscripcion.CANCELADA);
       expect(resultado.motivoCancelacion).toBe('muy caro');
       expect(resultado.fechaFin).toBe(fechaFinOriginal);
+      expect(resultado.estadoPreCancelacion).toBe(EstadoSuscripcion.ACTIVA);
     });
 
     it('permite cancelar sin motivo', async () => {
@@ -966,14 +967,44 @@ describe('SuscripcionesService — cancelar, revertirCancelacion, cambiarPaquete
       await expect(service.revertirCancelacion('neg-1')).rejects.toThrow(BadRequestException);
     });
 
-    it('vuelve a ACTIVA sin tocar fechaFin ni cobrar', async () => {
+    it('vuelve a ACTIVA sin tocar fechaFin ni cobrar cuando venía de ACTIVA', async () => {
+      const fechaFin = new Date(Date.now() + 1000 * 60 * 60 * 24);
+      suscripcionesRepo.findOne.mockResolvedValue({
+        negocioId: 'neg-1',
+        estado: EstadoSuscripcion.CANCELADA,
+        fechaFin,
+        estadoPreCancelacion: EstadoSuscripcion.ACTIVA,
+      });
+
+      const resultado = await service.revertirCancelacion('neg-1');
+
+      expect(resultado.estado).toBe(EstadoSuscripcion.ACTIVA);
+      expect(resultado.fechaFin).toBe(fechaFin);
+      expect(resultado.estadoPreCancelacion).toBeNull();
+    });
+
+    it('vuelve a PRUEBA (no ACTIVA) cuando la cancelación se originó durante el trial', async () => {
+      const fechaFin = new Date(Date.now() + 1000 * 60 * 60 * 24);
+      suscripcionesRepo.findOne.mockResolvedValue({
+        negocioId: 'neg-1',
+        estado: EstadoSuscripcion.CANCELADA,
+        fechaFin,
+        estadoPreCancelacion: EstadoSuscripcion.PRUEBA,
+      });
+
+      const resultado = await service.revertirCancelacion('neg-1');
+
+      expect(resultado.estado).toBe(EstadoSuscripcion.PRUEBA);
+      expect(resultado.estadoPreCancelacion).toBeNull();
+    });
+
+    it('cae a ACTIVA si no hay estadoPreCancelacion registrado (dato legado)', async () => {
       const fechaFin = new Date(Date.now() + 1000 * 60 * 60 * 24);
       suscripcionesRepo.findOne.mockResolvedValue({ negocioId: 'neg-1', estado: EstadoSuscripcion.CANCELADA, fechaFin });
 
       const resultado = await service.revertirCancelacion('neg-1');
 
       expect(resultado.estado).toBe(EstadoSuscripcion.ACTIVA);
-      expect(resultado.fechaFin).toBe(fechaFin);
     });
   });
 
@@ -1059,5 +1090,33 @@ describe('SuscripcionesService — miEstado enRiesgo', () => {
     const resultado = await service.miEstado('neg-1');
 
     expect(resultado.enRiesgo).toBe(false);
+  });
+
+  it('bloqueado es true si CANCELADA con fechaFin ya vencida, aunque el estado no sea VENCIDA', async () => {
+    suscripcionesRepo.findOne.mockResolvedValue({
+      estado: EstadoSuscripcion.CANCELADA,
+      fechaFin: new Date(Date.now() - 1000),
+      intentosFallidosCobro: 0,
+      paqueteId: 'p1',
+      paquete: { id: 'p1', nombre: 'Básico' },
+    });
+
+    const resultado = await service.miEstado('neg-1');
+
+    expect(resultado.bloqueado).toBe(true);
+  });
+
+  it('bloqueado es false si CANCELADA con fechaFin todavía vigente', async () => {
+    suscripcionesRepo.findOne.mockResolvedValue({
+      estado: EstadoSuscripcion.CANCELADA,
+      fechaFin: new Date(Date.now() + 1000 * 60 * 60 * 24),
+      intentosFallidosCobro: 0,
+      paqueteId: 'p1',
+      paquete: { id: 'p1', nombre: 'Básico' },
+    });
+
+    const resultado = await service.miEstado('neg-1');
+
+    expect(resultado.bloqueado).toBe(false);
   });
 });
