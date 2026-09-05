@@ -1,7 +1,9 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Patch, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { SuscripcionesService } from './suscripciones.service';
 import { ReactivarSuscripcionDto } from './dto/reactivar-suscripcion.dto';
+import { CancelarSuscripcionDto } from './dto/cancelar-suscripcion.dto';
+import { CambiarPaquetePruebaDto } from './dto/cambiar-paquete-prueba.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { EmailVerificadoGuard } from '../common/guards/email-verificado.guard';
 import { Public } from '../common/decorators/public.decorator';
@@ -30,6 +32,32 @@ export class SuscripcionesController {
   @ApiOperation({ summary: 'Reactiva (o cambia de plan) con un cobro único — alcanzable aunque esté VENCIDA' })
   reactivar(@CurrentUser() usuario: JwtUserPayload, @Body() dto: ReactivarSuscripcionDto) {
     return this.suscripcionesService.iniciarReactivacion(usuario.negocioId!, dto);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @Post('cancelar')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Cancela la suscripción — sigue con acceso hasta fechaFin, ya pagado' })
+  cancelar(@CurrentUser() usuario: JwtUserPayload, @Body() dto: CancelarSuscripcionDto) {
+    return this.suscripcionesService.cancelar(usuario.negocioId!, dto.motivo);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @Post('revertir-cancelacion')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Revierte una cancelación mientras el período pagado no venció — gratis' })
+  revertirCancelacion(@CurrentUser() usuario: JwtUserPayload) {
+    return this.suscripcionesService.revertirCancelacion(usuario.negocioId!);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @Patch('paquete-prueba')
+  @ApiOperation({ summary: 'Cambia de plan sin pagar, solo mientras dure la prueba gratis' })
+  cambiarPaqueteEnPrueba(@CurrentUser() usuario: JwtUserPayload, @Body() dto: CambiarPaquetePruebaDto) {
+    return this.suscripcionesService.cambiarPaqueteEnPrueba(usuario.negocioId!, dto.paqueteId);
   }
 
   @UseGuards(JwtAuthGuard)
