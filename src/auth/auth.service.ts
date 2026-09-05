@@ -56,10 +56,6 @@ export class AuthService {
       throw new UnauthorizedException('Credenciales inválidas');
     }
 
-    if (!usuario.emailVerificado) {
-      throw new UnauthorizedException('Confirmá tu correo antes de iniciar sesión');
-    }
-
     return this.emitirSesion(usuario);
   }
 
@@ -245,6 +241,7 @@ export class AuthService {
         rolTier: rol.tier,
         negocioId: usuario.negocioId,
         sucursalId: usuario.sucursalId,
+        emailVerificado: usuario.emailVerificado,
       },
       // Foto de conveniencia para la UI (ocultar botones/menús) — nunca la
       // fuente de autorización real, eso siempre lo re-chequea el backend
