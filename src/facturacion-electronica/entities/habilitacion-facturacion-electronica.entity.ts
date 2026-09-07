@@ -82,6 +82,14 @@ export class HabilitacionFacturacionElectronica extends BaseEntity {
   @Column({ default: 'SANDBOX' })
   ambiente: 'SANDBOX' | 'PRODUCCION';
 
+  /**
+   * true solo mientras esta habilitación viene del atajo de "Probar sin trámite" — hace que
+   * confirmarTestSet() nunca la pase a ambiente PRODUCCION sola. Se vuelve false al activar
+   * facturación real (ver FacturacionElectronicaService.volverAModoReal).
+   */
+  @Column({ name: 'es_habilitacion_de_prueba', default: false })
+  esHabilitacionDePrueba: boolean;
+
   @Column({ name: 'error_mensaje', nullable: true })
   errorMensaje?: string;
 }
