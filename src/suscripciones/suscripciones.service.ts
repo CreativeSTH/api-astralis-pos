@@ -19,8 +19,21 @@ import { ReactivarSuscripcionDto } from './dto/reactivar-suscripcion.dto';
 import { construirCorreoRecordatorioProximo } from '../email/templates/recordatorio-proximo-cobro.template';
 import { construirCorreoRecordatorioDia0 } from '../email/templates/recordatorio-dia-cobro.template';
 import { construirCorreoCobroFallido } from '../email/templates/cobro-fallido.template';
+import { CicloFacturacion } from './entities/ciclo-facturacion.enum';
 
 const DIAS_PRUEBA = 20;
+const DIAS_EARLY_BIRD = 15;
+const DESCUENTO_ANUAL_PCT = 0.17;
+
+/** Centavos a cobrar por este ciclo — el 25% se aplica sobre la base ya elegida (mensual o anual), nunca sobre el precio de lista sin el descuento anual. */
+export function calcularMontoCiclo(paquete: Paquete, ciclo: CicloFacturacion, aplicaEarlyBird: boolean): number {
+  const base =
+    ciclo === CicloFacturacion.ANUAL
+      ? Number(paquete.precioMensual) * 12 * (1 - DESCUENTO_ANUAL_PCT)
+      : Number(paquete.precioMensual);
+  const monto = aplicaEarlyBird ? base * 0.75 : base;
+  return Math.round(monto * 100);
+}
 
 const WOMPI_PAYMENT_TYPE: Record<MetodoPagoSuscripcion, string> = {
   QR: 'BANCOLOMBIA_QR',
@@ -168,7 +181,12 @@ export class SuscripcionesService {
     const { acceptanceToken, acceptPersonalAuth } =
       await this.wompiClient.obtenerTokensAceptacion(llavePublica);
 
-    const montoEnCentavos = Math.round(Number(paquete.precioMensual) * 100);
+    const ciclo = dto.cicloFacturacion ?? CicloFacturacion.MENSUAL;
+    const ahora = new Date();
+    const aplicaEarlyBird =
+      suscripcion.estado === EstadoSuscripcion.PRUEBA &&
+      suscripcion.fechaInicio.getTime() + DIAS_EARLY_BIRD * 24 * 60 * 60 * 1000 > ahora.getTime();
+    const montoEnCentavos = calcularMontoCiclo(paquete, ciclo, aplicaEarlyBird);
     const referencia = randomUUID();
     const currency = 'COP';
     const signature = createHash('sha256')
@@ -254,11 +272,12 @@ export class SuscripcionesService {
         estado: status === 'APPROVED' ? 'APROBADA' : 'PENDIENTE',
         montoEnCentavos,
         origen: 'MANUAL',
+        cicloFacturacion: ciclo,
       }),
     );
 
     if (status === 'APPROVED') {
-      await this.activarTrasPago(negocioId, paqueteId);
+      await this.activarTrasPago(negocioId, paqueteId, ciclo);
       if (paymentSourceIdCreado) {
         await this.guardarMedioPago(negocioId, paymentSourceIdCreado, dto.ultimosCuatroDigitos!);
       }
@@ -380,7 +399,7 @@ export class SuscripcionesService {
     await this.transaccionesRepository.save(transaccion);
 
     if (status === 'APPROVED') {
-      await this.activarTrasPago(transaccion.negocioId, transaccion.paqueteId);
+      await this.activarTrasPago(transaccion.negocioId, transaccion.paqueteId, transaccion.cicloFacturacion);
     } else {
       // Confirmado en vivo contra el sandbox real: un cobro con tarjeta vía payment_source NO
       // resuelve APPROVED/DECLINED de forma síncrona — `crearTransaccionConFuente` devuelve
@@ -420,7 +439,7 @@ export class SuscripcionesService {
       await this.transaccionesRepository.save(actual);
 
       if (status === 'APPROVED') {
-        await this.activarTrasPago(actual.negocioId, actual.paqueteId);
+        await this.activarTrasPago(actual.negocioId, actual.paqueteId, actual.cicloFacturacion);
       } else {
         // Mismo motivo que en procesarWebhookWompi: si el webhook nunca llegó y este polling es
         // el que confirma el DECLINED, sigue siendo el momento real de contar el intento fallido
@@ -442,22 +461,23 @@ export class SuscripcionesService {
    * esperando en la pantalla de reactivación, se entere apenas se aprueba sin tener que adivinar
    * cuándo volver a preguntar.
    */
-  private async activarTrasPago(negocioId: string, paqueteId: string): Promise<void> {
+  private async activarTrasPago(negocioId: string, paqueteId: string, ciclo: CicloFacturacion): Promise<void> {
     const suscripcion = await this.suscripcionesRepository.findOne({ where: { negocioId } });
     if (!suscripcion) throw new BadRequestException(`Negocio ${negocioId} sin suscripción — no se puede activar`);
 
     // Extiende desde la fecha MÁS TARDÍA entre ahora y el vencimiento actual — no desde `now()`
     // a secas. Un negocio todavía ACTIVA que renueva/cambia de plan antes de vencer no debe
     // perder los días que ya pagó y le quedaban; uno VENCIDA (o sin fechaFin) simplemente cuenta
-    // los 30 días desde hoy, que es el caso `Math.max` cubre solo comparando contra `ahora`.
+    // los días desde hoy, que es el caso `Math.max` cubre solo comparando contra `ahora`.
     const ahora = new Date();
     const base = suscripcion.fechaFin && suscripcion.fechaFin > ahora ? suscripcion.fechaFin : ahora;
     const fechaFin = new Date(base);
-    fechaFin.setDate(fechaFin.getDate() + 30);
+    fechaFin.setDate(fechaFin.getDate() + (ciclo === CicloFacturacion.ANUAL ? 365 : 30));
 
     suscripcion.paqueteId = paqueteId;
     suscripcion.estado = EstadoSuscripcion.ACTIVA;
     suscripcion.fechaFin = fechaFin;
+    suscripcion.cicloFacturacion = ciclo;
     // Único punto de éxito compartido por reactivación manual, webhook, polling de respaldo y
     // cobro automático — sin este reset, un negocio que falla una vez y luego cobra bien seguiría
     // acumulando el contador en el próximo fallo aislado, marcando VENCIDA mucho antes de las 3
@@ -586,7 +606,7 @@ export class SuscripcionesService {
         const paquete = await this.paquetesService.findOne(suscripcion.paqueteId);
         const llavePrivada = process.env.WOMPI_PLATAFORMA_LLAVE_PRIVADA!;
         const llaveIntegridad = process.env.WOMPI_PLATAFORMA_LLAVE_INTEGRIDAD!;
-        const montoEnCentavos = Math.round(Number(paquete.precioMensual) * 100);
+        const montoEnCentavos = calcularMontoCiclo(paquete, suscripcion.cicloFacturacion, false);
         const referencia = randomUUID();
         const currency = 'COP';
         const signature = createHash('sha256')
@@ -614,6 +634,7 @@ export class SuscripcionesService {
             estado: status === 'APPROVED' ? 'APROBADA' : status === 'DECLINED' ? 'DECLINADA' : 'PENDIENTE',
             montoEnCentavos,
             origen: 'AUTOMATICO',
+            cicloFacturacion: suscripcion.cicloFacturacion,
           }),
         );
 
@@ -625,7 +646,7 @@ export class SuscripcionesService {
         // un cobro que en la práctica puede terminar aprobado segundos después — solo un DECLINED
         // *inmediato y real* (poco común, pero posible) cuenta como fallo en este mismo momento.
         if (status === 'APPROVED') {
-          await this.activarTrasPago(suscripcion.negocioId, suscripcion.paqueteId);
+          await this.activarTrasPago(suscripcion.negocioId, suscripcion.paqueteId, suscripcion.cicloFacturacion);
         } else if (status === 'DECLINED') {
           await this.registrarIntentoFallido(suscripcion.negocioId);
         }

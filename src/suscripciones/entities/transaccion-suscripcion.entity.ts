@@ -1,5 +1,6 @@
 import { Column, Entity, Index } from 'typeorm';
 import { BaseEntity } from '../../common/entities/base.entity';
+import { CicloFacturacion } from './ciclo-facturacion.enum';
 
 export type MetodoPagoSuscripcion = 'QR' | 'NEQUI' | 'PSE' | 'TARJETA';
 export type EstadoTransaccionSuscripcion = 'PENDIENTE' | 'APROBADA' | 'DECLINADA';
@@ -36,4 +37,8 @@ export class TransaccionSuscripcion extends BaseEntity {
   /** Distingue un cobro disparado por el usuario (reactivar a mano) de uno disparado por el cron diario. */
   @Column({ default: 'MANUAL' })
   origen: 'MANUAL' | 'AUTOMATICO';
+
+  /** Grabado al crear la transacción, leído al confirmarla (webhook/reconciliarPendientes) — no depende del cicloFacturacion mutable de Suscripcion en el momento de una confirmación asíncrona. */
+  @Column({ name: 'ciclo_facturacion', type: 'enum', enum: CicloFacturacion, default: CicloFacturacion.MENSUAL })
+  cicloFacturacion: CicloFacturacion;
 }

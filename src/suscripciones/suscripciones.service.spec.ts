@@ -14,6 +14,7 @@ import { WompiClientService } from '../pagos/wompi-client.service';
 import { PaquetesService } from '../paquetes/paquetes.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { EmailService } from '../email/email.service';
+import { CicloFacturacion } from './entities/ciclo-facturacion.enum';
 
 describe('SuscripcionesService — creación y estaBloqueado', () => {
   let service: SuscripcionesService;
@@ -140,6 +141,87 @@ describe('SuscripcionesService — iniciarReactivacion con guardarTarjeta', () =
       expect.objectContaining({ negocioId: 'neg-1', wompiPaymentSourceId: 3891, ultimosCuatroDigitos: '4242' }),
     );
   });
+
+  it('aplica el 25% early-bird si está en PRUEBA dentro de los primeros 15 días, y lo graba en la transacción', async () => {
+    const fechaInicioReciente = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000); // hace 5 días
+    const suscripcionesRepo = {
+      findOne: jest.fn().mockResolvedValue({ negocioId: 'neg-1', paqueteId: 'pro-1', estado: 'PRUEBA', fechaInicio: fechaInicioReciente }),
+      save: jest.fn(async (x: unknown) => x),
+    };
+    const paquetesService = { findOne: jest.fn().mockResolvedValue({ id: 'pro-1', precioMensual: 139900, nombre: 'Profesional' }) };
+    const wompiClient = {
+      obtenerTokensAceptacion: jest.fn().mockResolvedValue({ acceptanceToken: 'acc', acceptPersonalAuth: 'auth' }),
+      crearTransaccion: jest.fn().mockResolvedValue({ wompiTransactionId: 'txn-eb', status: 'APPROVED' }),
+    };
+    const transaccionesRepo = {
+      save: jest.fn(async (x: unknown) => x),
+      create: jest.fn((x: unknown) => x),
+      createQueryBuilder: jest.fn(() => ({ where: jest.fn().mockReturnThis(), andWhere: jest.fn().mockReturnThis(), getOne: jest.fn().mockResolvedValue(null) })),
+    };
+
+    const moduleRef = await Test.createTestingModule({
+      providers: [
+        SuscripcionesService,
+        { provide: getRepositoryToken(Suscripcion), useValue: suscripcionesRepo },
+        { provide: getRepositoryToken(TransaccionSuscripcion), useValue: transaccionesRepo },
+        { provide: getRepositoryToken(MedioPagoGuardado), useValue: { findOne: jest.fn().mockResolvedValue(null) } },
+        { provide: WompiClientService, useValue: wompiClient },
+        { provide: PaquetesService, useValue: paquetesService },
+        { provide: RealtimeGateway, useValue: { emitToNegocio: jest.fn() } },
+        { provide: getRepositoryToken(Negocio), useValue: {} },
+        { provide: getRepositoryToken(Usuario), useValue: {} },
+        { provide: getRepositoryToken(Alerta), useValue: {} },
+        { provide: EmailService, useValue: { enviar: jest.fn() } },
+      ],
+    }).compile();
+
+    const service = moduleRef.get(SuscripcionesService);
+    await service.iniciarReactivacion('neg-1', { metodo: 'NEQUI', datosMetodo: {}, cicloFacturacion: CicloFacturacion.MENSUAL as any });
+
+    const transaccionGuardada = transaccionesRepo.save.mock.calls[0][0] as { montoEnCentavos: number; cicloFacturacion: string };
+    expect(transaccionGuardada.montoEnCentavos).toBe(Math.round(139900 * 0.75 * 100));
+    expect(transaccionGuardada.cicloFacturacion).toBe('MENSUAL');
+  });
+
+  it('NO aplica el 25% si ya pasaron más de 15 días de fechaInicio', async () => {
+    const fechaInicioVieja = new Date(Date.now() - 18 * 24 * 60 * 60 * 1000); // hace 18 días
+    const suscripcionesRepo = {
+      findOne: jest.fn().mockResolvedValue({ negocioId: 'neg-1', paqueteId: 'pro-1', estado: 'PRUEBA', fechaInicio: fechaInicioVieja }),
+      save: jest.fn(async (x: unknown) => x),
+    };
+    const paquetesService = { findOne: jest.fn().mockResolvedValue({ id: 'pro-1', precioMensual: 139900, nombre: 'Profesional' }) };
+    const wompiClient = {
+      obtenerTokensAceptacion: jest.fn().mockResolvedValue({ acceptanceToken: 'acc', acceptPersonalAuth: 'auth' }),
+      crearTransaccion: jest.fn().mockResolvedValue({ wompiTransactionId: 'txn-sin-eb', status: 'APPROVED' }),
+    };
+    const transaccionesRepo = {
+      save: jest.fn(async (x: unknown) => x),
+      create: jest.fn((x: unknown) => x),
+      createQueryBuilder: jest.fn(() => ({ where: jest.fn().mockReturnThis(), andWhere: jest.fn().mockReturnThis(), getOne: jest.fn().mockResolvedValue(null) })),
+    };
+
+    const moduleRef = await Test.createTestingModule({
+      providers: [
+        SuscripcionesService,
+        { provide: getRepositoryToken(Suscripcion), useValue: suscripcionesRepo },
+        { provide: getRepositoryToken(TransaccionSuscripcion), useValue: transaccionesRepo },
+        { provide: getRepositoryToken(MedioPagoGuardado), useValue: { findOne: jest.fn().mockResolvedValue(null) } },
+        { provide: WompiClientService, useValue: wompiClient },
+        { provide: PaquetesService, useValue: paquetesService },
+        { provide: RealtimeGateway, useValue: { emitToNegocio: jest.fn() } },
+        { provide: getRepositoryToken(Negocio), useValue: {} },
+        { provide: getRepositoryToken(Usuario), useValue: {} },
+        { provide: getRepositoryToken(Alerta), useValue: {} },
+        { provide: EmailService, useValue: { enviar: jest.fn() } },
+      ],
+    }).compile();
+
+    const service = moduleRef.get(SuscripcionesService);
+    await service.iniciarReactivacion('neg-1', { metodo: 'NEQUI', datosMetodo: {} });
+
+    const transaccionGuardada = transaccionesRepo.save.mock.calls[0][0] as { montoEnCentavos: number };
+    expect(transaccionGuardada.montoEnCentavos).toBe(13990000);
+  });
 });
 
 describe('SuscripcionesService — cobrarAutomatico', () => {
@@ -204,6 +286,24 @@ describe('SuscripcionesService — cobrarAutomatico', () => {
     expect(guardado.estado).toBe('ACTIVA');
     expect(guardado.fechaFin.getTime()).toBeGreaterThan(Date.now());
     expect(guardado.recordatoriosEnviados).toEqual([]);
+  });
+
+  it('un negocio en cicloFacturacion ANUAL se cobra al monto anual, no al mensual', async () => {
+    const suscripcionAnual = {
+      id: 'sus-1', negocioId: 'neg-1', paqueteId: 'pro-1',
+      estado: 'ACTIVA', fechaFin: new Date(Date.now() - 86400000), intentosFallidosCobro: 0,
+      recordatoriosEnviados: [], cicloFacturacion: 'ANUAL',
+    };
+    suscripcionesRepo.find.mockResolvedValue([suscripcionAnual]);
+    suscripcionesRepo.findOne.mockResolvedValue(suscripcionAnual);
+    medioPagoRepo.findOne.mockResolvedValue({ negocioId: 'neg-1', wompiPaymentSourceId: 3891, activo: true });
+    wompiClient.crearTransaccionConFuente.mockResolvedValue({ wompiTransactionId: 'txn-anual', status: 'APPROVED' });
+
+    await service.cobrarAutomatico();
+
+    expect(wompiClient.crearTransaccionConFuente).toHaveBeenCalledWith(
+      expect.objectContaining({ amountInCents: Math.round(139900 * 12 * (1 - 0.17) * 100) }),
+    );
   });
 
   it('al tercer fallo consecutivo marca VENCIDA', async () => {
@@ -648,6 +748,72 @@ describe('SuscripcionesService — procesarWebhookWompi cuenta el fallo de un co
     await service.procesarWebhookWompi(payloadPara('DECLINED', 'wtx-1'));
 
     expect(suscripcionesRepo.findOne).not.toHaveBeenCalled();
+  });
+});
+
+describe('SuscripcionesService — activarTrasPago vía webhook (ciclo anual)', () => {
+  const SECRETO = 'secreto-test';
+  const OLD_ENV = process.env.WOMPI_PLATAFORMA_LLAVE_SECRETA_EVENTOS;
+
+  beforeEach(() => {
+    process.env.WOMPI_PLATAFORMA_LLAVE_SECRETA_EVENTOS = SECRETO;
+  });
+
+  afterAll(() => {
+    process.env.WOMPI_PLATAFORMA_LLAVE_SECRETA_EVENTOS = OLD_ENV;
+  });
+
+  function payloadAprobado(transactionId: string) {
+    const timestamp = 1234567890;
+    const valores = [transactionId, 'APPROVED'].join('');
+    const checksum = createHash('sha256').update(valores + timestamp + SECRETO).digest('hex');
+    return {
+      event: 'transaction.updated',
+      data: { transaction: { id: transactionId, reference: 'ref-anual-1', status: 'APPROVED' } },
+      signature: { properties: ['transaction.id', 'transaction.status'], checksum },
+      timestamp,
+    };
+  }
+
+  it('con ciclo ANUAL extiende fechaFin en 365 días desde el mayor entre fechaFin actual y ahora, y persiste cicloFacturacion', async () => {
+    const fechaFinFutura = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000); // todavía le quedaban 5 días
+    const suscripcionActiva = { id: 'sus-1', negocioId: 'neg-1', paqueteId: 'pro-1', estado: 'ACTIVA', fechaFin: fechaFinFutura, intentosFallidosCobro: 0, recordatoriosEnviados: [] };
+    const suscripcionesRepo = {
+      findOne: jest.fn().mockResolvedValue(suscripcionActiva),
+      save: jest.fn(async (x: unknown) => x),
+    };
+    const transaccionPendiente = {
+      id: 'txn-1', negocioId: 'neg-1', paqueteId: 'pro-1', referencia: 'ref-anual-1', wompiTransactionId: 'wtx-1',
+      estado: 'PENDIENTE', origen: 'MANUAL', cicloFacturacion: 'ANUAL',
+    };
+    const transaccionesRepo = {
+      findOne: jest.fn().mockResolvedValue(transaccionPendiente),
+      save: jest.fn(async (x: unknown) => x),
+    };
+
+    const moduleRef = await Test.createTestingModule({
+      providers: [
+        SuscripcionesService,
+        { provide: getRepositoryToken(Suscripcion), useValue: suscripcionesRepo },
+        { provide: getRepositoryToken(TransaccionSuscripcion), useValue: transaccionesRepo },
+        { provide: getRepositoryToken(MedioPagoGuardado), useValue: {} },
+        { provide: WompiClientService, useValue: {} },
+        { provide: PaquetesService, useValue: {} },
+        { provide: RealtimeGateway, useValue: { emitToNegocio: jest.fn() } },
+        { provide: getRepositoryToken(Negocio), useValue: { findOne: jest.fn().mockResolvedValue(null) } },
+        { provide: getRepositoryToken(Usuario), useValue: { findOne: jest.fn().mockResolvedValue(null) } },
+        { provide: getRepositoryToken(Alerta), useValue: {} },
+        { provide: EmailService, useValue: { enviar: jest.fn() } },
+      ],
+    }).compile();
+
+    const service = moduleRef.get(SuscripcionesService);
+    await service.procesarWebhookWompi(payloadAprobado('wtx-1'));
+
+    const guardado = suscripcionesRepo.save.mock.calls.at(-1)![0] as { fechaFin: Date; cicloFacturacion: string };
+    const diasExtendidos = (guardado.fechaFin.getTime() - fechaFinFutura.getTime()) / (1000 * 60 * 60 * 24);
+    expect(diasExtendidos).toBeCloseTo(365, 0);
+    expect(guardado.cicloFacturacion).toBe('ANUAL');
   });
 });
 
