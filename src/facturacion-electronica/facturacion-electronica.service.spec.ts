@@ -436,6 +436,21 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
       expect(documentoGuardado.cufe).toBe('cufe-9');
       expect(suscripcionesService.registrarConsumo).toHaveBeenCalledWith('neg-1', 'documentosDianPorMes');
     });
+
+    it('con ambiente SANDBOX, NO registra consumo aunque el documento quede ACEPTADO', async () => {
+      habilitacionRepo.findOne.mockResolvedValue({ ...HABILITACION_CON_RESOLUCION, ambiente: 'SANDBOX', esHabilitacionDePrueba: true });
+      alegraClient.crearFactura.mockResolvedValue({
+        alegraDocumentId: 'doc-sandbox-1',
+        cufe: 'cufe-sandbox-1',
+        status: 'SENT',
+        legalStatus: 'ACCEPTED',
+        isFinal: true,
+      });
+
+      await service.emitirDocumento({ id: 'venta-1', negocioId: 'neg-1' } as any);
+
+      expect(suscripcionesService.registrarConsumo).not.toHaveBeenCalled();
+    });
   });
 
   describe('intentarEmitir — numeración correlativa real y mapeo de la venta', () => {
@@ -627,6 +642,7 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
       documentosRepo.findOne.mockResolvedValue({
         id: 'doc-1', negocioId: 'neg-1', estado: EstadoDocumentoElectronico.PENDIENTE,
       });
+      habilitacionRepo.findOne.mockResolvedValue({ ...HABILITACION_CON_RESOLUCION });
 
       await service.procesarWebhookAlegra({ documentId: 'alegra-doc-1', legalStatus: 'ACCEPTED' });
 
@@ -634,6 +650,20 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
         expect.objectContaining({ estado: EstadoDocumentoElectronico.ACEPTADO }),
       );
       expect(suscripcionesService.registrarConsumo).toHaveBeenCalledWith('neg-1', 'documentosDianPorMes');
+    });
+
+    it('con ambiente SANDBOX, marca ACEPTADO pero NO registra consumo', async () => {
+      documentosRepo.findOne.mockResolvedValue({
+        id: 'doc-1', negocioId: 'neg-1', estado: EstadoDocumentoElectronico.PENDIENTE,
+      });
+      habilitacionRepo.findOne.mockResolvedValue({ ...HABILITACION_CON_RESOLUCION, ambiente: 'SANDBOX', esHabilitacionDePrueba: true });
+
+      await service.procesarWebhookAlegra({ documentId: 'alegra-doc-1', legalStatus: 'ACCEPTED' });
+
+      expect(documentosRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ estado: EstadoDocumentoElectronico.ACEPTADO }),
+      );
+      expect(suscripcionesService.registrarConsumo).not.toHaveBeenCalled();
     });
 
     it('no toca un documento que ya no está PENDIENTE (idempotente)', async () => {

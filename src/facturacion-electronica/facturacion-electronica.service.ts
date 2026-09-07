@@ -638,8 +638,9 @@ export class FacturacionElectronicaService {
     this.realtimeGateway.emitToNegocio(documento.negocioId, 'documentos-electronicos:cambio', documento);
 
     if (
-      documento.estado === EstadoDocumentoElectronico.ACEPTADO ||
-      documento.estado === EstadoDocumentoElectronico.ACEPTADO_CON_OBSERVACIONES
+      (documento.estado === EstadoDocumentoElectronico.ACEPTADO ||
+        documento.estado === EstadoDocumentoElectronico.ACEPTADO_CON_OBSERVACIONES) &&
+      habilitacion.ambiente === 'PRODUCCION'
     ) {
       await this.suscripcionesService.registrarConsumo(documento.negocioId, 'documentosDianPorMes');
     }
@@ -649,6 +650,8 @@ export class FacturacionElectronicaService {
     if (!payload?.documentId) return;
     const documento = await this.documentosRepository.findOne({ where: { alegraDocumentId: payload.documentId } });
     if (!documento || documento.estado !== EstadoDocumentoElectronico.PENDIENTE) return;
+    // Sandbox de prueba no descuenta cupo — ver FacturacionElectronicaService.activarModoSandboxDePrueba.
+    const habilitacion = await this.habilitacionRepository.findOne({ where: { negocioId: documento.negocioId } });
 
     if (payload.legalStatus === 'ACCEPTED') {
       documento.estado = EstadoDocumentoElectronico.ACEPTADO;
@@ -663,8 +666,9 @@ export class FacturacionElectronicaService {
     this.realtimeGateway.emitToNegocio(documento.negocioId, 'documentos-electronicos:cambio', documento);
 
     if (
-      documento.estado === EstadoDocumentoElectronico.ACEPTADO ||
-      documento.estado === EstadoDocumentoElectronico.ACEPTADO_CON_OBSERVACIONES
+      (documento.estado === EstadoDocumentoElectronico.ACEPTADO ||
+        documento.estado === EstadoDocumentoElectronico.ACEPTADO_CON_OBSERVACIONES) &&
+      habilitacion?.ambiente === 'PRODUCCION'
     ) {
       await this.suscripcionesService.registrarConsumo(documento.negocioId, 'documentosDianPorMes');
     }
@@ -722,7 +726,10 @@ export class FacturacionElectronicaService {
     await this.documentosRepository.save(documento);
     this.realtimeGateway.emitToNegocio(documento.negocioId, 'documentos-electronicos:cambio', documento);
 
-    if (documento.estado === EstadoDocumentoElectronico.ACEPTADO || documento.estado === EstadoDocumentoElectronico.ACEPTADO_CON_OBSERVACIONES) {
+    if (
+      (documento.estado === EstadoDocumentoElectronico.ACEPTADO || documento.estado === EstadoDocumentoElectronico.ACEPTADO_CON_OBSERVACIONES) &&
+      habilitacion.ambiente === 'PRODUCCION'
+    ) {
       await this.suscripcionesService.registrarConsumo(documento.negocioId, 'documentosDianPorMes');
     }
   }
