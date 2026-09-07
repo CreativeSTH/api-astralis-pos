@@ -32,6 +32,15 @@ export class HttpExceptionFilter implements ExceptionFilter {
           ? exception.message
           : 'Internal server error';
 
+    // Algunos guards (ej. SuscripcionGuard) agregan un `code` al body de la excepción para que el
+    // frontend distinga variantes del mismo status HTTP (ej. 402 SOLO_LECTURA vs. 402 BLOQUEADO)
+    // sin tener que parsear el `message`. Bug real encontrado en vivo: sin este spread, este
+    // filtro reconstruía el payload desde cero y lo perdía siempre, aunque el guard sí lo mandara.
+    const code =
+      exceptionResponse && typeof exceptionResponse === 'object' && 'code' in exceptionResponse
+        ? (exceptionResponse as { code: string }).code
+        : undefined;
+
     const errorPayload = {
       statusCode,
       timestamp: new Date().toISOString(),
@@ -39,6 +48,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
       method: request.method,
       message,
       error: isHttpException ? exception.name : 'InternalServerError',
+      ...(code !== undefined ? { code } : {}),
     };
 
     if (statusCode >= 500) {
