@@ -415,6 +415,27 @@ export class FacturacionElectronicaService {
     return this.habilitacionRepository.save(habilitacion);
   }
 
+  /** Sale del modo sandbox de prueba: conserva razón social/NIT/dirección (Paso 1), limpia los campos de resolución de prueba para que el wizard de Paso 3 pida los reales. */
+  async volverAModoReal(negocioId: string): Promise<HabilitacionFacturacionElectronica> {
+    const habilitacion = await this.obtenerOCrearHabilitacion(negocioId);
+    if (habilitacion.estado !== EstadoHabilitacion.HABILITADO || !habilitacion.esHabilitacionDePrueba) {
+      throw new BadRequestException('Esta habilitación no está en modo sandbox de prueba');
+    }
+    habilitacion.esHabilitacionDePrueba = false;
+    habilitacion.estado = EstadoHabilitacion.ESPERANDO_TRAMITE_DIAN;
+    habilitacion.resolucionNumero = undefined;
+    habilitacion.resolucionPrefijo = undefined;
+    habilitacion.resolucionFechaInicio = undefined;
+    habilitacion.resolucionFechaFin = undefined;
+    habilitacion.resolucionRangoDesde = undefined;
+    habilitacion.resolucionRangoHasta = undefined;
+    habilitacion.resolucionTechnicalKey = undefined;
+    habilitacion.governmentTestSetId = undefined;
+    habilitacion.siguienteNumero = undefined;
+    habilitacion.alegraCompanyId = undefined;
+    return this.habilitacionRepository.save(habilitacion);
+  }
+
   /**
    * Fail-closed: sin habilitación HABILITADO, no se crea nada — evita reintentos
    * infinitos contra un negocio que ni siquiera puede facturar todavía.

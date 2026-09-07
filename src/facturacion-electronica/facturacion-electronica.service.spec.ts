@@ -376,6 +376,37 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
     });
   });
 
+  describe('volverAModoReal', () => {
+    it('rechaza si la habilitación no está en modo sandbox HABILITADO', async () => {
+      habilitacionRepo.findOne.mockResolvedValue({ negocioId: 'neg-1', estado: EstadoHabilitacion.ESPERANDO_TRAMITE_DIAN, esHabilitacionDePrueba: false });
+
+      await expect(service.volverAModoReal('neg-1')).rejects.toThrow('Esta habilitación no está en modo sandbox de prueba');
+    });
+
+    it('con una habilitación en modo sandbox, resetea a ESPERANDO_TRAMITE_DIAN y limpia los campos de resolución sin tocar razonSocial/direccion', async () => {
+      habilitacionRepo.findOne.mockResolvedValue({
+        negocioId: 'neg-1',
+        estado: EstadoHabilitacion.HABILITADO,
+        esHabilitacionDePrueba: true,
+        ambiente: 'SANDBOX',
+        razonSocial: 'Negocio Test',
+        direccion: 'Cra 1 # 2-3',
+        resolucionNumero: '00000000000000',
+        resolucionPrefijo: 'PRUEBA',
+        alegraCompanyId: 'company-sandbox-1',
+      });
+
+      const resultado = await service.volverAModoReal('neg-1');
+
+      expect(resultado.estado).toBe(EstadoHabilitacion.ESPERANDO_TRAMITE_DIAN);
+      expect(resultado.esHabilitacionDePrueba).toBe(false);
+      expect(resultado.resolucionNumero).toBeUndefined();
+      expect(resultado.alegraCompanyId).toBeUndefined();
+      expect(resultado.razonSocial).toBe('Negocio Test');
+      expect(resultado.direccion).toBe('Cra 1 # 2-3');
+    });
+  });
+
   describe('emitirDocumento — fail-closed', () => {
     it('no crea DocumentoElectronico si el negocio no está HABILITADO', async () => {
       habilitacionRepo.findOne.mockResolvedValue({ negocioId: 'neg-1', estado: EstadoHabilitacion.RESOLUCION_CARGADA });
