@@ -110,14 +110,14 @@ export class NegociosService {
       throw new ConflictException(`Ya existe un usuario con el email ${dto.adminEmail}`);
     }
 
-    await this.paquetesService.findOne(dto.paqueteId); // valida que el paquete elegido exista
+    const paqueteTrial = await this.paquetesService.obtenerPaqueteTrialCompleto();
 
     const negocio = await this.dataSource.transaction(async (manager) => {
       const negocio = manager.create(Negocio, { nombre: dto.nombreNegocio });
       return manager.save(negocio);
     });
 
-    await this.suscripcionesService.crearSuscripcionPrueba(negocio.id, dto.paqueteId);
+    await this.suscripcionesService.crearSuscripcionPrueba(negocio.id, paqueteTrial.id);
 
     const { administrador } = await this.rolesService.asegurarRolesPorDefecto(negocio.id);
     await this.metodosPagoService.asegurarMetodosPorDefecto(negocio.id);

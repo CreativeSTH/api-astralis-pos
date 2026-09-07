@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsEmail, IsString, IsUUID, MinLength } from 'class-validator';
+import { IsEmail, IsString, MinLength } from 'class-validator';
 
 export class RegistroPublicoDto {
   @ApiProperty()
@@ -18,8 +18,4 @@ export class RegistroPublicoDto {
   @IsString()
   @MinLength(6)
   adminPassword: string;
-
-  @ApiProperty()
-  @IsUUID()
-  paqueteId: string;
 }

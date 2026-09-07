@@ -38,4 +38,9 @@ export class CreatePaqueteDto {
   @IsNumber()
   @Min(0)
   maxUsuarios: number;
+
+  @ApiProperty({ required: false, description: 'Único a la vez — marcarlo acá desmarca el paquete que lo tenía antes' })
+  @IsOptional()
+  @IsBoolean()
+  esPaqueteTrialCompleto?: boolean;
 }
