@@ -1,9 +1,10 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ClsService } from 'nestjs-cls';
 import { TenantBaseService } from '../common/services/tenant-base.service';
 import { Sucursal } from './entities/sucursal.entity';
+import { Bodega } from '../bodegas/entities/bodega.entity';
 import { CreateSucursalDto } from './dto/create-sucursal.dto';
 import { UpdateSucursalDto } from './dto/update-sucursal.dto';
 
@@ -11,6 +12,7 @@ import { UpdateSucursalDto } from './dto/update-sucursal.dto';
 export class SucursalesService extends TenantBaseService<Sucursal> {
   constructor(
     @InjectRepository(Sucursal) repository: Repository<Sucursal>,
+    @InjectRepository(Bodega) private readonly bodegaRepo: Repository<Bodega>,
     cls: ClsService,
   ) {
     super(repository, cls, 'Sucursal');
@@ -28,7 +30,15 @@ export class SucursalesService extends TenantBaseService<Sucursal> {
     return this.createForTenant(dto);
   }
 
-  update(id: string, dto: UpdateSucursalDto) {
+  async update(id: string, dto: UpdateSucursalDto) {
+    if (dto.bodegaOperativaId) {
+      const bodega = await this.bodegaRepo.findOne({
+        where: { id: dto.bodegaOperativaId, negocioId: this.getNegocioId(), sucursalId: id },
+      });
+      if (!bodega) {
+        throw new NotFoundException('La bodega operativa debe pertenecer a esta sucursal');
+      }
+    }
     return this.updateForTenant(id, dto);
   }
 

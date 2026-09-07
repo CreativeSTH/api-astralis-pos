@@ -41,4 +41,9 @@ export class CreateSucursalDto {
   @IsOptional()
   @IsUUID()
   plantillaFacturaDefectoId?: string;
+
+  @ApiProperty({ required: false, description: 'Debe ser una bodega que pertenezca a esta misma sucursal' })
+  @IsOptional()
+  @IsUUID()
+  bodegaOperativaId?: string;
 }

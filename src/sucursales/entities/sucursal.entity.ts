@@ -1,6 +1,7 @@
 import { Column, Entity, Index, JoinColumn, ManyToOne } from 'typeorm';
 import { BaseEntity } from '../../common/entities/base.entity';
 import { Negocio } from '../../negocios/entities/negocio.entity';
+import { Bodega } from '../../bodegas/entities/bodega.entity';
 import { TipoComprobante } from '../../common/enums/tipo-comprobante.enum';
 
 @Entity('sucursales')
@@ -50,4 +51,17 @@ export class Sucursal extends BaseEntity {
 
   @Column({ name: 'plantilla_factura_defecto_id', nullable: true })
   plantillaFacturaDefectoId?: string;
+
+  /**
+   * Bodega con la que esta sucursal vende por defecto — resuelve sin ambigüedad "la bodega de
+   * esta sucursal" para el punto de venta y otras pantallas cuando hay más de una. Se asigna sola
+   * a la primera bodega que se crea para la sucursal (`BodegasService.create`); de ahí en más,
+   * cambiarla es una acción explícita (`/sucursales` o el asistente de configuración).
+   */
+  @Column({ name: 'bodega_operativa_id', nullable: true })
+  bodegaOperativaId?: string;
+
+  @ManyToOne(() => Bodega, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'bodega_operativa_id' })
+  bodegaOperativa?: Bodega;
 }
