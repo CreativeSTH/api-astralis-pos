@@ -1,6 +1,15 @@
 import { BadGatewayException, Injectable } from '@nestjs/common';
 
-const BASE_URL = process.env.WOMPI_BASE_URL ?? 'https://production.wompi.co/v1';
+/**
+ * Función, no constante de módulo — evaluar `process.env.WOMPI_BASE_URL` al importar este
+ * archivo (que ocurre durante la resolución del árbol de imports de Nest, antes de que
+ * `ConfigModule.forRoot()` cargue el `.env` dentro de `bootstrap()`) siempre devolvía el
+ * default de producción sin importar el `.env` — bug real encontrado en vivo: cualquier
+ * llamada a Wompi en desarrollo local golpeaba producción con llaves de sandbox.
+ */
+function baseUrl(): string {
+  return process.env.WOMPI_BASE_URL ?? 'https://production.wompi.co/v1';
+}
 
 /**
  * Wompi devuelve el motivo del rechazo en el body (`{ error: { type, reason, messages } }`,
@@ -34,7 +43,7 @@ async function extraerMensajeError(
 @Injectable()
 export class WompiClientService {
   async obtenerTokensAceptacion(llavePublica: string) {
-    const res = await fetch(`${BASE_URL}/merchants/${llavePublica}`, {
+    const res = await fetch(`${baseUrl()}/merchants/${llavePublica}`, {
       method: 'GET',
     });
     if (!res.ok) {
@@ -65,7 +74,7 @@ export class WompiClientService {
     paymentMethod: Record<string, unknown>;
     customerEmail: string;
   }) {
-    const res = await fetch(`${BASE_URL}/transactions`, {
+    const res = await fetch(`${baseUrl()}/transactions`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${params.llavePrivada}`,
@@ -111,7 +120,7 @@ export class WompiClientService {
    * requiere la privada.
    */
   async obtenerTransaccion(transactionId: string, llavePublica: string) {
-    const res = await fetch(`${BASE_URL}/transactions/${transactionId}`, {
+    const res = await fetch(`${baseUrl()}/transactions/${transactionId}`, {
       method: 'GET',
       headers: { Authorization: `Bearer ${llavePublica}` },
     });
@@ -138,7 +147,7 @@ export class WompiClientService {
     acceptanceToken: string;
     acceptPersonalAuth: string;
   }): Promise<{ paymentSourceId: number }> {
-    const res = await fetch(`${BASE_URL}/payment_sources`, {
+    const res = await fetch(`${baseUrl()}/payment_sources`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${params.llavePrivada}`,
@@ -172,7 +181,7 @@ export class WompiClientService {
     customerEmail: string;
     recurrente?: boolean;
   }): Promise<{ wompiTransactionId: string; status: string }> {
-    const res = await fetch(`${BASE_URL}/transactions`, {
+    const res = await fetch(`${baseUrl()}/transactions`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${params.llavePrivada}`,
