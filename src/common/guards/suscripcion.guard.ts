@@ -47,15 +47,26 @@ export class SuscripcionGuard {
     // Sin user (no debería pasar, JwtAuthGuard ya corrió) o tier SISTEMA (no tiene Suscripcion): no aplica.
     if (!user || user.rolTier === 'SISTEMA' || !user.negocioId) return true;
 
-    const bloqueado = await this.suscripciones.estaBloqueado(user.negocioId);
-    if (!bloqueado) return true;
+    const acceso = await this.suscripciones.estadoAcceso(user.negocioId);
+    if (acceso === 'OK') return true;
 
     const metodo = request.method as string;
     const ruta = request.route?.path as string | undefined;
     if (ruta && RUTAS_PERMITIDAS_BLOQUEADO.has(`${metodo} ${ruta}`)) return true;
 
+    // Modo de gracia (ver SuscripcionesService.estadoAcceso): los GET pasan siempre, solo se
+    // bloquea escribir algo nuevo. El `code` es lo que el interceptor del frontend usa para no
+    // navegar a la pantalla de bloqueo total cuando esto es apenas modo solo-lectura.
+    if (acceso === 'GRACIA' && metodo === 'GET') return true;
+
     throw new HttpException(
-      'La suscripción de tu negocio venció — reactivala para seguir usando el sistema',
+      {
+        message:
+          acceso === 'GRACIA'
+            ? 'Tu suscripción venció — en modo de solo lectura no podés hacer esta acción. Reactivala para seguir usando el sistema.'
+            : 'La suscripción de tu negocio venció — reactivala para seguir usando el sistema',
+        code: acceso === 'GRACIA' ? 'SOLO_LECTURA' : 'BLOQUEADO',
+      },
       HttpStatus.PAYMENT_REQUIRED,
     );
   }
