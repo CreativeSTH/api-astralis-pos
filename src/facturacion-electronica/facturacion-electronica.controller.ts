@@ -69,6 +69,22 @@ export class FacturacionElectronicaController {
     return this.facturacionService.confirmarTestSet(usuario.negocioId!);
   }
 
+  @Post('habilitacion/sandbox-de-prueba')
+  @RequierePermiso(ModuloPermiso.FACTURACION_ELECTRONICA_DIAN, AccionPermiso.EDITAR)
+  @ApiOperation({ summary: 'Probar Facturación DIAN sin trámite real — solo disponible durante PRUEBA' })
+  async activarModoSandboxDePrueba(@CurrentUser() usuario: JwtUserPayload, @Body() dto: ActualizarDatosNegocioDto) {
+    await this.exigirFeatureHabilitada(usuario.negocioId!);
+    return this.facturacionService.activarModoSandboxDePrueba(usuario.negocioId!, dto);
+  }
+
+  @Post('habilitacion/volver-a-real')
+  @RequierePermiso(ModuloPermiso.FACTURACION_ELECTRONICA_DIAN, AccionPermiso.EDITAR)
+  @ApiOperation({ summary: 'Sale del modo sandbox de prueba, conservando los datos del negocio ya cargados' })
+  async volverAModoReal(@CurrentUser() usuario: JwtUserPayload) {
+    await this.exigirFeatureHabilitada(usuario.negocioId!);
+    return this.facturacionService.volverAModoReal(usuario.negocioId!);
+  }
+
   @Public()
   @Post('webhook-alegra')
   @HttpCode(HttpStatus.OK)

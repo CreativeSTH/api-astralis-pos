@@ -78,10 +78,10 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
     save: jest.Mock;
     createQueryBuilder: jest.Mock;
   };
-  let negociosRepo: { findOneOrFail: jest.Mock };
+  let negociosRepo: { findOneOrFail: jest.Mock; save: jest.Mock };
   let ventasRepo: { findOneOrFail: jest.Mock };
   let alegraClient: AlegraClientMock;
-  let suscripcionesService: { registrarConsumo: jest.Mock };
+  let suscripcionesService: { registrarConsumo: jest.Mock; miEstado: jest.Mock };
   let alertasRepo: { findOne: jest.Mock; create: jest.Mock; save: jest.Mock };
   let realtimeGateway: { emitToNegocio: jest.Mock };
   let qbWhereMock: { where: jest.Mock; andWhere: jest.Mock; getMany: jest.Mock };
@@ -101,7 +101,10 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
       save: jest.fn(async (x) => x),
       createQueryBuilder: jest.fn().mockReturnValue(qbWhereMock),
     };
-    negociosRepo = { findOneOrFail: jest.fn().mockResolvedValue({ nit: '899999034', email: 'negocio@test.local' }) };
+    negociosRepo = {
+      findOneOrFail: jest.fn().mockResolvedValue({ nit: '899999034', email: 'negocio@test.local' }),
+      save: jest.fn(async (x: unknown) => x),
+    };
     ventasRepo = { findOneOrFail: jest.fn().mockResolvedValue(ventaDePrueba()) };
     alegraClient = {
       crearCompania: jest.fn(),
@@ -115,7 +118,7 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
       crearNotaAjuste: jest.fn(),
       consultarDocumento: jest.fn(),
     };
-    suscripcionesService = { registrarConsumo: jest.fn() };
+    suscripcionesService = { registrarConsumo: jest.fn(), miEstado: jest.fn() };
     alertasRepo = { findOne: jest.fn().mockResolvedValue(null), create: jest.fn((x) => x), save: jest.fn(async (x) => x) };
     realtimeGateway = { emitToNegocio: jest.fn() };
 
