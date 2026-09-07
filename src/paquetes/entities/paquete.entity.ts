@@ -6,6 +6,10 @@ import { BaseEntity } from '../../common/entities/base.entity';
   unique: true,
   where: '"es_paquete_free" = true',
 })
+@Index('UQ_paquetes_es_paquete_trial_completo', ['esPaqueteTrialCompleto'], {
+  unique: true,
+  where: '"es_paquete_trial_completo" = true',
+})
 export class Paquete extends BaseEntity {
   @Column()
   nombre: string;
@@ -40,6 +44,17 @@ export class Paquete extends BaseEntity {
    */
   @Column({ name: 'es_paquete_free', default: false })
   esPaqueteFree: boolean;
+
+  /**
+   * A lo sumo una fila del catálogo debería tener esto en true — es el paquete que recibe
+   * automáticamente todo registro público durante los 20 días de PRUEBA (ver
+   * NegociosService.registroPublico), para que nadie elija un plan a ciegas antes de haber
+   * visto el producto. A diferencia de esPaqueteFree, este SÍ es editable desde /paquetes
+   * (ver PaquetesService.update) — es una decisión de negocio que puede cambiar si se agrega
+   * un paquete más completo. Misma invariante sostenida por un índice único parcial.
+   */
+  @Column({ name: 'es_paquete_trial_completo', default: false })
+  esPaqueteTrialCompleto: boolean;
 
   @Column({ default: true })
   activo: boolean;

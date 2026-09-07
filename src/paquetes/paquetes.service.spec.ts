@@ -1,12 +1,12 @@
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, InternalServerErrorException } from '@nestjs/common';
 import { PaquetesService } from './paquetes.service';
 import { Paquete } from './entities/paquete.entity';
 
 describe('PaquetesService', () => {
   let service: PaquetesService;
-  let paquetesRepo: { find: jest.Mock; findOne: jest.Mock; create: jest.Mock; save: jest.Mock };
+  let paquetesRepo: { find: jest.Mock; findOne: jest.Mock; create: jest.Mock; save: jest.Mock; update: jest.Mock };
 
   const paqueteFree: Paquete = {
     id: 'free-1',
@@ -40,6 +40,7 @@ describe('PaquetesService', () => {
       findOne: jest.fn(),
       create: jest.fn((x) => x),
       save: jest.fn(async (x) => x),
+      update: jest.fn(async () => ({ affected: 1 })),
     };
 
     const moduleRef = await Test.createTestingModule({
@@ -92,6 +93,38 @@ describe('PaquetesService', () => {
         maxUsuarios: 50,
       });
       expect(paquetesRepo.save).toHaveBeenCalledWith(expect.objectContaining({ esPaqueteFree: false }));
+    });
+  });
+
+  describe('update — esPaqueteTrialCompleto', () => {
+    it('al marcar un paquete como trial completo, desmarca cualquier otro que lo tuviera antes', async () => {
+      paquetesRepo.findOne.mockResolvedValue(paquetePro);
+      await service.update('pro-1', { esPaqueteTrialCompleto: true });
+      expect(paquetesRepo.update).toHaveBeenCalledWith(
+        { esPaqueteTrialCompleto: true },
+        { esPaqueteTrialCompleto: false },
+      );
+      expect(paquetesRepo.save).toHaveBeenCalledWith(expect.objectContaining({ esPaqueteTrialCompleto: true }));
+    });
+
+    it('no toca la exclusividad si el update no incluye esPaqueteTrialCompleto', async () => {
+      paquetesRepo.findOne.mockResolvedValue(paquetePro);
+      await service.update('pro-1', { precioMensual: 150000 });
+      expect(paquetesRepo.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('obtenerPaqueteTrialCompleto', () => {
+    it('devuelve el paquete marcado', async () => {
+      const paqueteEmpresarial = { ...paquetePro, id: 'emp-1', esPaqueteTrialCompleto: true };
+      paquetesRepo.findOne.mockResolvedValue(paqueteEmpresarial);
+      const resultado = await service.obtenerPaqueteTrialCompleto();
+      expect(resultado).toBe(paqueteEmpresarial);
+    });
+
+    it('lanza si ningún paquete está marcado', async () => {
+      paquetesRepo.findOne.mockResolvedValue(null);
+      await expect(service.obtenerPaqueteTrialCompleto()).rejects.toThrow(InternalServerErrorException);
     });
   });
 });
