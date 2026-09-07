@@ -55,7 +55,7 @@ const REGIME_CODE_RESPONSABLE_IVA = 'O-48';
  * campos; se verifican en vivo contra el sandbox real de Alegra (ver plan, Task 8) y se ajustan acá si Alegra
  * rechaza alguno, sin tocar el resto del diseño.
  */
-const SANDBOX_PREFIJO = 'PRUEBA';
+const SANDBOX_PREFIJO = 'SBOX'; // confirmado en vivo: Alegra rechaza 'PRUEBA' con "prefix does not meet maximum length of 4"
 const SANDBOX_RESOLUCION_NUMERO = '00000000000000';
 const SANDBOX_RANGO_DESDE = 1;
 const SANDBOX_RANGO_HASTA = 100000;
