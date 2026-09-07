@@ -48,6 +48,22 @@ const IDENTIFICATION_TYPE_NIT = '31';
  */
 const REGIME_CODE_RESPONSABLE_IVA = 'O-48';
 
+/**
+ * Datos placeholder para el modo sandbox de prueba (docs/specs/2026-09-06-sandbox-instantaneo-facturacion-dian.md,
+ * sección 3) — punto de partida, no un hecho confirmado. A diferencia de SANDBOX_GOVERNMENT_TEST_SET_ID (público,
+ * ya usado hoy en el wizard real), no hay evidencia pública de un valor "oficial" de sandbox para el resto de estos
+ * campos; se verifican en vivo contra el sandbox real de Alegra (ver plan, Task 8) y se ajustan acá si Alegra
+ * rechaza alguno, sin tocar el resto del diseño.
+ */
+const SANDBOX_PREFIJO = 'PRUEBA';
+const SANDBOX_RESOLUCION_NUMERO = '00000000000000';
+const SANDBOX_RANGO_DESDE = 1;
+const SANDBOX_RANGO_HASTA = 100000;
+const SANDBOX_TECHNICAL_KEY = 'fc8eac422eba16e22ffd8c6f94b3f40a6e38162c';
+const SANDBOX_GOVERNMENT_TEST_SET_ID = 'a70562e0-631e-4ceb-aa65-36887b57dc17';
+const SANDBOX_FECHA_INICIO = '2020-01-01';
+const SANDBOX_FECHA_FIN = '2030-12-31';
+
 @Injectable()
 export class FacturacionElectronicaService {
   constructor(
@@ -104,6 +120,41 @@ export class FacturacionElectronicaService {
     }
     habilitacion.estado = EstadoHabilitacion.ESPERANDO_TRAMITE_DIAN;
     return this.habilitacionRepository.save(habilitacion);
+  }
+
+  /**
+   * Atajo para un negocio en PRUEBA: reusa el mismo pipeline de habilitación real
+   * (actualizarDatosNegocio → cargarResolucion → confirmarTestSet), autocompletando los campos
+   * DIAN que en el flujo real exigen el trámite ante la DIAN. Ver docs/specs/2026-09-06-sandbox-instantaneo-facturacion-dian.md.
+   */
+  async activarModoSandboxDePrueba(
+    negocioId: string,
+    dto: ActualizarDatosNegocioDto,
+  ): Promise<HabilitacionFacturacionElectronica> {
+    const suscripcion = await this.suscripcionesService.miEstado(negocioId);
+    if (suscripcion.estado !== 'PRUEBA') {
+      throw new BadRequestException('El modo sandbox de prueba solo está disponible durante el trial gratis');
+    }
+
+    let habilitacion = await this.actualizarDatosNegocio(negocioId, {
+      ...dto,
+      useAlegraCertificate: true, // el certificado propio no tiene sentido para una simulación
+    });
+    habilitacion.esHabilitacionDePrueba = true;
+    habilitacion = await this.habilitacionRepository.save(habilitacion);
+
+    await this.cargarResolucion(negocioId, {
+      numero: SANDBOX_RESOLUCION_NUMERO,
+      prefijo: SANDBOX_PREFIJO,
+      fechaInicio: SANDBOX_FECHA_INICIO,
+      fechaFin: SANDBOX_FECHA_FIN,
+      rangoDesde: SANDBOX_RANGO_DESDE,
+      rangoHasta: SANDBOX_RANGO_HASTA,
+      technicalKey: SANDBOX_TECHNICAL_KEY,
+      governmentTestSetId: SANDBOX_GOVERNMENT_TEST_SET_ID,
+    });
+
+    return this.confirmarTestSet(negocioId);
   }
 
   async confirmarTramiteDian(negocioId: string): Promise<HabilitacionFacturacionElectronica> {
@@ -352,13 +403,36 @@ export class FacturacionElectronicaService {
       habilitacion.siguienteNumero = numeroInicial + CANTIDAD_FACTURAS_PRUEBA + 2;
 
       habilitacion.estado = EstadoHabilitacion.HABILITADO;
-      habilitacion.ambiente = 'PRODUCCION';
+      if (!habilitacion.esHabilitacionDePrueba) {
+        habilitacion.ambiente = 'PRODUCCION';
+      }
       habilitacion.errorMensaje = undefined;
     } catch (error) {
       habilitacion.estado = EstadoHabilitacion.ERROR;
       habilitacion.errorMensaje = error instanceof Error ? error.message : String(error);
     }
 
+    return this.habilitacionRepository.save(habilitacion);
+  }
+
+  /** Sale del modo sandbox de prueba: conserva razón social/NIT/dirección (Paso 1), limpia los campos de resolución de prueba para que el wizard de Paso 3 pida los reales. */
+  async volverAModoReal(negocioId: string): Promise<HabilitacionFacturacionElectronica> {
+    const habilitacion = await this.obtenerOCrearHabilitacion(negocioId);
+    if (habilitacion.estado !== EstadoHabilitacion.HABILITADO || !habilitacion.esHabilitacionDePrueba) {
+      throw new BadRequestException('Esta habilitación no está en modo sandbox de prueba');
+    }
+    habilitacion.esHabilitacionDePrueba = false;
+    habilitacion.estado = EstadoHabilitacion.ESPERANDO_TRAMITE_DIAN;
+    habilitacion.resolucionNumero = undefined;
+    habilitacion.resolucionPrefijo = undefined;
+    habilitacion.resolucionFechaInicio = undefined;
+    habilitacion.resolucionFechaFin = undefined;
+    habilitacion.resolucionRangoDesde = undefined;
+    habilitacion.resolucionRangoHasta = undefined;
+    habilitacion.resolucionTechnicalKey = undefined;
+    habilitacion.governmentTestSetId = undefined;
+    habilitacion.siguienteNumero = undefined;
+    habilitacion.alegraCompanyId = undefined;
     return this.habilitacionRepository.save(habilitacion);
   }
 
@@ -564,8 +638,9 @@ export class FacturacionElectronicaService {
     this.realtimeGateway.emitToNegocio(documento.negocioId, 'documentos-electronicos:cambio', documento);
 
     if (
-      documento.estado === EstadoDocumentoElectronico.ACEPTADO ||
-      documento.estado === EstadoDocumentoElectronico.ACEPTADO_CON_OBSERVACIONES
+      (documento.estado === EstadoDocumentoElectronico.ACEPTADO ||
+        documento.estado === EstadoDocumentoElectronico.ACEPTADO_CON_OBSERVACIONES) &&
+      habilitacion.ambiente === 'PRODUCCION'
     ) {
       await this.suscripcionesService.registrarConsumo(documento.negocioId, 'documentosDianPorMes');
     }
@@ -575,6 +650,8 @@ export class FacturacionElectronicaService {
     if (!payload?.documentId) return;
     const documento = await this.documentosRepository.findOne({ where: { alegraDocumentId: payload.documentId } });
     if (!documento || documento.estado !== EstadoDocumentoElectronico.PENDIENTE) return;
+    // Sandbox de prueba no descuenta cupo — ver FacturacionElectronicaService.activarModoSandboxDePrueba.
+    const habilitacion = await this.habilitacionRepository.findOne({ where: { negocioId: documento.negocioId } });
 
     if (payload.legalStatus === 'ACCEPTED') {
       documento.estado = EstadoDocumentoElectronico.ACEPTADO;
@@ -589,8 +666,9 @@ export class FacturacionElectronicaService {
     this.realtimeGateway.emitToNegocio(documento.negocioId, 'documentos-electronicos:cambio', documento);
 
     if (
-      documento.estado === EstadoDocumentoElectronico.ACEPTADO ||
-      documento.estado === EstadoDocumentoElectronico.ACEPTADO_CON_OBSERVACIONES
+      (documento.estado === EstadoDocumentoElectronico.ACEPTADO ||
+        documento.estado === EstadoDocumentoElectronico.ACEPTADO_CON_OBSERVACIONES) &&
+      habilitacion?.ambiente === 'PRODUCCION'
     ) {
       await this.suscripcionesService.registrarConsumo(documento.negocioId, 'documentosDianPorMes');
     }
@@ -648,7 +726,10 @@ export class FacturacionElectronicaService {
     await this.documentosRepository.save(documento);
     this.realtimeGateway.emitToNegocio(documento.negocioId, 'documentos-electronicos:cambio', documento);
 
-    if (documento.estado === EstadoDocumentoElectronico.ACEPTADO || documento.estado === EstadoDocumentoElectronico.ACEPTADO_CON_OBSERVACIONES) {
+    if (
+      (documento.estado === EstadoDocumentoElectronico.ACEPTADO || documento.estado === EstadoDocumentoElectronico.ACEPTADO_CON_OBSERVACIONES) &&
+      habilitacion.ambiente === 'PRODUCCION'
+    ) {
       await this.suscripcionesService.registrarConsumo(documento.negocioId, 'documentosDianPorMes');
     }
   }

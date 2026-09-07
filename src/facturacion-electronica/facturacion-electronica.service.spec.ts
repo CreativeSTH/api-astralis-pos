@@ -78,10 +78,10 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
     save: jest.Mock;
     createQueryBuilder: jest.Mock;
   };
-  let negociosRepo: { findOneOrFail: jest.Mock };
+  let negociosRepo: { findOneOrFail: jest.Mock; save: jest.Mock };
   let ventasRepo: { findOneOrFail: jest.Mock };
   let alegraClient: AlegraClientMock;
-  let suscripcionesService: { registrarConsumo: jest.Mock };
+  let suscripcionesService: { registrarConsumo: jest.Mock; miEstado: jest.Mock };
   let alertasRepo: { findOne: jest.Mock; create: jest.Mock; save: jest.Mock };
   let realtimeGateway: { emitToNegocio: jest.Mock };
   let qbWhereMock: { where: jest.Mock; andWhere: jest.Mock; getMany: jest.Mock };
@@ -101,7 +101,10 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
       save: jest.fn(async (x) => x),
       createQueryBuilder: jest.fn().mockReturnValue(qbWhereMock),
     };
-    negociosRepo = { findOneOrFail: jest.fn().mockResolvedValue({ nit: '899999034', email: 'negocio@test.local' }) };
+    negociosRepo = {
+      findOneOrFail: jest.fn().mockResolvedValue({ nit: '899999034', email: 'negocio@test.local' }),
+      save: jest.fn(async (x: unknown) => x),
+    };
     ventasRepo = { findOneOrFail: jest.fn().mockResolvedValue(ventaDePrueba()) };
     alegraClient = {
       crearCompania: jest.fn(),
@@ -115,7 +118,7 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
       crearNotaAjuste: jest.fn(),
       consultarDocumento: jest.fn(),
     };
-    suscripcionesService = { registrarConsumo: jest.fn() };
+    suscripcionesService = { registrarConsumo: jest.fn(), miEstado: jest.fn() };
     alertasRepo = { findOne: jest.fn().mockResolvedValue(null), create: jest.fn((x) => x), save: jest.fn(async (x) => x) };
     realtimeGateway = { emitToNegocio: jest.fn() };
 
@@ -303,6 +306,108 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
       expect(resultado.estado).toBe(EstadoHabilitacion.ERROR);
       expect(resultado.errorMensaje).toBe('testset rechazado');
     });
+
+    it('con esHabilitacionDePrueba, NO pasa ambiente a PRODUCCION al terminar (se queda en SANDBOX)', async () => {
+      habilitacionRepo.findOne.mockResolvedValue({
+        ...HABILITACION_CON_RESOLUCION,
+        estado: EstadoHabilitacion.RESOLUCION_CARGADA,
+        ambiente: 'SANDBOX',
+        esHabilitacionDePrueba: true,
+        governmentTestSetId: 'a70562e0-631e-4ceb-aa65-36887b57dc17',
+      });
+      alegraClient.crearTestSet.mockResolvedValue({ testSetId: 'testset-1' });
+      alegraClient.crearFactura.mockResolvedValue({ alegraDocumentId: 'inv-1', status: 'SENT', legalStatus: 'ACCEPTED', isFinal: true, cufe: 'cufe-1', fecha: '2026-01-05' });
+
+      const resultado = await service.confirmarTestSet('neg-1');
+
+      expect(resultado.estado).toBe(EstadoHabilitacion.HABILITADO);
+      expect(resultado.ambiente).toBe('SANDBOX');
+    });
+  });
+
+  describe('activarModoSandboxDePrueba', () => {
+    it('rechaza si el negocio no está en PRUEBA', async () => {
+      suscripcionesService.miEstado = jest.fn().mockResolvedValue({ estado: 'ACTIVA' });
+
+      await expect(
+        service.activarModoSandboxDePrueba('neg-1', {
+          razonSocial: 'Negocio Test',
+          nit: '900123456',
+          email: 'negocio@test.local',
+          direccion: 'Cra 1 # 2-3',
+          ciudadNombre: 'Bogotá',
+          ciudadCodigo: '11001',
+          departamentoCodigo: '11',
+          useAlegraCertificate: true,
+        }),
+      ).rejects.toThrow('El modo sandbox de prueba solo está disponible durante el trial gratis');
+    });
+
+    it('con PRUEBA, corre el pipeline completo y queda HABILITADO en SANDBOX', async () => {
+      suscripcionesService.miEstado = jest.fn().mockResolvedValue({ estado: 'PRUEBA' });
+      negociosRepo.save = jest.fn(async (x: unknown) => x);
+      habilitacionRepo.findOne
+        .mockResolvedValueOnce(null) // obtenerOCrearHabilitacion dentro de actualizarDatosNegocio
+        .mockResolvedValueOnce({ negocioId: 'neg-1', estado: EstadoHabilitacion.ESPERANDO_TRAMITE_DIAN, razonSocial: 'Negocio Test', useAlegraCertificate: true }) // obtenerOCrearHabilitacion dentro de cargarResolucion
+        .mockResolvedValueOnce({
+          ...HABILITACION_CON_RESOLUCION,
+          negocioId: 'neg-1',
+          estado: EstadoHabilitacion.RESOLUCION_CARGADA,
+          esHabilitacionDePrueba: true,
+          ambiente: 'SANDBOX',
+          alegraCompanyId: 'company-sandbox-1',
+          siguienteNumero: 1,
+          governmentTestSetId: 'a70562e0-631e-4ceb-aa65-36887b57dc17',
+        }); // obtenerOCrearHabilitacion dentro de confirmarTestSet
+      alegraClient.crearCompania.mockResolvedValue({ companyId: 'company-sandbox-1' });
+      alegraClient.crearTestSet.mockResolvedValue({ testSetId: 'testset-1' });
+      alegraClient.crearFactura.mockResolvedValue({ alegraDocumentId: 'inv-1', status: 'SENT', legalStatus: 'ACCEPTED', isFinal: true, cufe: 'cufe-1', fecha: '2026-01-05' });
+
+      const resultado = await service.activarModoSandboxDePrueba('neg-1', {
+        razonSocial: 'Negocio Test',
+        nit: '900123456',
+        email: 'negocio@test.local',
+        direccion: 'Cra 1 # 2-3',
+        ciudadNombre: 'Bogotá',
+        ciudadCodigo: '11001',
+        departamentoCodigo: '11',
+        useAlegraCertificate: true,
+      });
+
+      expect(resultado.estado).toBe(EstadoHabilitacion.HABILITADO);
+      expect(resultado.ambiente).toBe('SANDBOX');
+    });
+  });
+
+  describe('volverAModoReal', () => {
+    it('rechaza si la habilitación no está en modo sandbox HABILITADO', async () => {
+      habilitacionRepo.findOne.mockResolvedValue({ negocioId: 'neg-1', estado: EstadoHabilitacion.ESPERANDO_TRAMITE_DIAN, esHabilitacionDePrueba: false });
+
+      await expect(service.volverAModoReal('neg-1')).rejects.toThrow('Esta habilitación no está en modo sandbox de prueba');
+    });
+
+    it('con una habilitación en modo sandbox, resetea a ESPERANDO_TRAMITE_DIAN y limpia los campos de resolución sin tocar razonSocial/direccion', async () => {
+      habilitacionRepo.findOne.mockResolvedValue({
+        negocioId: 'neg-1',
+        estado: EstadoHabilitacion.HABILITADO,
+        esHabilitacionDePrueba: true,
+        ambiente: 'SANDBOX',
+        razonSocial: 'Negocio Test',
+        direccion: 'Cra 1 # 2-3',
+        resolucionNumero: '00000000000000',
+        resolucionPrefijo: 'PRUEBA',
+        alegraCompanyId: 'company-sandbox-1',
+      });
+
+      const resultado = await service.volverAModoReal('neg-1');
+
+      expect(resultado.estado).toBe(EstadoHabilitacion.ESPERANDO_TRAMITE_DIAN);
+      expect(resultado.esHabilitacionDePrueba).toBe(false);
+      expect(resultado.resolucionNumero).toBeUndefined();
+      expect(resultado.alegraCompanyId).toBeUndefined();
+      expect(resultado.razonSocial).toBe('Negocio Test');
+      expect(resultado.direccion).toBe('Cra 1 # 2-3');
+    });
   });
 
   describe('emitirDocumento — fail-closed', () => {
@@ -333,6 +438,21 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
       expect(documentoGuardado.estado).toBe(EstadoDocumentoElectronico.ACEPTADO);
       expect(documentoGuardado.cufe).toBe('cufe-9');
       expect(suscripcionesService.registrarConsumo).toHaveBeenCalledWith('neg-1', 'documentosDianPorMes');
+    });
+
+    it('con ambiente SANDBOX, NO registra consumo aunque el documento quede ACEPTADO', async () => {
+      habilitacionRepo.findOne.mockResolvedValue({ ...HABILITACION_CON_RESOLUCION, ambiente: 'SANDBOX', esHabilitacionDePrueba: true });
+      alegraClient.crearFactura.mockResolvedValue({
+        alegraDocumentId: 'doc-sandbox-1',
+        cufe: 'cufe-sandbox-1',
+        status: 'SENT',
+        legalStatus: 'ACCEPTED',
+        isFinal: true,
+      });
+
+      await service.emitirDocumento({ id: 'venta-1', negocioId: 'neg-1' } as any);
+
+      expect(suscripcionesService.registrarConsumo).not.toHaveBeenCalled();
     });
   });
 
@@ -525,6 +645,7 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
       documentosRepo.findOne.mockResolvedValue({
         id: 'doc-1', negocioId: 'neg-1', estado: EstadoDocumentoElectronico.PENDIENTE,
       });
+      habilitacionRepo.findOne.mockResolvedValue({ ...HABILITACION_CON_RESOLUCION });
 
       await service.procesarWebhookAlegra({ documentId: 'alegra-doc-1', legalStatus: 'ACCEPTED' });
 
@@ -532,6 +653,20 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
         expect.objectContaining({ estado: EstadoDocumentoElectronico.ACEPTADO }),
       );
       expect(suscripcionesService.registrarConsumo).toHaveBeenCalledWith('neg-1', 'documentosDianPorMes');
+    });
+
+    it('con ambiente SANDBOX, marca ACEPTADO pero NO registra consumo', async () => {
+      documentosRepo.findOne.mockResolvedValue({
+        id: 'doc-1', negocioId: 'neg-1', estado: EstadoDocumentoElectronico.PENDIENTE,
+      });
+      habilitacionRepo.findOne.mockResolvedValue({ ...HABILITACION_CON_RESOLUCION, ambiente: 'SANDBOX', esHabilitacionDePrueba: true });
+
+      await service.procesarWebhookAlegra({ documentId: 'alegra-doc-1', legalStatus: 'ACCEPTED' });
+
+      expect(documentosRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ estado: EstadoDocumentoElectronico.ACEPTADO }),
+      );
+      expect(suscripcionesService.registrarConsumo).not.toHaveBeenCalled();
     });
 
     it('no toca un documento que ya no está PENDIENTE (idempotente)', async () => {
