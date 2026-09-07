@@ -24,6 +24,9 @@ import { CicloFacturacion } from './entities/ciclo-facturacion.enum';
 const DIAS_PRUEBA = 20;
 const DIAS_EARLY_BIRD = 15;
 const DESCUENTO_ANUAL_PCT = 0.17;
+const DIAS_GRACIA = 3;
+
+export type EstadoAcceso = 'OK' | 'GRACIA' | 'BLOQUEADO';
 
 /** Centavos a cobrar por este ciclo — el 25% se aplica sobre la base ya elegida (mensual o anual), nunca sobre el precio de lista sin el descuento anual. */
 export function calcularMontoCiclo(paquete: Paquete, ciclo: CicloFacturacion, aplicaEarlyBird: boolean): number {
@@ -95,23 +98,33 @@ export class SuscripcionesService {
   }
 
   /**
-   * Fail-closed: sin Suscripcion, o VENCIDA, el negocio está bloqueado. Tampoco confía
-   * únicamente en `estado === VENCIDA` — ese campo solo lo escribe
-   * el cron (`marcarVencidas()`, corre cada hora). Si el scheduler no corre
-   * por cualquier motivo, una PRUEBA/ACTIVA con `fechaFin` ya pasada seguiría
-   * dando acceso indefinido sin esta segunda condición — el paywall completo
-   * dependería de que un job en segundo plano nunca falle, lo cual contradice
-   * el fail-closed que exige el spec. Peor caso sin esto: hasta 1h de acceso
-   * gratis extra (tolerable); sin el chequeo, potencialmente indefinido.
+   * Fail-closed: sin Suscripcion, 'BLOQUEADO'. Tampoco confía únicamente en `estado === VENCIDA`
+   * — ese campo solo lo escribe el cron (`marcarVencidas()`, corre cada hora), así que también
+   * compara `fechaFin` contra la fecha actual (una PRUEBA/ACTIVA con `fechaFin` ya pasada cuenta
+   * igual, sin depender de que ese job en segundo plano haya corrido a tiempo). El corte de
+   * `DIAS_GRACIA` (modo solo-lectura) se cuenta desde `fechaFin`, no desde que el cron marca
+   * VENCIDA — mismo motivo, más preciso. Sin `fechaFin` (no debería pasar nunca en datos reales:
+   * `marcarVencidas()` solo transiciona filas que ya tienen `fecha_fin` — pero VENCIDA sin
+   * `fechaFin` no tiene forma de calcular la ventana de gracia), fail-closed directo a BLOQUEADO
+   * en vez de asumir una gracia indefinida.
    */
-  async estaBloqueado(negocioId: string): Promise<boolean> {
+  async estadoAcceso(negocioId: string): Promise<EstadoAcceso> {
     const suscripcion = await this.suscripcionesRepository.findOne({ where: { negocioId } });
-    if (!suscripcion) return true;
-    if (suscripcion.estado === EstadoSuscripcion.VENCIDA) return true;
-    return suscripcion.fechaFin !== null && suscripcion.fechaFin < new Date();
+    if (!suscripcion) return 'BLOQUEADO';
+
+    const vencida =
+      suscripcion.estado === EstadoSuscripcion.VENCIDA ||
+      (suscripcion.fechaFin !== null && suscripcion.fechaFin < new Date());
+    if (!vencida) return 'OK';
+    if (!suscripcion.fechaFin) return 'BLOQUEADO';
+
+    const finGracia = new Date(suscripcion.fechaFin.getTime() + DIAS_GRACIA * 24 * 60 * 60 * 1000);
+    return finGracia > new Date() ? 'GRACIA' : 'BLOQUEADO';
   }
 
-  async miEstado(negocioId: string): Promise<Suscripcion & { enRiesgo: boolean; bloqueado: boolean }> {
+  async miEstado(
+    negocioId: string,
+  ): Promise<Suscripcion & { enRiesgo: boolean; enGracia: boolean; bloqueado: boolean }> {
     const suscripcion = await this.suscripcionesRepository.findOne({
       where: { negocioId },
       relations: { paquete: true },
@@ -119,17 +132,21 @@ export class SuscripcionesService {
     if (!suscripcion) {
       throw new NotFoundException(`El negocio ${negocioId} no tiene una suscripción`);
     }
+    const acceso = await this.estadoAcceso(negocioId);
     return {
       ...suscripcion,
       // Derivado, no persistido — el banner de "en riesgo de pago" del frontend se apoya en
       // este campo en vez de recalcular la misma regla ahí.
       enRiesgo: suscripcion.estado === EstadoSuscripcion.ACTIVA && suscripcion.intentosFallidosCobro > 0,
-      // Misma fuente de verdad que SuscripcionGuard — evita que el frontend decida "ya no estoy
-      // bloqueado" mirando solo estado === VENCIDA cuando en realidad sigue bloqueado por fecha
-      // (ej. CANCELADA con fechaFin ya vencida, antes de que el cron la pase a VENCIDA). Sin esto,
-      // SuscripcionVencida redirige a /dashboard, que a su vez recibe 402 de otros endpoints y
-      // rebota de nuevo acá — loop infinito de peticiones (bug real detectado en vivo).
-      bloqueado: await this.estaBloqueado(negocioId),
+      enGracia: acceso === 'GRACIA',
+      // Misma fuente de verdad que SuscripcionGuard, y misma semántica de siempre: bloqueo TOTAL,
+      // no "alguna restricción" — evita que el frontend decida "ya no estoy bloqueado" mirando
+      // solo estado === VENCIDA cuando en realidad sigue bloqueado por fecha (ej. CANCELADA con
+      // fechaFin ya vencida, antes de que el cron la pase a VENCIDA). Sin esto, SuscripcionVencida
+      // redirige a /dashboard, que a su vez recibe 402 de otros endpoints y rebota de nuevo acá —
+      // loop infinito de peticiones (bug real detectado en vivo). Ahora solo pasa a true después
+      // de los DIAS_GRACIA, no apenas vence.
+      bloqueado: acceso === 'BLOQUEADO',
     };
   }
 

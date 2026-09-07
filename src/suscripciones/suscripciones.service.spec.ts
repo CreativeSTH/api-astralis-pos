@@ -57,31 +57,42 @@ describe('SuscripcionesService — creación y estaBloqueado', () => {
     expect(guardado.fechaFin).toBeNull();
   });
 
-  describe('estaBloqueado', () => {
-    it('true si no hay ninguna Suscripcion para el negocio (fail-closed)', async () => {
+  describe('estadoAcceso', () => {
+    it("'BLOQUEADO' si no hay ninguna Suscripcion para el negocio (fail-closed)", async () => {
       suscripcionesRepo.findOne.mockResolvedValue(null);
-      expect(await service.estaBloqueado('neg-sin-suscripcion')).toBe(true);
+      expect(await service.estadoAcceso('neg-sin-suscripcion')).toBe('BLOQUEADO');
     });
 
-    it('true si el estado es VENCIDA', async () => {
-      suscripcionesRepo.findOne.mockResolvedValue({ estado: EstadoSuscripcion.VENCIDA, fechaFin: null });
-      expect(await service.estaBloqueado('neg-1')).toBe(true);
-    });
-
-    it('false si el estado es PRUEBA o ACTIVA con fechaFin futura (o sin vencimiento)', async () => {
+    it("'OK' si el estado es PRUEBA o ACTIVA con fechaFin futura (o sin vencimiento)", async () => {
       const fechaFutura = new Date(Date.now() + 24 * 60 * 60 * 1000);
       suscripcionesRepo.findOne.mockResolvedValue({ estado: EstadoSuscripcion.PRUEBA, fechaFin: fechaFutura });
-      expect(await service.estaBloqueado('neg-1')).toBe(false);
+      expect(await service.estadoAcceso('neg-1')).toBe('OK');
       suscripcionesRepo.findOne.mockResolvedValue({ estado: EstadoSuscripcion.ACTIVA, fechaFin: null });
-      expect(await service.estaBloqueado('neg-1')).toBe(false);
+      expect(await service.estadoAcceso('neg-1')).toBe('OK');
     });
 
-    it('true si estado es PRUEBA/ACTIVA pero fechaFin ya pasó — no depende de que el cron haya corrido', async () => {
-      const fechaPasada = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      suscripcionesRepo.findOne.mockResolvedValue({ estado: EstadoSuscripcion.PRUEBA, fechaFin: fechaPasada });
-      expect(await service.estaBloqueado('neg-1')).toBe(true);
-      suscripcionesRepo.findOne.mockResolvedValue({ estado: EstadoSuscripcion.ACTIVA, fechaFin: fechaPasada });
-      expect(await service.estaBloqueado('neg-1')).toBe(true);
+    it("'GRACIA' si el estado es VENCIDA y fechaFin venció hace menos de 3 días", async () => {
+      const fechaFin = new Date(Date.now() - 1 * 24 * 60 * 60 * 1000); // hace 1 día
+      suscripcionesRepo.findOne.mockResolvedValue({ estado: EstadoSuscripcion.VENCIDA, fechaFin });
+      expect(await service.estadoAcceso('neg-1')).toBe('GRACIA');
+    });
+
+    it("'GRACIA' si el estado sigue siendo PRUEBA/ACTIVA pero fechaFin ya venció hace menos de 3 días (el cron todavía no corrió)", async () => {
+      const fechaFin = new Date(Date.now() - 1 * 24 * 60 * 60 * 1000);
+      suscripcionesRepo.findOne.mockResolvedValue({ estado: EstadoSuscripcion.PRUEBA, fechaFin });
+      expect(await service.estadoAcceso('neg-1')).toBe('GRACIA');
+    });
+
+    it("'GRACIA' si CANCELADA con fechaFin vencida hace menos de 3 días", async () => {
+      const fechaFin = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000); // hace 2 días
+      suscripcionesRepo.findOne.mockResolvedValue({ estado: EstadoSuscripcion.CANCELADA, fechaFin });
+      expect(await service.estadoAcceso('neg-1')).toBe('GRACIA');
+    });
+
+    it("'BLOQUEADO' si fechaFin venció hace 3 días o más", async () => {
+      const fechaFin = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000 - 1000); // 3 días y 1 segundo
+      suscripcionesRepo.findOne.mockResolvedValue({ estado: EstadoSuscripcion.VENCIDA, fechaFin });
+      expect(await service.estadoAcceso('neg-1')).toBe('BLOQUEADO');
     });
   });
 });
@@ -1258,7 +1269,7 @@ describe('SuscripcionesService — miEstado enRiesgo', () => {
     expect(resultado.enRiesgo).toBe(false);
   });
 
-  it('bloqueado es true si CANCELADA con fechaFin ya vencida, aunque el estado no sea VENCIDA', async () => {
+  it('enGracia es true y bloqueado es false si CANCELADA con fechaFin vencida hace menos de 3 días', async () => {
     suscripcionesRepo.findOne.mockResolvedValue({
       estado: EstadoSuscripcion.CANCELADA,
       fechaFin: new Date(Date.now() - 1000),
@@ -1269,6 +1280,22 @@ describe('SuscripcionesService — miEstado enRiesgo', () => {
 
     const resultado = await service.miEstado('neg-1');
 
+    expect(resultado.enGracia).toBe(true);
+    expect(resultado.bloqueado).toBe(false);
+  });
+
+  it('bloqueado es true si CANCELADA con fechaFin vencida hace 3 días o más', async () => {
+    suscripcionesRepo.findOne.mockResolvedValue({
+      estado: EstadoSuscripcion.CANCELADA,
+      fechaFin: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000 - 1000),
+      intentosFallidosCobro: 0,
+      paqueteId: 'p1',
+      paquete: { id: 'p1', nombre: 'Básico' },
+    });
+
+    const resultado = await service.miEstado('neg-1');
+
+    expect(resultado.enGracia).toBe(false);
     expect(resultado.bloqueado).toBe(true);
   });
 
