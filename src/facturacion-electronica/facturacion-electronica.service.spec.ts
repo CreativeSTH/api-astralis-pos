@@ -303,6 +303,77 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
       expect(resultado.estado).toBe(EstadoHabilitacion.ERROR);
       expect(resultado.errorMensaje).toBe('testset rechazado');
     });
+
+    it('con esHabilitacionDePrueba, NO pasa ambiente a PRODUCCION al terminar (se queda en SANDBOX)', async () => {
+      habilitacionRepo.findOne.mockResolvedValue({
+        ...HABILITACION_CON_RESOLUCION,
+        estado: EstadoHabilitacion.RESOLUCION_CARGADA,
+        ambiente: 'SANDBOX',
+        esHabilitacionDePrueba: true,
+        governmentTestSetId: 'a70562e0-631e-4ceb-aa65-36887b57dc17',
+      });
+      alegraClient.crearTestSet.mockResolvedValue({ testSetId: 'testset-1' });
+      alegraClient.crearFactura.mockResolvedValue({ alegraDocumentId: 'inv-1', status: 'SENT', legalStatus: 'ACCEPTED', isFinal: true, cufe: 'cufe-1', fecha: '2026-01-05' });
+
+      const resultado = await service.confirmarTestSet('neg-1');
+
+      expect(resultado.estado).toBe(EstadoHabilitacion.HABILITADO);
+      expect(resultado.ambiente).toBe('SANDBOX');
+    });
+  });
+
+  describe('activarModoSandboxDePrueba', () => {
+    it('rechaza si el negocio no está en PRUEBA', async () => {
+      suscripcionesService.miEstado = jest.fn().mockResolvedValue({ estado: 'ACTIVA' });
+
+      await expect(
+        service.activarModoSandboxDePrueba('neg-1', {
+          razonSocial: 'Negocio Test',
+          nit: '900123456',
+          email: 'negocio@test.local',
+          direccion: 'Cra 1 # 2-3',
+          ciudadNombre: 'Bogotá',
+          ciudadCodigo: '11001',
+          departamentoCodigo: '11',
+          useAlegraCertificate: true,
+        }),
+      ).rejects.toThrow('El modo sandbox de prueba solo está disponible durante el trial gratis');
+    });
+
+    it('con PRUEBA, corre el pipeline completo y queda HABILITADO en SANDBOX', async () => {
+      suscripcionesService.miEstado = jest.fn().mockResolvedValue({ estado: 'PRUEBA' });
+      negociosRepo.save = jest.fn(async (x: unknown) => x);
+      habilitacionRepo.findOne
+        .mockResolvedValueOnce(null) // obtenerOCrearHabilitacion dentro de actualizarDatosNegocio
+        .mockResolvedValueOnce({ negocioId: 'neg-1', estado: EstadoHabilitacion.ESPERANDO_TRAMITE_DIAN, razonSocial: 'Negocio Test', useAlegraCertificate: true }) // obtenerOCrearHabilitacion dentro de cargarResolucion
+        .mockResolvedValueOnce({
+          ...HABILITACION_CON_RESOLUCION,
+          negocioId: 'neg-1',
+          estado: EstadoHabilitacion.RESOLUCION_CARGADA,
+          esHabilitacionDePrueba: true,
+          ambiente: 'SANDBOX',
+          alegraCompanyId: 'company-sandbox-1',
+          siguienteNumero: 1,
+          governmentTestSetId: 'a70562e0-631e-4ceb-aa65-36887b57dc17',
+        }); // obtenerOCrearHabilitacion dentro de confirmarTestSet
+      alegraClient.crearCompania.mockResolvedValue({ companyId: 'company-sandbox-1' });
+      alegraClient.crearTestSet.mockResolvedValue({ testSetId: 'testset-1' });
+      alegraClient.crearFactura.mockResolvedValue({ alegraDocumentId: 'inv-1', status: 'SENT', legalStatus: 'ACCEPTED', isFinal: true, cufe: 'cufe-1', fecha: '2026-01-05' });
+
+      const resultado = await service.activarModoSandboxDePrueba('neg-1', {
+        razonSocial: 'Negocio Test',
+        nit: '900123456',
+        email: 'negocio@test.local',
+        direccion: 'Cra 1 # 2-3',
+        ciudadNombre: 'Bogotá',
+        ciudadCodigo: '11001',
+        departamentoCodigo: '11',
+        useAlegraCertificate: true,
+      });
+
+      expect(resultado.estado).toBe(EstadoHabilitacion.HABILITADO);
+      expect(resultado.ambiente).toBe('SANDBOX');
+    });
   });
 
   describe('emitirDocumento — fail-closed', () => {
