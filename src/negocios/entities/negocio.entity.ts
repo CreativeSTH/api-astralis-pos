@@ -61,6 +61,13 @@ export class Negocio extends BaseEntity {
   @Column({ name: 'origen_obligacion', type: 'enum', enum: OrigenObligacion, nullable: true })
   origenObligacion?: OrigenObligacion | null;
 
+  /** Último aviso del tope de 3.500 UVT enviado (70/90/100) en el año `avisoTopeUvtAnio` — evita repetirlo cada noche. */
+  @Column({ name: 'aviso_tope_uvt_nivel', type: 'smallint', nullable: true })
+  avisoTopeUvtNivel?: number | null;
+
+  @Column({ name: 'aviso_tope_uvt_anio', type: 'smallint', nullable: true })
+  avisoTopeUvtAnio?: number | null;
+
   @Column({ type: 'enum', enum: PlanNegocio, default: PlanNegocio.FREE })
   plan: PlanNegocio;
 
