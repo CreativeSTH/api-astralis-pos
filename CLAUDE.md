@@ -47,7 +47,15 @@ Un `Domicilio` siempre nace de una venta — no hay endpoint para crearlo suelto
 
 ## Tiempo real (`src/realtime/`)
 
-`RealtimeGateway` (Socket.IO) es un canal push **genérico por negocio**, no acoplado a ningún dominio. Verifica el JWT a mano en `handleConnection` (los guards HTTP de Nest no aplican a WebSockets) y une el socket a la sala `negocio:{id}`. Expone un único método: `emitToNegocio(negocioId, evento, payload)`, usado hoy por `AlertasService` (`alertas:cambio`) y `DomiciliosService`/`VentasService` (`domicilios:cambio`) — cualquier servicio de negocio nuevo que necesite avisar a las sesiones abiertas de un negocio lo reutiliza igual, sin tocar el gateway. Registra su propio `JwtModule` (no importa `AuthModule`) para no crear una dependencia circular.
+`RealtimeGateway` (Socket.IO) es un canal push **genérico por negocio**, no acoplado a ningún dominio. Verifica el JWT a mano en `handleConnection` (los guards HTTP de Nest no aplican a WebSockets) y une el socket a la sala `negocio:{id}`. Expone un único método: `emitToNegocio(negocioId, evento, payload)`, usado hoy por `AlertasService` (`alertas:cambio`), `DomiciliosService`/`VentasService` (`domicilios:cambio`) y `FacturacionElectronicaService` (`documentos-electronicos:cambio`) — cualquier servicio de negocio nuevo que necesite avisar a las sesiones abiertas de un negocio lo reutiliza igual, sin tocar el gateway. Registra su propio `JwtModule` (no importa `AuthModule`) para no crear una dependencia circular.
+
+## Facturas electrónicas (`src/facturacion-electronica/`)
+
+La emisión DIAN va por Alegra (`AlegraClientService`), pero **Alegra/Alanube no genera PDF** — solo XML. La representación gráfica la arma `FacturaPdfService` (`pdfkit` + `qrcode`, sin repositorios: recibe un objeto plano ya resuelto); el logo sale de `LogoNegocioService` (cascada `Negocio.logoUrl` → plantilla FACTURA → tienda online → sin logo). Para que renovar la resolución no altere PDFs viejos, al emitir se congela un snapshot (emisor, resolución, número, QR) en columnas de `DocumentoElectronico`; los documentos anteriores a eso se completan solos la primera vez que se abren (`obtenerFactura`/`generarPdf`, consultan a Alegra una sola vez). Rutas por id en `/facturacion-electronica/facturas/...` (listado, detalle, `pdf`, `xml`, `reintentar`), todas filtradas por `negocioId` (404 para documentos ajenos). **Reintentar solo acepta RECHAZADO/ERROR/PENDIENTE sin `trackingReference`** — reintentar un ACEPTADO emitiría una segunda factura real.
+
+## Fechas y zona horaria
+
+La base corre en UTC y `created_at`/`updated_at` son `timestamp` **sin** zona. `src/database/pg-utc.ts` (importado primero en `app.module.ts` y `data-source.ts`) hace que `pg` lea y escriba esas columnas como UTC sin depender de la zona del proceso — sin eso, en una máquina en America/Bogota cada fecha salía 5 h corrida y los filtros por rango quedaban desplazados. Todo "día"/"hoy" de negocio se calcula en hora de Colombia con `src/common/utils/fecha-colombia.ts` (`rangoDiasColombia`, `diaColombia`, `claveAgrupacionColombia`, etc.) — nunca `toISOString().slice(0, 10)` ni `setUTCHours`/`setHours` para cortar días. Ojo: `npx eslint --fix` sobre archivos existentes reformatea código ajeno (el repo no está al día con prettier) — correrlo solo sobre archivos nuevos.
 
 ## Roles y permisos (Fase 4)
 
