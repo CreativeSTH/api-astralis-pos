@@ -492,6 +492,34 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
   });
 
   describe('intentarEmitir — numeración correlativa real y mapeo de la venta', () => {
+    it('cliente con NIT: manda el número sin DV, el dv calculado y organizationType 1', async () => {
+      const documento: any = { id: 'doc-n', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'FACTURA', estado: EstadoDocumentoElectronico.PENDIENTE, intentos: 0 };
+      ventasRepo.findOneOrFail.mockResolvedValue(
+        ventaDePrueba({ cliente: { nombre: 'Ferretería SAS', documentoIdentidad: '899.999.034-1', tipoDocumentoIdentidad: '31' } } as any),
+      );
+
+      await service.intentarEmitir(documento, { ...HABILITACION_CON_RESOLUCION } as any);
+
+      expect(alegraClient.crearFactura).toHaveBeenCalledWith(
+        expect.objectContaining({
+          customer: { identificationNumber: '899999034', identificationType: '31', dv: '1', organizationType: 1, name: 'Ferretería SAS' },
+        }),
+      );
+    });
+
+    it('cliente con cédula: sin dv ni organizationType', async () => {
+      const documento: any = { id: 'doc-c', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'FACTURA', estado: EstadoDocumentoElectronico.PENDIENTE, intentos: 0 };
+      ventasRepo.findOneOrFail.mockResolvedValue(
+        ventaDePrueba({ cliente: { nombre: 'Ana Gómez', documentoIdentidad: ' 1020304050 ', tipoDocumentoIdentidad: '13' } } as any),
+      );
+
+      await service.intentarEmitir(documento, { ...HABILITACION_CON_RESOLUCION } as any);
+
+      expect(alegraClient.crearFactura).toHaveBeenCalledWith(
+        expect.objectContaining({ customer: { identificationNumber: '1020304050', identificationType: '13', name: 'Ana Gómez' } }),
+      );
+    });
+
     it('usa habilitacion.siguienteNumero (no documento.intentos), lo manda como number, y lo avanza tras un envío exitoso', async () => {
       const documento = {
         id: 'doc-x', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'FACTURA' as const,

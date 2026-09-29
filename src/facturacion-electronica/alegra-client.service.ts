@@ -89,6 +89,10 @@ export interface CustomerAlegra {
   identificationNumber: string;
   identificationType: string;
   name: string;
+  /** Dígito de verificación — obligatorio cuando `identificationType = '31'` (NIT). */
+  dv?: string;
+  /** 1 persona jurídica, 2 persona natural (default de Alanube). */
+  organizationType?: 1 | 2;
 }
 
 /** Referencia a la factura original que una nota crédito/débito ajusta. */

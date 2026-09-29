@@ -7,6 +7,15 @@ import { Sucursal } from '../sucursales/entities/sucursal.entity';
 import { PlantillaComprobante, DatosDianPlantilla } from '../facturacion/entities/plantilla-comprobante.entity';
 import { TipoComprobante, TipoComprobanteVenta } from '../common/enums/tipo-comprobante.enum';
 import { DocumentoElectronico } from '../facturacion-electronica/entities/documento-electronico.entity';
+import { EstadoDocumentoElectronico } from '../facturacion-electronica/entities/estado-documento-electronico.enum';
+import {
+  FacturaPdfService,
+  PROVEEDOR_TECNOLOGICO,
+  adquirenteFactura,
+  nitConDv,
+  textoResolucion,
+} from '../facturacion-electronica/factura-pdf.service';
+import { Cliente } from '../clientes/entities/cliente.entity';
 import { VentasService } from './ventas.service';
 
 export interface ItemComprobante {
@@ -39,6 +48,35 @@ export interface ReciboContenido {
   mensajeCierre?: string;
   terminos?: string;
   dian?: DatosDianPlantilla;
+  electronica?: ElectronicaComprobante;
+  /** Solo en comprobantes que no son factura electrónica. */
+  leyenda?: string;
+}
+
+export const LEYENDA_NO_FACTURA = 'Este documento no es una factura de venta.';
+
+/** Bloque fiscal de una venta FACTURA_ELECTRONICA (spec de unificación de comprobantes, sección 5). */
+export interface ElectronicaComprobante {
+  /** PENDIENTE si el documento todavía no existe (la emisión es asíncrona). */
+  estado: EstadoDocumentoElectronico;
+  encabezado: string | null;
+  numeroCompleto: string | null;
+  fechaEmision: Date | null;
+  cufe: string | null;
+  qrDataUrl: string | null;
+  resolucion: string | null;
+  emisor: { razonSocial: string; nitConDv: string; direccion: string } | null;
+  adquirente: { nombre: string; identificacion: string };
+  formaPago: 'Contado' | 'Crédito';
+  proveedorTecnologico: string;
+}
+
+/** Spec 5: rechazada > sin CUFE todavía > sandbox. null = factura válida, sin encabezado. */
+export function encabezadoTirilla(doc: DocumentoElectronico | null): string | null {
+  if (doc?.estado === EstadoDocumentoElectronico.RECHAZADO) return 'RECHAZADA POR LA DIAN — SIN VALIDEZ FISCAL';
+  if (!doc?.cufe) return 'EN VALIDACIÓN DIAN — REIMPRIMIBLE';
+  if (doc.ambiente === 'SANDBOX') return 'DOCUMENTO DE PRUEBA — SIN VALIDEZ FISCAL';
+  return null;
 }
 
 /**
@@ -60,6 +98,9 @@ export class ComprobantesService {
     private readonly plantillasRepository: Repository<PlantillaComprobante>,
     @InjectRepository(DocumentoElectronico)
     private readonly documentosRepository: Repository<DocumentoElectronico>,
+    @InjectRepository(Cliente)
+    private readonly clientesRepository: Repository<Cliente>,
+    private readonly facturaPdf: FacturaPdfService,
     private readonly ventasService: VentasService,
   ) {}
 
@@ -67,12 +108,37 @@ export class ComprobantesService {
     const venta = await this.ventasService.findOne(ventaId);
     const negocio = await this.negociosRepository.findOneOrFail({ where: { id: venta.negocioId } });
     const plantilla = await this.resolverPlantilla(venta);
-    const numeroElectronico =
-      venta.tipoComprobanteEmitido === TipoComprobanteVenta.FACTURA_ELECTRONICA
-        ? ((await this.documentosRepository.findOne({ where: { ventaId: venta.id, negocioId: venta.negocioId } }))
-            ?.numeroCompleto ?? 'En validación DIAN')
-        : undefined;
-    return this.construirContenido(venta, negocio, plantilla, numeroElectronico);
+    const electronica =
+      venta.tipoComprobanteEmitido === TipoComprobanteVenta.FACTURA_ELECTRONICA ? await this.bloqueElectronico(venta) : undefined;
+    return this.construirContenido(venta, negocio, plantilla, electronica);
+  }
+
+  /** Todo sale del snapshot del documento (mismos datos que el PDF — tirilla y PDF nunca se contradicen). */
+  private async bloqueElectronico(venta: Venta): Promise<ElectronicaComprobante> {
+    const doc = await this.documentosRepository.findOne({ where: { ventaId: venta.id, negocioId: venta.negocioId } });
+    const cliente = venta.clienteId
+      ? await this.clientesRepository.findOne({ where: { id: venta.clienteId, negocioId: venta.negocioId } })
+      : null;
+    const conQr = !!doc?.cufe && !!doc.qrContenido && doc.estado !== EstadoDocumentoElectronico.RECHAZADO;
+    return {
+      estado: doc?.estado ?? EstadoDocumentoElectronico.PENDIENTE,
+      encabezado: encabezadoTirilla(doc),
+      numeroCompleto: doc?.numeroCompleto ?? null,
+      fechaEmision: doc?.fechaEmision ?? null,
+      cufe: doc?.cufe ?? null,
+      qrDataUrl: conQr ? await this.facturaPdf.generarQrDataUrl(doc!.qrContenido!) : null,
+      resolucion: doc?.resolucionNumero ? textoResolucion(doc) : null,
+      emisor: doc?.emisorRazonSocial
+        ? {
+            razonSocial: doc.emisorRazonSocial,
+            nitConDv: nitConDv(doc.emisorNit),
+            direccion: [doc.emisorDireccion, doc.emisorCiudad].filter(Boolean).join(', '),
+          }
+        : null,
+      adquirente: adquirenteFactura(cliente),
+      formaPago: venta.tipoVenta === 'CREDITO' ? 'Crédito' : 'Contado',
+      proveedorTecnologico: PROVEEDOR_TECNOLOGICO,
+    };
   }
 
   private async resolverPlantilla(venta: Venta): Promise<PlantillaComprobante | null> {
@@ -106,7 +172,7 @@ export class ComprobantesService {
     venta: Venta,
     negocio: Negocio,
     plantilla: PlantillaComprobante | null,
-    numeroElectronico?: string,
+    electronica?: ElectronicaComprobante,
   ): ReciboContenido {
     const tipo = venta.tipoComprobanteEmitido ?? TipoComprobanteVenta.RECIBO;
     const config = plantilla?.configuracion ?? {};
@@ -119,7 +185,7 @@ export class ComprobantesService {
         direccion: config.direccion ?? negocio.direccion,
         telefono: config.telefono ?? negocio.telefono,
       },
-      numero: numeroElectronico ?? venta.numeroComprobante ?? venta.id.slice(0, 8),
+      numero: electronica ? (electronica.numeroCompleto ?? 'En validación DIAN') : (venta.numeroComprobante ?? venta.id.slice(0, 8)),
       fecha: venta.createdAt,
       cliente: venta.nombreCliente,
       items: venta.items.map((item) => ({
@@ -137,6 +203,8 @@ export class ComprobantesService {
       mensajeCierre: config.mensajeCierre,
       terminos: config.terminos,
       dian: tipo === TipoComprobanteVenta.FACTURA ? config.dian : undefined,
+      electronica,
+      leyenda: tipo === TipoComprobanteVenta.FACTURA_ELECTRONICA ? undefined : LEYENDA_NO_FACTURA,
     };
   }
 }

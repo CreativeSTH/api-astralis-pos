@@ -75,6 +75,38 @@ export function marcaDeAguaPara(estado: EstadoDocumentoElectronico, ambiente?: '
   return null;
 }
 
+export const PROVEEDOR_TECNOLOGICO = 'Proveedor tecnológico: Alegra (NIT 900559088)';
+
+export type ClienteFactura = { nombre: string; documentoIdentidad?: string; tipoDocumentoIdentidad?: string };
+
+export type DatosResolucion = Pick<
+  DatosFacturaPdf['documento'],
+  'prefijo' | 'resolucionNumero' | 'resolucionFechaInicio' | 'resolucionFechaFin' | 'resolucionRangoDesde' | 'resolucionRangoHasta'
+>;
+
+/** Adquirente de la factura: el cliente si tiene documento y tipo; si no, Consumidor final (mismo criterio que la emisión). */
+export function adquirenteFactura(cliente?: ClienteFactura | null): { nombre: string; identificacion: string } {
+  if (cliente?.documentoIdentidad && cliente.tipoDocumentoIdentidad) {
+    return {
+      nombre: cliente.nombre,
+      identificacion: `${SIGLA_DOCUMENTO[cliente.tipoDocumentoIdentidad] ?? 'Doc.'} ${cliente.documentoIdentidad}`,
+    };
+  }
+  return { nombre: 'Consumidor final', identificacion: 'CC 222222222222' };
+}
+
+export function textoResolucion(d: DatosResolucion): string {
+  return (
+    `Numeración autorizada por la DIAN — Resolución No. ${d.resolucionNumero ?? '—'} del ${d.resolucionFechaInicio ?? '—'}, ` +
+    `prefijo ${d.prefijo || '—'} del ${d.resolucionRangoDesde ?? '—'} al ${d.resolucionRangoHasta ?? '—'}, vigente hasta ${d.resolucionFechaFin ?? '—'}`
+  );
+}
+
+export function nitConDv(nit?: string): string {
+  const limpio = nit ? limpiarNit(nit) : '';
+  return limpio ? `${limpio}-${calcularDigitoVerificacion(limpio)}` : '';
+}
+
 const MARGEN = 40;
 const ANCHO = 612 - MARGEN * 2; // carta: 612 x 792 pt
 const COLUMNAS = [
@@ -97,15 +129,11 @@ export class FacturaPdfService {
   private readonly logger = new Logger(FacturaPdfService.name);
 
   construirContenido({ documento: d, venta: v }: DatosFacturaPdf): ContenidoFacturaPdf {
-    const nit = d.emisorNit ? limpiarNit(d.emisorNit) : '';
-    const tieneDocumento = !!(v.cliente?.documentoIdentidad && v.cliente.tipoDocumentoIdentidad);
-    const prefijo = d.prefijo ?? '';
-
     return {
       marcaDeAgua: marcaDeAguaPara(d.estado, d.ambiente),
       emisor: {
         razonSocial: d.emisorRazonSocial ?? '',
-        nitConDv: nit ? `${nit}-${calcularDigitoVerificacion(nit)}` : '',
+        nitConDv: nitConDv(d.emisorNit),
         regimen: 'Responsable de IVA (O-48)',
         direccion: [d.emisorDireccion, d.emisorCiudad].filter(Boolean).join(', '),
       },
@@ -114,12 +142,7 @@ export class FacturaPdfService {
         numero: d.numeroCompleto ?? '',
         fechaEmision: d.fechaEmision ? fechaHoraBogota(new Date(d.fechaEmision)) : '',
       },
-      adquirente: tieneDocumento
-        ? {
-            nombre: v.cliente!.nombre,
-            identificacion: `${SIGLA_DOCUMENTO[v.cliente!.tipoDocumentoIdentidad!] ?? 'Doc.'} ${v.cliente!.documentoIdentidad}`,
-          }
-        : { nombre: 'Consumidor final', identificacion: 'CC 222222222222' },
+      adquirente: adquirenteFactura(v.cliente),
       lineas: v.items.map((item) => {
         const base = Number(item.baseImponible);
         const iva = Number(item.impuesto);
@@ -144,14 +167,12 @@ export class FacturaPdfService {
         forma: v.tipoVenta === 'CREDITO' ? 'Crédito' : 'Contado',
         medios: v.pagos.map((p) => `${p.metodoPago}: ${formatearPesos(p.monto)}`),
       },
-      resolucion:
-        `Numeración autorizada por la DIAN — Resolución No. ${d.resolucionNumero ?? '—'} del ${d.resolucionFechaInicio ?? '—'}, ` +
-        `prefijo ${prefijo || '—'} del ${d.resolucionRangoDesde ?? '—'} al ${d.resolucionRangoHasta ?? '—'}, vigente hasta ${d.resolucionFechaFin ?? '—'}`,
+      resolucion: textoResolucion(d),
       cufe: d.cufe ?? '',
       qrContenido: d.qrContenido ?? '',
       pie: [
         'Representación gráfica de la factura electrónica de venta',
-        'Proveedor tecnológico: Alegra (NIT 900559088)',
+        PROVEEDOR_TECNOLOGICO,
         'Generada con AURA',
       ],
     };

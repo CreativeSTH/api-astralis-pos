@@ -544,9 +544,21 @@ export class FacturacionElectronicaService {
    */
   private mapearCustomerAlegra(venta: Venta): CustomerAlegra {
     if (venta.cliente?.documentoIdentidad && venta.cliente.tipoDocumentoIdentidad) {
+      const tipo = venta.cliente.tipoDocumentoIdentidad;
+      if (tipo === '31') {
+        // El usuario suele tipear el NIT con DV ("900.123.456-7"): el DV va aparte, en `dv`.
+        const nit = limpiarNit(venta.cliente.documentoIdentidad.split('-')[0]);
+        return {
+          identificationNumber: nit,
+          identificationType: tipo,
+          dv: calcularDigitoVerificacion(nit),
+          organizationType: 1,
+          name: venta.cliente.nombre,
+        };
+      }
       return {
-        identificationNumber: venta.cliente.documentoIdentidad,
-        identificationType: venta.cliente.tipoDocumentoIdentidad,
+        identificationNumber: venta.cliente.documentoIdentidad.trim(),
+        identificationType: tipo,
         name: venta.cliente.nombre,
       };
     }

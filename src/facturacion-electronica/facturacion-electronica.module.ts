@@ -38,6 +38,6 @@ import { RealtimeModule } from '../realtime/realtime.module';
     FacturaPdfService,
     LogoNegocioService,
   ],
-  exports: [FacturacionElectronicaService],
+  exports: [FacturacionElectronicaService, FacturaPdfService],
 })
 export class FacturacionElectronicaModule {}

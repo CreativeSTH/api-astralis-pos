@@ -23,6 +23,7 @@ import { Sucursal } from '../sucursales/entities/sucursal.entity';
 import { Negocio } from '../negocios/entities/negocio.entity';
 import { PlantillaComprobante } from '../facturacion/entities/plantilla-comprobante.entity';
 import { DocumentoElectronico } from '../facturacion-electronica/entities/documento-electronico.entity';
+import { Cliente } from '../clientes/entities/cliente.entity';
 import { PoliticaFacturacionModule } from '../politica-facturacion/politica-facturacion.module';
 
 @Module({
@@ -38,6 +39,7 @@ import { PoliticaFacturacionModule } from '../politica-facturacion/politica-fact
       Negocio,
       PlantillaComprobante,
       DocumentoElectronico,
+      Cliente,
     ]),
     CajaModule,
     ClientesModule,
