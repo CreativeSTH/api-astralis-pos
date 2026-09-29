@@ -19,6 +19,7 @@ import { EstadoVenta } from '../common/enums/venta.enum';
 import { EstadoTurnoCaja } from '../common/enums/caja.enum';
 import { EstadoItemPedido } from '../common/enums/estado-item-pedido.enum';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
+import { diaColombia, diasDesdeFechaColombia, horaColombia, inicioDiaColombia, sumarDiasColombia } from '../common/utils/fecha-colombia';
 
 @Injectable()
 export class AlertasService {
@@ -257,13 +258,12 @@ export class AlertasService {
   /** Ventas de hoy por sucursal vs. `metaVentasDiaria` — solo se evalúa después de las 8pm para no avisar a mitad de día. */
   private async verificarMetaVentas(negocioId: string): Promise<number> {
     const HORA_CORTE = 20;
-    if (new Date().getHours() < HORA_CORTE) return 0;
+    if (horaColombia() < HORA_CORTE) return 0;
 
     const sucursales = await this.sucursalesRepository.find({
       where: { negocioId, activo: true },
     });
-    const hoyInicio = new Date();
-    hoyInicio.setHours(0, 0, 0, 0);
+    const hoyInicio = inicioDiaColombia(diaColombia());
 
     let disparadas = 0;
     for (const sucursal of sucursales) {
@@ -357,11 +357,8 @@ export class AlertasService {
     let clientesLimiteCredito = 0;
     let ventasEnMora = 0;
 
-    const hoy = new Date();
-    const hoyStr = hoy.toISOString().slice(0, 10);
-    const en4Dias = new Date(hoy.getTime() + 4 * 24 * 60 * 60 * 1000)
-      .toISOString()
-      .slice(0, 10);
+    const hoyStr = diaColombia();
+    const en4Dias = sumarDiasColombia(hoyStr, 4);
 
     const cuotasPendientes = await this.cuotasRepository
       .createQueryBuilder('cuota')
@@ -372,10 +369,7 @@ export class AlertasService {
 
     for (const cuota of cuotasPendientes) {
       if (cuota.fechaVencimiento < hoyStr) {
-        const dias = Math.floor(
-          (hoy.getTime() - new Date(cuota.fechaVencimiento).getTime()) /
-            86400000,
-        );
+        const dias = diasDesdeFechaColombia(cuota.fechaVencimiento);
         const severidad =
           dias > 30
             ? SeveridadAlerta.CRITICA
@@ -391,10 +385,7 @@ export class AlertasService {
         );
         cuotasVencidas++;
       } else if (cuota.fechaVencimiento <= en4Dias) {
-        const dias = Math.ceil(
-          (new Date(cuota.fechaVencimiento).getTime() - hoy.getTime()) /
-            86400000,
-        );
+        const dias = -diasDesdeFechaColombia(cuota.fechaVencimiento);
         const severidad =
           dias <= 2 ? SeveridadAlerta.ALTA : SeveridadAlerta.MEDIA;
         await this.upsert(

@@ -34,6 +34,7 @@ import { TipoAlerta, SeveridadAlerta } from '../common/enums/alerta.enum';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { Venta } from '../ventas/entities/venta.entity';
 import { calcularDigitoVerificacion, limpiarNit } from '../common/utils/nit';
+import { diaColombia, finDiaColombia, inicioDiaColombia } from '../common/utils/fecha-colombia';
 
 export function baseUrlPara(ambiente: 'SANDBOX' | 'PRODUCCION'): string {
   return ambiente === 'PRODUCCION' ? process.env.ALEGRA_BASE_URL_PRODUCCION! : process.env.ALEGRA_BASE_URL_SANDBOX!;
@@ -339,7 +340,7 @@ export class FacturacionElectronicaService {
 
       const numeroInicial = habilitacion.siguienteNumero ?? habilitacion.resolucionRangoDesde!;
       const resolution = this.resolutionDesdeHabilitacion(habilitacion);
-      const hoyISO = new Date().toISOString().slice(0, 10);
+      const hoyISO = diaColombia();
       const customerPrueba: CustomerAlegra = { identificationNumber: '222222222222', identificationType: '13', name: 'Consumidor Final' };
       const itemPrueba: ItemFacturaAlegra = {
         description: 'Producto de prueba',
@@ -364,7 +365,7 @@ export class FacturacionElectronicaService {
       const pagoPrueba: PaymentAlegra = {
         paymentForm: '1',
         paymentMethod: '10',
-        paymentDueDate: new Date().toISOString().slice(0, 10),
+        paymentDueDate: diaColombia(),
       };
 
       // La DIAN exige, para habilitar Factura Electrónica específicamente,
@@ -399,7 +400,7 @@ export class FacturacionElectronicaService {
         prefix: resolution.prefix,
         number: facturas[0].numero,
         documentType: '01',
-        date: (facturas[0].fecha ?? new Date().toISOString()).slice(0, 10),
+        date: (facturas[0].fecha ?? diaColombia()).slice(0, 10),
         uuid: facturas[0].cufe!,
       };
 
@@ -583,7 +584,7 @@ export class FacturacionElectronicaService {
     // realmente, así que se usa la fecha de hoy. CREDITO sí tiene cuotas con
     // fecha propia (`Cuota.fechaVencimiento`) que esto todavía no está usando
     // (mapeo simplificado, ver nota de la clase).
-    const fechaVencimiento = new Date().toISOString().slice(0, 10);
+    const fechaVencimiento = diaColombia();
     return (venta.pagos ?? []).map((pago) => ({
       paymentForm: venta.tipoVenta === 'CREDITO' ? '2' : '1',
       paymentMethod: this.codigoMedioPagoDian(pago.metodoPago),
@@ -624,7 +625,7 @@ export class FacturacionElectronicaService {
         companyId: habilitacion.alegraCompanyId!,
         number: numero,
         regimeCode: REGIME_CODE_RESPONSABLE_IVA,
-        invoicePeriod: { startDate: new Date().toISOString().slice(0, 10), endDate: new Date().toISOString().slice(0, 10) },
+        invoicePeriod: { startDate: diaColombia(), endDate: diaColombia() },
         resolution,
         customer,
         items,
@@ -843,16 +844,8 @@ export class FacturacionElectronicaService {
     const fecha = 'COALESCE(doc.fechaEmision, doc.createdAt)';
     const base = () => {
       const qb = this.documentosRepository.createQueryBuilder('doc').where('doc.negocioId = :negocioId', { negocioId });
-      if (filtros.desde) {
-        const desde = new Date(filtros.desde);
-        desde.setUTCHours(0, 0, 0, 0);
-        qb.andWhere(`${fecha} >= :desde`, { desde });
-      }
-      if (filtros.hasta) {
-        const hasta = new Date(filtros.hasta);
-        hasta.setUTCHours(23, 59, 59, 999);
-        qb.andWhere(`${fecha} <= :hasta`, { hasta });
-      }
+      if (filtros.desde) qb.andWhere(`${fecha} >= :desde`, { desde: inicioDiaColombia(filtros.desde) });
+      if (filtros.hasta) qb.andWhere(`${fecha} <= :hasta`, { hasta: finDiaColombia(filtros.hasta) });
       const q = filtros.q?.trim();
       if (q) qb.andWhere('(doc.numeroCompleto ILIKE :q OR doc.nombreCliente ILIKE :q)', { q: `%${q}%` });
       return qb;

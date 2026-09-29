@@ -9,6 +9,7 @@ import { TurnoCaja } from '../caja/entities/turno-caja.entity';
 import { EstadoVenta, TipoVenta } from '../common/enums/venta.enum';
 import { EstadoTurnoCaja, TipoMovimientoCaja } from '../common/enums/caja.enum';
 import { FuenteDatoGrafico } from '../common/enums/fuente-dato-grafico.enum';
+import { claveAgrupacionColombia } from '../common/utils/fecha-colombia';
 
 export interface DatoGrafico {
   x: string;
@@ -95,15 +96,9 @@ export class GraficosDataService {
     }
   }
 
+  /** Día / lunes de la semana / mes según el calendario de Colombia (ver fecha-colombia.ts). */
   private claveAgrupacion(fecha: Date, agrupacion: FiltroFuenteDato['agrupacion']): string {
-    if (agrupacion === 'MES') return fecha.toISOString().slice(0, 7);
-    if (agrupacion === 'SEMANA') {
-      const dia = new Date(Date.UTC(fecha.getUTCFullYear(), fecha.getUTCMonth(), fecha.getUTCDate()));
-      const diaSemana = dia.getUTCDay() || 7; // lunes=1 .. domingo=7
-      dia.setUTCDate(dia.getUTCDate() - diaSemana + 1); // retrocede al lunes de esa semana
-      return dia.toISOString().slice(0, 10);
-    }
-    return fecha.toISOString().slice(0, 10);
+    return claveAgrupacionColombia(fecha, agrupacion);
   }
 
   private agrupar(filas: { fecha: Date; valor: number }[], agrupacion: FiltroFuenteDato['agrupacion']): DatoGrafico[] {

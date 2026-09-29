@@ -11,6 +11,7 @@ import { UpdateGraficoDto } from './dto/update-grafico.dto';
 import { ConfiguracionGraficoDto } from './dto/configuracion-grafico.dto';
 import { UpsertLayoutDto } from './dto/upsert-layout.dto';
 import { GraficosDataService, DatoGrafico, FiltroFuenteDato } from './graficos-data.service';
+import { rangoDiasColombia } from '../common/utils/fecha-colombia';
 
 export interface SerieResultado {
   etiqueta: string;
@@ -72,22 +73,10 @@ export class GraficosService extends TenantBaseService<GraficoConfigurado> {
     return this.calcularSeries(configuracion);
   }
 
-  /** Mismo criterio que `ReportesService.rangoFechas()` — UTC siempre para no desplazar el corte en zonas horarias negativas. */
+  /** Mismo criterio que `ReportesService.rangoFechas()` — días calendario de Colombia (ver fecha-colombia.ts). */
   private resolverRango(rangoFecha: ConfiguracionGrafico['rangoFecha']): { desde: Date; hasta: Date } {
-    const hasta = rangoFecha.hasta ? new Date(rangoFecha.hasta) : new Date();
-    hasta.setUTCHours(23, 59, 59, 999);
-
-    if (rangoFecha.modo === 'RELATIVO') {
-      const desde = new Date(hasta);
-      desde.setUTCDate(desde.getUTCDate() - (rangoFecha.diasRelativos ?? 30));
-      desde.setUTCHours(0, 0, 0, 0);
-      return { desde, hasta };
-    }
-
-    const desde = rangoFecha.desde ? new Date(rangoFecha.desde) : new Date(hasta);
-    if (!rangoFecha.desde) desde.setUTCDate(desde.getUTCDate() - 30);
-    desde.setUTCHours(0, 0, 0, 0);
-    return { desde, hasta };
+    if (rangoFecha.modo === 'RELATIVO') return rangoDiasColombia(undefined, rangoFecha.hasta, rangoFecha.diasRelativos ?? 30);
+    return rangoDiasColombia(rangoFecha.desde, rangoFecha.hasta, 30);
   }
 
   private async calcularSeries(configuracion: ConfiguracionGrafico): Promise<SerieResultado[]> {

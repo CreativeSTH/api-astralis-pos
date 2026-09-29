@@ -1,4 +1,6 @@
 import 'dotenv/config';
+// Mismo ajuste que app.module.ts — el CLI no pasa por Nest (ver pg-utc.ts).
+import './pg-utc';
 import { DataSource } from 'typeorm';
 import { join } from 'path';
 

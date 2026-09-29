@@ -43,6 +43,7 @@ import { NumeracionComprobanteService } from '../facturacion/numeracion-comproba
 import { PromocionesPricingService } from '../cupones/promociones-pricing.service';
 import { CuponValidacionService } from '../cupones/cupon-validacion.service';
 import { Promocion } from '../cupones/entities/promocion.entity';
+import { diasDesdeFechaColombia } from '../common/utils/fecha-colombia';
 
 const TOLERANCIA_REDONDEO = 1;
 const DIAS_MORA_PARA_EN_MORA = 60;
@@ -971,14 +972,8 @@ export class VentasService {
 
   private recalcularMoraDeCuota(cuota: Cuota, tasaInteresMora: number): void {
     if (cuota.pagada) return;
-    const hoy = new Date();
-    const vencimiento = new Date(cuota.fechaVencimiento + 'T00:00:00Z');
-    const diasMora = Math.max(
-      0,
-      Math.floor(
-        (hoy.getTime() - vencimiento.getTime()) / (1000 * 60 * 60 * 24),
-      ),
-    );
+    // Días calendario de Colombia: el día del vencimiento todavía no genera mora, aunque ya sea de noche.
+    const diasMora = Math.max(0, diasDesdeFechaColombia(cuota.fechaVencimiento));
     cuota.diasMora = diasMora;
     cuota.montoMora =
       diasMora > 0

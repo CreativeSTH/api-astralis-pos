@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ClsService } from 'nestjs-cls';
 import { Cuota } from '../ventas/entities/cuota.entity';
+import { diaColombia, sumarDiasColombia } from '../common/utils/fecha-colombia';
 
 export interface CobroItem {
   ventaId: string;
@@ -84,10 +85,8 @@ export class CobrosService {
   }
 
   async proximaQuincena(): Promise<CobroItem[]> {
-    const hoy = new Date().toISOString().slice(0, 10);
-    const en15Dias = new Date(Date.now() + 15 * 24 * 60 * 60 * 1000)
-      .toISOString()
-      .slice(0, 10);
+    const hoy = diaColombia();
+    const en15Dias = sumarDiasColombia(hoy, 15);
     const cuotas = await this.baseQuery()
       .andWhere('cuota.pagada = false')
       .andWhere('cuota.fecha_vencimiento BETWEEN :hoy AND :en15Dias', {
@@ -100,7 +99,7 @@ export class CobrosService {
   }
 
   async vencidos(): Promise<CobroItem[]> {
-    const hoy = new Date().toISOString().slice(0, 10);
+    const hoy = diaColombia();
     const cuotas = await this.baseQuery()
       .andWhere('cuota.pagada = false')
       .andWhere('cuota.fecha_vencimiento < :hoy', { hoy })
@@ -118,7 +117,7 @@ export class CobrosService {
   }
 
   async totales() {
-    const hoy = new Date().toISOString().slice(0, 10);
+    const hoy = diaColombia();
     const pendientes = await this.baseQuery()
       .andWhere('cuota.pagada = false')
       .getMany();

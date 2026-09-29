@@ -8,6 +8,7 @@ import { TurnoCaja } from '../caja/entities/turno-caja.entity';
 import { EstadoVenta, TipoVenta } from '../common/enums/venta.enum';
 import { EstadoTurnoCaja } from '../common/enums/caja.enum';
 import { ReportesQueryDto } from './dto/reportes-query.dto';
+import { diaColombia, rangoDiasColombia } from '../common/utils/fecha-colombia';
 
 interface RangoFechas {
   desde: Date;
@@ -30,23 +31,9 @@ export class ReportesService {
     return this.cls.get<string>('negocioId');
   }
 
-  /**
-   * Rango por defecto: últimos 30 días (inclusive), si el caller no especifica fechas.
-   * Usa siempre métodos UTC: `desde`/`hasta` llegan como fechas sin hora (YYYY-MM-DD),
-   * que `new Date()` parsea como medianoche UTC — mezclar eso con setHours() (hora local
-   * del servidor) desplazaba el corte un día en zonas horarias negativas.
-   */
+  /** Rango por defecto: últimos 30 días (inclusive). Días calendario de Colombia, no UTC (ver fecha-colombia.ts). */
   private rangoFechas(query: ReportesQueryDto): RangoFechas {
-    const hasta = query.hasta ? new Date(query.hasta) : new Date();
-    hasta.setUTCHours(23, 59, 59, 999);
-
-    const desde = query.desde ? new Date(query.desde) : new Date(hasta);
-    if (!query.desde) {
-      desde.setUTCDate(desde.getUTCDate() - 30);
-    }
-    desde.setUTCHours(0, 0, 0, 0);
-
-    return { desde, hasta };
+    return rangoDiasColombia(query.desde, query.hasta, 30);
   }
 
   private ventasQuery(query: ReportesQueryDto, rango: RangoFechas) {
@@ -88,7 +75,7 @@ export class ReportesService {
       { fecha: string; cantidad: number; total: number }
     >();
     for (const v of ventas) {
-      const fecha = v.createdAt.toISOString().slice(0, 10);
+      const fecha = diaColombia(v.createdAt);
       const entry = porDiaMap.get(fecha) ?? { fecha, cantidad: 0, total: 0 };
       entry.cantidad += 1;
       entry.total += Number(v.total);

@@ -10,6 +10,7 @@ import { AjustarStockDto } from './dto/ajustar-stock.dto';
 import { SetStockMinimoDto } from './dto/set-stock-minimo.dto';
 import { KardexQueryDto } from './dto/kardex-query.dto';
 import { AlertasService } from '../alertas/alertas.service';
+import { finDiaColombia, inicioDiaColombia } from '../common/utils/fecha-colombia';
 
 interface AjustarStockInput extends AjustarStockDto {
   ventaId?: string;
@@ -75,12 +76,10 @@ export class InventarioService {
       qb.andWhere('mov.bodega_id = :bodegaId', { bodegaId: query.bodegaId });
     }
     if (query.desde) {
-      qb.andWhere('mov.created_at >= :desde', { desde: new Date(query.desde) });
+      qb.andWhere('mov.created_at >= :desde', { desde: inicioDiaColombia(query.desde) });
     }
     if (query.hasta) {
-      const hasta = new Date(query.hasta);
-      hasta.setUTCHours(23, 59, 59, 999);
-      qb.andWhere('mov.created_at <= :hasta', { hasta });
+      qb.andWhere('mov.created_at <= :hasta', { hasta: finDiaColombia(query.hasta) });
     }
 
     return qb.getMany();

@@ -502,6 +502,27 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
       expect(habilitacionRepo.save).toHaveBeenCalledWith(expect.objectContaining({ siguienteNumero: 43 }));
     });
 
+    it('de noche en Colombia manda a Alegra la fecha de HOY en Colombia, no la del día UTC siguiente', async () => {
+      // Solo se falsea el reloj — los setTimeout reales siguen funcionando para el resto del flujo.
+      jest.useFakeTimers({ doNotFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'setImmediate', 'nextTick', 'queueMicrotask'] });
+      jest.setSystemTime(new Date('2026-10-01T03:00:00Z')); // 30/09 22:00 en Bogotá
+      try {
+        const documento = {
+          id: 'doc-x', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'FACTURA' as const,
+          estado: EstadoDocumentoElectronico.PENDIENTE, intentos: 0,
+        };
+        alegraClient.crearFactura.mockResolvedValue({ alegraDocumentId: 'doc-1', status: 'SENT', legalStatus: 'ACCEPTED', isFinal: true });
+
+        await service.intentarEmitir(documento as any, { ...HABILITACION_CON_RESOLUCION } as any);
+
+        const [llamado] = alegraClient.crearFactura.mock.calls[0];
+        expect(llamado.invoicePeriod).toEqual({ startDate: '2026-09-30', endDate: '2026-09-30' });
+        expect(llamado.payments.every((p: { paymentDueDate: string }) => p.paymentDueDate === '2026-09-30')).toBe(true);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
     it('mapea items directo desde baseImponible/impuesto persistidos (sin necesitar item.producto), y arma customer genérico sin cliente', async () => {
       const documento = {
         id: 'doc-x', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'FACTURA' as const,
@@ -943,8 +964,8 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
       expect(listado.andWhere).toHaveBeenCalledWith('doc.estado = :estado', { estado: 'RECHAZADO' });
       // Fechas y orden sobre la MISMA fecha que muestra la tabla (emisión; creación solo si nunca se emitió) —
       // un reintento reusa el documento, así que `createdAt` puede ser semanas anterior al número vigente.
-      expect(listado.andWhere).toHaveBeenCalledWith('COALESCE(doc.fechaEmision, doc.createdAt) >= :desde', { desde: new Date('2026-09-01T00:00:00.000Z') });
-      expect(listado.andWhere).toHaveBeenCalledWith('COALESCE(doc.fechaEmision, doc.createdAt) <= :hasta', { hasta: new Date('2026-09-28T23:59:59.999Z') });
+      expect(listado.andWhere).toHaveBeenCalledWith('COALESCE(doc.fechaEmision, doc.createdAt) >= :desde', { desde: new Date('2026-09-01T05:00:00.000Z') }); // 00:00 en Colombia
+      expect(listado.andWhere).toHaveBeenCalledWith('COALESCE(doc.fechaEmision, doc.createdAt) <= :hasta', { hasta: new Date('2026-09-29T04:59:59.999Z') }); // 23:59:59.999 en Colombia
       expect(listado.orderBy).toHaveBeenCalledWith('COALESCE(doc.fechaEmision, doc.createdAt)', 'DESC');
       expect(listado.andWhere).toHaveBeenCalledWith('(doc.numeroCompleto ILIKE :q OR doc.nombreCliente ILIKE :q)', { q: '%sbox%' });
       expect(listado.offset).toHaveBeenCalledWith(10);

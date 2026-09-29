@@ -1,3 +1,5 @@
+// Antes que TypeORM abra el pool: lee/escribe `timestamp` sin zona como UTC (ver pg-utc.ts).
+import './database/pg-utc';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
