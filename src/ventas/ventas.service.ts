@@ -96,12 +96,23 @@ export class VentasService {
     }
   }
 
-  findAll() {
-    return this.ventasRepository.find({
-      where: { negocioId: this.getNegocioId() },
+  /** Cada venta trae el estado de su factura electrónica (o null) — un solo query extra, no uno por venta. */
+  async findAll() {
+    const negocioId = this.getNegocioId();
+    const ventas = await this.ventasRepository.find({
+      where: { negocioId },
       relations: { items: true, pagos: true, cuotas: true },
       order: { createdAt: 'DESC' },
     });
+    const documentos =
+      await this.facturacionElectronicaService.resumenPorVentas(
+        negocioId,
+        ventas.map((v) => v.id),
+      );
+    return ventas.map((venta) => ({
+      ...venta,
+      documentoElectronico: documentos.get(venta.id) ?? null,
+    }));
   }
 
   async findOne(id: string): Promise<Venta> {

@@ -258,6 +258,8 @@ export class AlegraClientService {
    * llegar `isFinal: false` si la DIAN está intermitente — sin `legalStatus`
    * todavía; hay que guardar el `trackingReference` para consultar después
    * con `consultarFactura`, nunca reenviar (arriesga duplicar el número).
+   * Alegra no devuelve PDF — `files` solo trae `xml`/`attachedDocument`/`zip` (MCP Alanube +
+   * sandbox real, 2026-09-28); la representación gráfica la genera `FacturaPdfService`.
    */
   async crearFactura(params: {
     token: string;
@@ -277,14 +279,17 @@ export class AlegraClientService {
     alegraDocumentId: string;
     cufe?: string;
     fullNumber?: string;
+    prefix?: string;
+    number?: number;
     fecha?: string;
+    /** Texto exacto que la DIAN exige dentro del QR de la representación gráfica. */
+    qrCodeContent?: string;
     status: string;
     legalStatus?: string;
     isFinal: boolean;
     trackingReference?: { flow: 'co.invoice'; environment: string; documentId: string };
     governmentResponseMessage?: string;
     errorMessages?: string[];
-    urlPdf?: string;
     urlXml?: string;
     urlZip?: string;
   }> {
@@ -313,7 +318,10 @@ export class AlegraClientService {
       alegraDocumentId: invoice.id as string,
       cufe: invoice.cufe as string | undefined,
       fullNumber: invoice.fullNumber as string | undefined,
+      prefix: invoice.prefix as string | undefined,
+      number: invoice.number as number | undefined,
       fecha: invoice.date as string | undefined,
+      qrCodeContent: invoice.qrCodeContent as string | undefined,
       status: invoice.status as string,
       legalStatus: invoice.legalStatus as string | undefined,
       isFinal,
@@ -322,23 +330,30 @@ export class AlegraClientService {
         : { flow: 'co.invoice', environment: params.baseUrl.includes('sandbox') ? 'sandbox' : 'production', documentId: invoice.id as string },
       governmentResponseMessage: invoice.governmentResponse?.message as string | undefined,
       errorMessages: invoice.governmentResponse?.errorMessages as string[] | undefined,
-      urlPdf: data.files?.pdf as string | undefined,
       urlXml: data.files?.xml as string | undefined,
       urlZip: data.files?.zip as string | undefined,
     };
   }
 
-  /** `GET /invoices/{id}` — resuelve el estado de una factura que quedó `isFinal: false`. Mismo shape de respuesta que `crearFactura`. */
+  /**
+   * `GET /invoices/{id}` — resuelve el estado de una factura que quedó `isFinal: false`, y es la
+   * fuente del backfill del snapshot de representación gráfica. Mismo shape de respuesta que
+   * `crearFactura` — incluye `qrCodeContent`. Confirmado en vivo contra el sandbox (2026-09-28):
+   * Alegra/Alanube no genera PDF, `files` solo trae `xml`/`attachedDocument`/`zip`.
+   */
   async consultarFactura(params: { token: string; baseUrl: string; documentId: string }): Promise<{
     alegraDocumentId: string;
     cufe?: string;
     fullNumber?: string;
+    prefix?: string;
+    number?: number;
+    fecha?: string;
+    qrCodeContent?: string;
     status: string;
     legalStatus?: string;
     isFinal: boolean;
     governmentResponseMessage?: string;
     errorMessages?: string[];
-    urlPdf?: string;
     urlXml?: string;
     urlZip?: string;
   }> {
@@ -355,12 +370,15 @@ export class AlegraClientService {
       alegraDocumentId: invoice.id as string,
       cufe: invoice.cufe as string | undefined,
       fullNumber: invoice.fullNumber as string | undefined,
+      prefix: invoice.prefix as string | undefined,
+      number: invoice.number as number | undefined,
+      fecha: invoice.date as string | undefined,
+      qrCodeContent: invoice.qrCodeContent as string | undefined,
       status: invoice.status as string,
       legalStatus: invoice.legalStatus as string | undefined,
       isFinal: invoice.isFinal !== false,
       governmentResponseMessage: invoice.governmentResponse?.message as string | undefined,
       errorMessages: invoice.governmentResponse?.errorMessages as string[] | undefined,
-      urlPdf: data.files?.pdf as string | undefined,
       urlXml: data.files?.xml as string | undefined,
       urlZip: data.files?.zip as string | undefined,
     };

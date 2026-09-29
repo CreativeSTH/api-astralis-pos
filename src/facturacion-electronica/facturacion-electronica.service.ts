@@ -1,6 +1,13 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  BadGatewayException,
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { HabilitacionFacturacionElectronica } from './entities/habilitacion-facturacion-electronica.entity';
 import { DocumentoElectronico } from './entities/documento-electronico.entity';
 import { EstadoHabilitacion } from './entities/estado-habilitacion.enum';
@@ -16,6 +23,9 @@ import {
 } from './alegra-client.service';
 import { ActualizarDatosNegocioDto } from './dto/actualizar-datos-negocio.dto';
 import { CargarResolucionDto } from './dto/cargar-resolucion.dto';
+import { FiltrosFacturasDto } from './dto/filtros-facturas.dto';
+import { FacturaPdfService } from './factura-pdf.service';
+import { LogoNegocioService } from './logo-negocio.service';
 import { encriptar, desencriptar } from '../common/utils/cifrado';
 import { Negocio } from '../negocios/entities/negocio.entity';
 import { SuscripcionesService } from '../suscripciones/suscripciones.service';
@@ -64,8 +74,29 @@ const SANDBOX_GOVERNMENT_TEST_SET_ID = 'a70562e0-631e-4ceb-aa65-36887b57dc17';
 const SANDBOX_FECHA_INICIO = '2020-01-01';
 const SANDBOX_FECHA_FIN = '2030-12-31';
 
+/** Lo que Alegra devuelve de una factura y hace falta para la representación gráfica (PDF). */
+type DatosAlegraFactura = {
+  cufe?: string;
+  fullNumber?: string;
+  prefix?: string;
+  number?: number;
+  fecha?: string;
+  qrCodeContent?: string;
+};
+
+export interface ListadoFacturas {
+  items: DocumentoElectronico[];
+  total: number;
+  pagina: number;
+  porPagina: number;
+  resumen: { aceptados: number; pendientes: number; rechazados: number };
+  tieneLogo: boolean;
+}
+
 @Injectable()
 export class FacturacionElectronicaService {
+  private readonly logger = new Logger(FacturacionElectronicaService.name);
+
   constructor(
     @InjectRepository(HabilitacionFacturacionElectronica)
     private readonly habilitacionRepository: Repository<HabilitacionFacturacionElectronica>,
@@ -80,6 +111,8 @@ export class FacturacionElectronicaService {
     private readonly alegraClient: AlegraClientService,
     private readonly suscripcionesService: SuscripcionesService,
     private readonly realtimeGateway: RealtimeGateway,
+    private readonly facturaPdf: FacturaPdfService,
+    private readonly logoNegocio: LogoNegocioService,
   ) {}
 
   async obtenerOCrearHabilitacion(negocioId: string): Promise<HabilitacionFacturacionElectronica> {
@@ -578,6 +611,7 @@ export class FacturacionElectronicaService {
         where: { id: documento.ventaId },
         relations: { items: true, pagos: true, cliente: true },
       });
+      const negocio = await this.negociosRepository.findOneOrFail({ where: { id: documento.negocioId } });
       const resolution = this.resolutionDesdeHabilitacion(habilitacion);
       const items = this.mapearItemsAlegra(venta);
       const totalAmounts = this.mapearTotalesAlegra(venta);
@@ -599,7 +633,8 @@ export class FacturacionElectronicaService {
       });
 
       documento.alegraDocumentId = resultado.alegraDocumentId;
-      if (resultado.cufe) documento.cufe = resultado.cufe;
+      this.congelarDatosEmision(documento, habilitacion, negocio, venta, numero);
+      this.aplicarDatosAlegra(documento, resultado);
       // El envío llegó bien a Alegra (no lanzó) — cualquier errorMensaje de un
       // intento anterior fallido ya no aplica, se limpia salvo que la DIAN
       // rechace este intento con un motivo real (ver abajo).
@@ -709,7 +744,7 @@ export class FacturacionElectronicaService {
         return;
       }
       documento.trackingReference = null;
-      if (resultado.cufe) documento.cufe = resultado.cufe;
+      this.aplicarDatosAlegra(documento, resultado);
       if (resultado.legalStatus === 'ACCEPTED') {
         documento.estado = EstadoDocumentoElectronico.ACEPTADO;
       } else if (resultado.legalStatus === 'ACCEPTED_WITH_OBSERVATIONS') {
@@ -772,36 +807,249 @@ export class FacturacionElectronicaService {
     }
   }
 
-  async obtenerDocumentoPorVenta(ventaId: string): Promise<DocumentoElectronico | null> {
-    return this.documentosRepository.findOne({ where: { ventaId } });
+  /**
+   * Siempre filtra por `negocioId` además de `ventaId` — este servicio usa el
+   * repositorio directo (no `TenantBaseService`), así que sin este filtro un
+   * usuario de otro negocio podía leer/reintentar/descargar documentos ajenos
+   * conociendo el id de la venta. Un documento de otro negocio responde igual
+   * que uno inexistente (null / 404), sin revelar que existe.
+   */
+  async obtenerDocumentoPorVenta(ventaId: string, negocioId: string): Promise<DocumentoElectronico | null> {
+    return this.documentosRepository.findOne({ where: { ventaId, negocioId } });
   }
 
-  async reintentarPorVenta(ventaId: string): Promise<DocumentoElectronico> {
-    const documento = await this.documentosRepository.findOneOrFail({ where: { ventaId } });
+  private async documentoDelNegocioOFallar(ventaId: string, negocioId: string): Promise<DocumentoElectronico> {
+    const documento = await this.obtenerDocumentoPorVenta(ventaId, negocioId);
+    if (!documento) throw new NotFoundException('Documento electrónico no encontrado');
+    return documento;
+  }
+
+  async reintentarPorVenta(ventaId: string, negocioId: string): Promise<DocumentoElectronico> {
+    const documento = await this.documentoDelNegocioOFallar(ventaId, negocioId);
+    this.exigirReintentable(documento);
     const habilitacion = await this.habilitacionRepository.findOneOrFail({ where: { negocioId: documento.negocioId } });
     await this.intentarEmitir(documento, habilitacion);
-    return this.documentosRepository.findOneOrFail({ where: { ventaId } });
+    return this.documentoDelNegocioOFallar(ventaId, negocioId);
   }
 
-  async obtenerLinksDescarga(ventaId: string): Promise<{ urlXml?: string; urlPdf?: string }> {
-    const documento = await this.documentosRepository.findOneOrFail({ where: { ventaId } });
-    if (!documento.alegraDocumentId) return {};
-    const habilitacion = await this.habilitacionRepository.findOneOrFail({ where: { negocioId: documento.negocioId } });
+  async listarFacturas(negocioId: string, filtros: FiltrosFacturasDto): Promise<ListadoFacturas> {
+    const pagina = filtros.pagina ?? 1;
+    const porPagina = filtros.porPagina ?? 20;
+
+    // Negocio + fechas + búsqueda aplican a la tabla Y al resumen; el filtro de estado solo a la tabla
+    // (el resumen es justamente lo que se usa para elegir ese filtro).
+    // La tabla muestra la fecha de emisión (o la de creación si nunca se emitió) — filtrar y ordenar por
+    // `createdAt` a secas no coincidía: un reintento reusa el documento con su `createdAt` original.
+    const fecha = 'COALESCE(doc.fechaEmision, doc.createdAt)';
+    const base = () => {
+      const qb = this.documentosRepository.createQueryBuilder('doc').where('doc.negocioId = :negocioId', { negocioId });
+      if (filtros.desde) {
+        const desde = new Date(filtros.desde);
+        desde.setUTCHours(0, 0, 0, 0);
+        qb.andWhere(`${fecha} >= :desde`, { desde });
+      }
+      if (filtros.hasta) {
+        const hasta = new Date(filtros.hasta);
+        hasta.setUTCHours(23, 59, 59, 999);
+        qb.andWhere(`${fecha} <= :hasta`, { hasta });
+      }
+      const q = filtros.q?.trim();
+      if (q) qb.andWhere('(doc.numeroCompleto ILIKE :q OR doc.nombreCliente ILIKE :q)', { q: `%${q}%` });
+      return qb;
+    };
+
+    const listado = base();
+    if (filtros.estado) listado.andWhere('doc.estado = :estado', { estado: filtros.estado });
+    const [items, total] = await listado
+      .orderBy(fecha, 'DESC')
+      .offset((pagina - 1) * porPagina)
+      .limit(porPagina)
+      .getManyAndCount();
+
+    const conteos = await base()
+      .select('doc.estado', 'estado')
+      .addSelect('COUNT(*)', 'cantidad')
+      .groupBy('doc.estado')
+      .getRawMany<{ estado: EstadoDocumentoElectronico; cantidad: string }>();
+    const cantidad = (...estados: EstadoDocumentoElectronico[]) =>
+      conteos.filter((c) => estados.includes(c.estado)).reduce((suma, c) => suma + Number(c.cantidad), 0);
+
+    return {
+      items,
+      total,
+      pagina,
+      porPagina,
+      resumen: {
+        aceptados: cantidad(EstadoDocumentoElectronico.ACEPTADO, EstadoDocumentoElectronico.ACEPTADO_CON_OBSERVACIONES),
+        pendientes: cantidad(EstadoDocumentoElectronico.PENDIENTE, EstadoDocumentoElectronico.ERROR),
+        rechazados: cantidad(EstadoDocumentoElectronico.RECHAZADO),
+      },
+      tieneLogo: (await this.logoNegocio.resolverLogo(negocioId)) !== null,
+    };
+  }
+
+  async obtenerFactura(
+    id: string,
+    negocioId: string,
+  ): Promise<{ documento: DocumentoElectronico; venta: Venta | null; qrDataUrl: string | null }> {
+    const documento = await this.facturaDelNegocioOFallar(id, negocioId);
+    try {
+      await this.completarDatosFaltantes(documento);
+    } catch (error) {
+      // El detalle no depende de Alegra — se muestra con lo que haya (spec, sección 7).
+      this.logger.warn(`No se pudo completar el snapshot de ${documento.id}: ${(error as Error).message}`);
+    }
+    const venta = await this.ventasRepository.findOne({
+      where: { id: documento.ventaId, negocioId },
+      relations: { items: true, pagos: true, cliente: true },
+    });
+    const qrDataUrl = documento.qrContenido ? await this.facturaPdf.generarQrDataUrl(documento.qrContenido) : null;
+    return { documento, venta, qrDataUrl };
+  }
+
+  async generarPdf(id: string, negocioId: string): Promise<{ nombreArchivo: string; contenido: Buffer }> {
+    const documento = await this.facturaDelNegocioOFallar(id, negocioId);
+    if (documento.tipo !== 'FACTURA') {
+      throw new ConflictException('Documento legado sin representación gráfica disponible');
+    }
+    if (!documento.cufe || !documento.alegraDocumentId) {
+      throw new ConflictException('Esperando respuesta de la DIAN');
+    }
+    // Si Alegra falla acá sube como BadGateway (502) — sin QR no hay PDF válido.
+    await this.completarDatosFaltantes(documento);
+    if (!documento.qrContenido) throw new ConflictException('Esperando respuesta de la DIAN');
+
+    const venta = await this.ventasRepository.findOneOrFail({
+      where: { id: documento.ventaId, negocioId },
+      relations: { items: true, pagos: true, cliente: true },
+    });
+    const logo = await this.logoNegocio.resolverLogo(negocioId);
+    const contenido = await this.facturaPdf.generar({ documento, venta, logo });
+    return { nombreArchivo: `${documento.numeroCompleto ?? documento.id}.pdf`, contenido };
+  }
+
+  async descargarXml(id: string, negocioId: string): Promise<{ nombreArchivo: string; contenido: Buffer }> {
+    const documento = await this.facturaDelNegocioOFallar(id, negocioId);
+    if (!documento.alegraDocumentId) throw new ConflictException('Esta factura todavía no llegó a Alegra');
+    const habilitacion = await this.habilitacionRepository.findOneOrFail({ where: { negocioId } });
     const token = process.env.ALEGRA_RESELLER_TOKEN!;
     const baseUrl = baseUrlPara(habilitacion.ambiente);
 
-    // Documentos nuevos son siempre FACTURA — usan `/invoices/{id}`, con `pdf`
-    // disponible (DEE_POS legado, `consultarDocumento`, nunca lo confirmó).
-    if (documento.tipo === 'FACTURA') {
-      const resultado = await this.alegraClient.consultarFactura({ token, baseUrl, documentId: documento.alegraDocumentId });
-      return { urlXml: resultado.urlXml, urlPdf: resultado.urlPdf };
-    }
-    const resultado = await this.alegraClient.consultarDocumento({
-      token,
-      baseUrl,
-      alegraDocumentId: documento.alegraDocumentId,
-      tipo: documento.tipo,
+    const { urlXml } =
+      documento.tipo === 'FACTURA'
+        ? await this.alegraClient.consultarFactura({ token, baseUrl, documentId: documento.alegraDocumentId })
+        : await this.alegraClient.consultarDocumento({
+            token,
+            baseUrl,
+            alegraDocumentId: documento.alegraDocumentId,
+            tipo: documento.tipo,
+          });
+    if (!urlXml) throw new BadGatewayException('Alegra no devolvió el XML de esta factura');
+
+    // La URL es un link de S3 prefirmado (expira en 1h) — se descarga acá y nunca llega al navegador.
+    const res = await fetch(urlXml);
+    if (!res.ok) throw new BadGatewayException('No se pudo obtener el documento de Alegra, intentá en unos minutos');
+    return {
+      nombreArchivo: `${documento.numeroCompleto ?? documento.id}.xml`,
+      contenido: Buffer.from(await res.arrayBuffer()),
+    };
+  }
+
+  async reintentarFactura(id: string, negocioId: string): Promise<DocumentoElectronico> {
+    const documento = await this.facturaDelNegocioOFallar(id, negocioId);
+    this.exigirReintentable(documento);
+    const habilitacion = await this.habilitacionRepository.findOneOrFail({ where: { negocioId } });
+    await this.intentarEmitir(documento, habilitacion);
+    return this.facturaDelNegocioOFallar(id, negocioId);
+  }
+
+  async resumenPorVentas(
+    negocioId: string,
+    ventaIds: string[],
+  ): Promise<Map<string, { id: string; estado: EstadoDocumentoElectronico }>> {
+    if (ventaIds.length === 0) return new Map();
+    const documentos = await this.documentosRepository.find({
+      where: { negocioId, ventaId: In(ventaIds) },
+      select: { id: true, ventaId: true, estado: true },
     });
-    return { urlXml: resultado.urlXml, urlPdf: resultado.urlPdf };
+    return new Map(documentos.map((d) => [d.ventaId, { id: d.id, estado: d.estado }]));
+  }
+
+  private async facturaDelNegocioOFallar(id: string, negocioId: string): Promise<DocumentoElectronico> {
+    const documento = await this.documentosRepository.findOne({ where: { id, negocioId } });
+    if (!documento) throw new NotFoundException('Factura electrónica no encontrada');
+    return documento;
+  }
+
+  /**
+   * Reintentar un documento ya aceptado (o todavía en curso ante la DIAN) emitiría una SEGUNDA
+   * factura real con un número nuevo para la misma venta. Solo se reintenta lo rechazado o lo
+   * que nunca llegó a Alegra (pendiente sin `trackingReference`).
+   */
+  private exigirReintentable(documento: DocumentoElectronico): void {
+    const reintentable =
+      documento.estado === EstadoDocumentoElectronico.RECHAZADO ||
+      documento.estado === EstadoDocumentoElectronico.ERROR ||
+      (documento.estado === EstadoDocumentoElectronico.PENDIENTE && !documento.trackingReference);
+    if (!reintentable) throw new BadRequestException('Esta factura no se puede reintentar');
+  }
+
+  /**
+   * Backfill perezoso (spec 3.2) para documentos emitidos antes del snapshot: consulta Alegra
+   * una sola vez y guarda. La resolución/emisor se toman de la habilitación actual — mejor
+   * aproximación posible para documentos viejos; los nuevos quedan exactos desde la emisión.
+   */
+  private async completarDatosFaltantes(documento: DocumentoElectronico): Promise<void> {
+    if (documento.numeroCompleto || !documento.alegraDocumentId || documento.tipo !== 'FACTURA') return;
+    const habilitacion = await this.habilitacionRepository.findOneOrFail({ where: { negocioId: documento.negocioId } });
+    const negocio = await this.negociosRepository.findOneOrFail({ where: { id: documento.negocioId } });
+    const venta = await this.ventasRepository.findOneOrFail({ where: { id: documento.ventaId } });
+    const resultado = await this.alegraClient.consultarFactura({
+      token: process.env.ALEGRA_RESELLER_TOKEN!,
+      baseUrl: baseUrlPara(habilitacion.ambiente),
+      documentId: documento.alegraDocumentId,
+    });
+    this.congelarDatosEmision(documento, habilitacion, negocio, venta, resultado.number ?? documento.numero ?? 0);
+    this.aplicarDatosAlegra(documento, resultado);
+    await this.documentosRepository.save(documento);
+  }
+
+  /**
+   * Foto de la resolución, el emisor y la venta al momento de emitir (spec 2026-09-28, 3.1) —
+   * la habilitación es mutable, y si el negocio renueva su resolución, el PDF de una factura
+   * vieja no puede cambiar.
+   */
+  private congelarDatosEmision(
+    documento: DocumentoElectronico,
+    habilitacion: HabilitacionFacturacionElectronica,
+    negocio: Negocio,
+    venta: Venta,
+    numero: number,
+  ): void {
+    documento.numero = numero;
+    documento.prefijo = habilitacion.resolucionPrefijo;
+    documento.numeroCompleto = `${habilitacion.resolucionPrefijo ?? ''}${numero}`;
+    documento.ambiente = habilitacion.ambiente;
+    documento.resolucionNumero = habilitacion.resolucionNumero;
+    documento.resolucionFechaInicio = habilitacion.resolucionFechaInicio;
+    documento.resolucionFechaFin = habilitacion.resolucionFechaFin;
+    documento.resolucionRangoDesde = habilitacion.resolucionRangoDesde;
+    documento.resolucionRangoHasta = habilitacion.resolucionRangoHasta;
+    documento.emisorRazonSocial = habilitacion.razonSocial ?? negocio.nombre;
+    documento.emisorNit = negocio.nit;
+    documento.emisorDireccion = habilitacion.direccion ?? negocio.direccion;
+    documento.emisorCiudad = habilitacion.ciudad ?? negocio.ciudadNombre;
+    documento.nombreCliente = venta.nombreCliente;
+    documento.total = Number(venta.total);
+  }
+
+  /** Lo que Alegra confirma pisa lo calculado localmente (ej. `fullNumber` real vs. prefijo+número armado a mano). */
+  private aplicarDatosAlegra(documento: DocumentoElectronico, resultado: DatosAlegraFactura): void {
+    if (resultado.cufe) documento.cufe = resultado.cufe;
+    if (resultado.fullNumber) documento.numeroCompleto = resultado.fullNumber;
+    if (resultado.prefix) documento.prefijo = resultado.prefix;
+    if (resultado.number !== undefined) documento.numero = resultado.number;
+    if (resultado.fecha) documento.fechaEmision = new Date(resultado.fecha);
+    if (resultado.qrCodeContent) documento.qrContenido = resultado.qrCodeContent;
   }
 }

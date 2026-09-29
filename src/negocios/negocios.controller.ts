@@ -8,8 +8,12 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { negocioLogoUploadOptions } from '../common/config/upload.config';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { NegociosService } from './negocios.service';
 import { CreateNegocioDto } from './dto/create-negocio.dto';
@@ -68,6 +72,21 @@ export class NegociosController {
   @ApiOperation({ summary: 'Editar los datos del propio negocio (nombre, NIT, contacto)' })
   actualizarMiNegocio(@CurrentUser() usuario: JwtUserPayload, @Body() dto: UpdateNegocioDto) {
     return this.negociosService.update(this.exigirNegocioId(usuario), dto);
+  }
+
+  @Post('mi-negocio/logo')
+  @RequierePermiso(ModuloPermiso.NEGOCIO, AccionPermiso.EDITAR)
+  @UseInterceptors(FileInterceptor('logo', negocioLogoUploadOptions))
+  @ApiOperation({ summary: 'Subir el logo oficial del negocio (va en el PDF de factura electrónica)' })
+  subirLogo(@CurrentUser() usuario: JwtUserPayload, @UploadedFile() logo?: Express.Multer.File) {
+    if (!logo) throw new BadRequestException('Seleccioná una imagen JPG, PNG o WEBP');
+    return this.negociosService.actualizarLogo(this.exigirNegocioId(usuario), `/uploads/negocios/logos/${logo.filename}`);
+  }
+
+  @Delete('mi-negocio/logo')
+  @RequierePermiso(ModuloPermiso.NEGOCIO, AccionPermiso.EDITAR)
+  quitarLogo(@CurrentUser() usuario: JwtUserPayload) {
+    return this.negociosService.actualizarLogo(this.exigirNegocioId(usuario), null);
   }
 
   @Get(':id')

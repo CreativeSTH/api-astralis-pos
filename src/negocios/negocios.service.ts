@@ -172,6 +172,13 @@ export class NegociosService {
     return this.negociosRepository.save(negocio);
   }
 
+  async actualizarLogo(id: string, logoUrl: string | null): Promise<{ logoUrl: string | null }> {
+    const negocio = await this.findOne(id);
+    negocio.logoUrl = logoUrl;
+    await this.negociosRepository.save(negocio);
+    return { logoUrl };
+  }
+
   async remove(id: string): Promise<void> {
     const negocio = await this.findOne(id);
     negocio.activo = false;

@@ -281,7 +281,8 @@ describe('AlegraClientService', () => {
             status: 'SENT', legalStatus: 'ACCEPTED', isFinal: true,
             governmentResponse: { code: '0', message: 'Aceptado' },
           },
-          files: { pdf: 'https://s3/inv.pdf', xml: 'https://s3/inv.xml', zip: 'https://s3/inv.zip' },
+          // Shape real confirmado 2026-09-28: Alegra no devuelve `pdf` en `files`.
+          files: { xml: 'https://s3/inv.xml', zip: 'https://s3/inv.zip' },
         }),
       });
 
@@ -293,7 +294,7 @@ describe('AlegraClientService', () => {
       expect(resultado).toEqual(expect.objectContaining({
         alegraDocumentId: 'inv-1', cufe: 'cufe-abc', fullNumber: 'DE6',
         legalStatus: 'ACCEPTED', isFinal: true,
-        urlPdf: 'https://s3/inv.pdf', urlXml: 'https://s3/inv.xml', urlZip: 'https://s3/inv.zip',
+        urlXml: 'https://s3/inv.xml', urlZip: 'https://s3/inv.zip',
       }));
       const [url, opciones] = fetchMock.mock.calls[0];
       expect(url).toBe('https://sandbox-api.alegra.com/e-provider/col/v1/invoices');
@@ -412,5 +413,46 @@ describe('AlegraClientService', () => {
       expect(body.associatedDocuments).toEqual([DOC_ASOCIADO]);
       expect(body.conceptCode).toBe('4');
     });
+  });
+
+  it('consultarFactura devuelve prefix/number/fecha/qrCodeContent (necesarios para la representación gráfica)', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        invoice: {
+          id: 'inv-1', status: 'SENT', legalStatus: 'ACCEPTED', cufe: 'cufe-1', fullNumber: 'SBOX11',
+          prefix: 'SBOX', number: 11, date: '2026-09-06T23:41:48-05:00',
+          qrCodeContent: 'NumFac: SBOX11\nCUFE: cufe-1\nQRCode: https://catalogo-vpfe.dian.gov.co/document/searchqr?documentkey=cufe-1',
+        },
+        files: { xml: 'https://s3/x.xml' },
+      }),
+    });
+
+    const resultado = await service.consultarFactura({ token: 't', baseUrl: 'https://sandbox', documentId: 'inv-1' });
+
+    expect(resultado).toEqual(expect.objectContaining({
+      prefix: 'SBOX', number: 11, fecha: '2026-09-06T23:41:48-05:00', fullNumber: 'SBOX11',
+      qrCodeContent: expect.stringContaining('CUFE: cufe-1'),
+    }));
+  });
+
+  it('crearFactura devuelve prefix/number/qrCodeContent', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        invoice: { id: 'inv-1', status: 'SENT', legalStatus: 'ACCEPTED', cufe: 'c', fullNumber: 'DE42', prefix: 'DE', number: 42, date: '2026-09-28T10:00:00-05:00', qrCodeContent: 'qr' },
+        files: {},
+      }),
+    });
+
+    const resultado = await service.crearFactura({
+      token: 't', baseUrl: 'https://sandbox', companyId: 'c1', number: 42, regimeCode: 'O-48',
+      invoicePeriod: { startDate: '2026-09-28', endDate: '2026-09-28' },
+      resolution: { prefix: 'DE', resolutionNumber: '1', startDate: '2026-01-01', endDate: '2027-01-01', minNumber: 1, maxNumber: 100, technicalKey: 'k' },
+      customer: { identificationNumber: '222222222222', identificationType: '13', name: 'Consumidor Final' },
+      items: [], payments: [], totalAmounts: { grossTotal: 0, taxableTotal: 0, taxTotal: 0, payableTotal: 0, discountTotal: 0, chargeTotal: 0, advanceTotal: 0 },
+    });
+
+    expect(resultado).toEqual(expect.objectContaining({ prefix: 'DE', number: 42, qrCodeContent: 'qr' }));
   });
 });

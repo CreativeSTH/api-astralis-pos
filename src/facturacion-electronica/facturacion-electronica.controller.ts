@@ -1,9 +1,23 @@
-import { Body, Controller, ForbiddenException, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  ForbiddenException,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Query,
+  StreamableFile,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { FacturacionElectronicaService } from './facturacion-electronica.service';
 import { SuscripcionesService } from '../suscripciones/suscripciones.service';
 import { ActualizarDatosNegocioDto } from './dto/actualizar-datos-negocio.dto';
 import { CargarResolucionDto } from './dto/cargar-resolucion.dto';
+import { FiltrosFacturasDto } from './dto/filtros-facturas.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { RequierePermiso } from '../common/decorators/requiere-permiso.decorator';
@@ -99,19 +113,55 @@ export class FacturacionElectronicaController {
 
   @Get('documentos/:ventaId')
   @RequierePermiso(ModuloPermiso.VENTAS, AccionPermiso.VER)
-  async miDocumento(@Param('ventaId', ParseUUIDPipe) ventaId: string) {
-    return this.facturacionService.obtenerDocumentoPorVenta(ventaId);
+  async miDocumento(@CurrentUser() usuario: JwtUserPayload, @Param('ventaId', ParseUUIDPipe) ventaId: string) {
+    return this.facturacionService.obtenerDocumentoPorVenta(ventaId, usuario.negocioId!);
   }
 
   @Post('documentos/:ventaId/reintentar')
   @RequierePermiso(ModuloPermiso.VENTAS, AccionPermiso.EDITAR)
-  async reintentarDocumento(@Param('ventaId', ParseUUIDPipe) ventaId: string) {
-    return this.facturacionService.reintentarPorVenta(ventaId);
+  async reintentarDocumento(@CurrentUser() usuario: JwtUserPayload, @Param('ventaId', ParseUUIDPipe) ventaId: string) {
+    return this.facturacionService.reintentarPorVenta(ventaId, usuario.negocioId!);
   }
 
-  @Get('documentos/:ventaId/descargar')
-  @RequierePermiso(ModuloPermiso.VENTAS, AccionPermiso.VER)
-  async descargarDocumento(@Param('ventaId', ParseUUIDPipe) ventaId: string) {
-    return this.facturacionService.obtenerLinksDescarga(ventaId);
+  // ── Facturas por id de documento (spec 2026-09-28). Bajo `/facturas`, no `/documentos`:
+  // `POST documentos/:ventaId/reintentar` ya existe y Nest no distingue un uuid de venta de uno de documento.
+
+  @Get('facturas')
+  @RequierePermiso(ModuloPermiso.FACTURACION_ELECTRONICA_DIAN, AccionPermiso.VER)
+  @ApiOperation({ summary: 'Listado paginado de facturas electrónicas del negocio, con resumen por estado' })
+  async listarFacturas(@CurrentUser() usuario: JwtUserPayload, @Query() filtros: FiltrosFacturasDto) {
+    await this.exigirFeatureHabilitada(usuario.negocioId!);
+    return this.facturacionService.listarFacturas(usuario.negocioId!, filtros);
+  }
+
+  @Get('facturas/:id')
+  @RequierePermiso(ModuloPermiso.FACTURACION_ELECTRONICA_DIAN, AccionPermiso.VER)
+  async obtenerFactura(@CurrentUser() usuario: JwtUserPayload, @Param('id', ParseUUIDPipe) id: string) {
+    await this.exigirFeatureHabilitada(usuario.negocioId!);
+    return this.facturacionService.obtenerFactura(id, usuario.negocioId!);
+  }
+
+  @Get('facturas/:id/pdf')
+  @RequierePermiso(ModuloPermiso.FACTURACION_ELECTRONICA_DIAN, AccionPermiso.VER)
+  @ApiOperation({ summary: 'Representación gráfica (PDF carta) generada por AURA — Alegra no genera PDF' })
+  async pdfFactura(@CurrentUser() usuario: JwtUserPayload, @Param('id', ParseUUIDPipe) id: string) {
+    await this.exigirFeatureHabilitada(usuario.negocioId!);
+    const { nombreArchivo, contenido } = await this.facturacionService.generarPdf(id, usuario.negocioId!);
+    return new StreamableFile(contenido, { type: 'application/pdf', disposition: `inline; filename="${nombreArchivo}"` });
+  }
+
+  @Get('facturas/:id/xml')
+  @RequierePermiso(ModuloPermiso.FACTURACION_ELECTRONICA_DIAN, AccionPermiso.VER)
+  async xmlFactura(@CurrentUser() usuario: JwtUserPayload, @Param('id', ParseUUIDPipe) id: string) {
+    await this.exigirFeatureHabilitada(usuario.negocioId!);
+    const { nombreArchivo, contenido } = await this.facturacionService.descargarXml(id, usuario.negocioId!);
+    return new StreamableFile(contenido, { type: 'application/xml', disposition: `attachment; filename="${nombreArchivo}"` });
+  }
+
+  @Post('facturas/:id/reintentar')
+  @RequierePermiso(ModuloPermiso.FACTURACION_ELECTRONICA_DIAN, AccionPermiso.EDITAR)
+  async reintentarFactura(@CurrentUser() usuario: JwtUserPayload, @Param('id', ParseUUIDPipe) id: string) {
+    await this.exigirFeatureHabilitada(usuario.negocioId!);
+    return this.facturacionService.reintentarFactura(id, usuario.negocioId!);
   }
 }

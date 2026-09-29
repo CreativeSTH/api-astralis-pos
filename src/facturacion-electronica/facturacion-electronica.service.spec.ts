@@ -1,3 +1,4 @@
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { FacturacionElectronicaService } from './facturacion-electronica.service';
@@ -6,6 +7,8 @@ import { DocumentoElectronico } from './entities/documento-electronico.entity';
 import { EstadoHabilitacion } from './entities/estado-habilitacion.enum';
 import { EstadoDocumentoElectronico } from './entities/estado-documento-electronico.enum';
 import { AlegraClientService } from './alegra-client.service';
+import { FacturaPdfService } from './factura-pdf.service';
+import { LogoNegocioService } from './logo-negocio.service';
 import { Negocio } from '../negocios/entities/negocio.entity';
 import { SuscripcionesService } from '../suscripciones/suscripciones.service';
 import { Alerta } from '../alertas/entities/alerta.entity';
@@ -67,6 +70,17 @@ const HABILITACION_CON_RESOLUCION = {
   resolucionTechnicalKey: 'abc123',
 };
 
+/** Query builder encadenable de TypeORM — cada método devuelve el mismo objeto, los terminales resuelven lo que el test necesita. */
+function qbEncadenable(resultado: { items?: unknown[]; total?: number; conteos?: unknown[] } = {}) {
+  const qb: Record<string, jest.Mock> = {};
+  for (const metodo of ['where', 'andWhere', 'orderBy', 'offset', 'limit', 'select', 'addSelect', 'groupBy']) {
+    qb[metodo] = jest.fn().mockReturnValue(qb);
+  }
+  qb.getManyAndCount = jest.fn().mockResolvedValue([resultado.items ?? [], resultado.total ?? 0]);
+  qb.getRawMany = jest.fn().mockResolvedValue(resultado.conteos ?? []);
+  return qb;
+}
+
 describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
   let service: FacturacionElectronicaService;
   let habilitacionRepo: { findOne: jest.Mock; findOneOrFail: jest.Mock; create: jest.Mock; save: jest.Mock };
@@ -79,7 +93,9 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
     createQueryBuilder: jest.Mock;
   };
   let negociosRepo: { findOneOrFail: jest.Mock; save: jest.Mock };
-  let ventasRepo: { findOneOrFail: jest.Mock };
+  let ventasRepo: { findOneOrFail: jest.Mock; findOne: jest.Mock };
+  let facturaPdf: { generar: jest.Mock; generarQrDataUrl: jest.Mock };
+  let logoNegocio: { resolverLogo: jest.Mock };
   let alegraClient: AlegraClientMock;
   let suscripcionesService: { registrarConsumo: jest.Mock; miEstado: jest.Mock };
   let alertasRepo: { findOne: jest.Mock; create: jest.Mock; save: jest.Mock };
@@ -105,7 +121,15 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
       findOneOrFail: jest.fn().mockResolvedValue({ nit: '899999034', email: 'negocio@test.local' }),
       save: jest.fn(async (x: unknown) => x),
     };
-    ventasRepo = { findOneOrFail: jest.fn().mockResolvedValue(ventaDePrueba()) };
+    ventasRepo = {
+      findOneOrFail: jest.fn().mockResolvedValue(ventaDePrueba()),
+      findOne: jest.fn().mockResolvedValue(ventaDePrueba()),
+    };
+    facturaPdf = {
+      generar: jest.fn().mockResolvedValue(Buffer.from('%PDF-1.3')),
+      generarQrDataUrl: jest.fn().mockResolvedValue('data:image/png;base64,QR'),
+    };
+    logoNegocio = { resolverLogo: jest.fn().mockResolvedValue(null) };
     alegraClient = {
       crearCompania: jest.fn(),
       crearTestSet: jest.fn(),
@@ -133,6 +157,8 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
         { provide: AlegraClientService, useValue: alegraClient },
         { provide: SuscripcionesService, useValue: suscripcionesService },
         { provide: RealtimeGateway, useValue: realtimeGateway },
+        { provide: FacturaPdfService, useValue: facturaPdf },
+        { provide: LogoNegocioService, useValue: logoNegocio },
       ],
     }).compile();
 
@@ -633,6 +659,51 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
 
       expect(realtimeGateway.emitToNegocio).toHaveBeenCalledWith('neg-1', 'documentos-electronicos:cambio', expect.objectContaining({ id: 'doc-x' }));
     });
+
+    it('congela resolución, emisor, cliente y total, y guarda lo que Alegra devuelve para el PDF', async () => {
+      const documento: any = {
+        id: 'doc-x', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'FACTURA',
+        estado: EstadoDocumentoElectronico.PENDIENTE, intentos: 0,
+      };
+      ventasRepo.findOneOrFail.mockResolvedValue(ventaDePrueba({ nombreCliente: 'Juan Pérez', total: 11900 } as any));
+      negociosRepo.findOneOrFail.mockResolvedValue({ nombre: 'Mascotas', nit: '899999034', direccion: 'Calle 9', ciudadNombre: 'Cali' });
+      alegraClient.crearFactura.mockResolvedValue({
+        alegraDocumentId: 'inv-7', status: 'SENT', legalStatus: 'ACCEPTED', isFinal: true,
+        cufe: 'cufe-7', fullNumber: 'DE7', prefix: 'DE', number: 7, fecha: '2026-09-28T10:00:00-05:00', qrCodeContent: 'QR-7',
+      });
+
+      await service.intentarEmitir(documento, {
+        ...HABILITACION_CON_RESOLUCION, siguienteNumero: 7, razonSocial: 'Mascotas SAS', direccion: 'Calle 1', ciudad: 'Bogotá, D.C.',
+      } as any);
+
+      expect(documento).toEqual(expect.objectContaining({
+        numero: 7, prefijo: 'DE', numeroCompleto: 'DE7', qrContenido: 'QR-7', cufe: 'cufe-7', ambiente: 'PRODUCCION',
+        resolucionNumero: '18760000001', resolucionFechaInicio: '2026-01-01', resolucionFechaFin: '2027-01-01',
+        resolucionRangoDesde: 1, resolucionRangoHasta: 100000,
+        emisorRazonSocial: 'Mascotas SAS', emisorNit: '899999034', emisorDireccion: 'Calle 1', emisorCiudad: 'Bogotá, D.C.',
+        nombreCliente: 'Juan Pérez', total: 11900,
+      }));
+      expect(documento.fechaEmision).toEqual(new Date('2026-09-28T10:00:00-05:00'));
+    });
+
+    it('arma numeroCompleto con prefijo+número si Alegra no devuelve fullNumber', async () => {
+      const documento: any = { id: 'doc-x', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'FACTURA', estado: EstadoDocumentoElectronico.PENDIENTE, intentos: 0 };
+      alegraClient.crearFactura.mockResolvedValue({ alegraDocumentId: 'inv-8', status: 'SENT', legalStatus: 'ACCEPTED', isFinal: true });
+
+      await service.intentarEmitir(documento, { ...HABILITACION_CON_RESOLUCION, siguienteNumero: 8 } as any);
+
+      expect(documento.numeroCompleto).toBe('DE8');
+    });
+
+    it('no congela nada si la llamada a Alegra falla', async () => {
+      const documento: any = { id: 'doc-x', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'FACTURA', estado: EstadoDocumentoElectronico.PENDIENTE, intentos: 0 };
+      alegraClient.crearFactura.mockRejectedValue(new Error('timeout'));
+
+      await service.intentarEmitir(documento, { ...HABILITACION_CON_RESOLUCION } as any);
+
+      expect(documento.numeroCompleto).toBeUndefined();
+      expect(documento.numero).toBeUndefined();
+    });
   });
 
   describe('procesarWebhookAlegra', () => {
@@ -717,6 +788,27 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
       );
     });
 
+    it('al resolverse un pendiente guarda número completo, fecha y QR que devuelve Alegra', async () => {
+      documentosRepo.find.mockResolvedValue([
+        {
+          id: 'doc-1', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'FACTURA' as const,
+          estado: EstadoDocumentoElectronico.PENDIENTE, intentos: 1, ultimoIntentoEn: null,
+          trackingReference: { flow: 'co.invoice', environment: 'sandbox', documentId: 'inv-2' },
+        },
+      ]);
+      habilitacionRepo.findOne.mockResolvedValue({ ...HABILITACION_CON_RESOLUCION });
+      alegraClient.consultarFactura.mockResolvedValue({
+        alegraDocumentId: 'inv-2', status: 'SENT', legalStatus: 'ACCEPTED', isFinal: true,
+        cufe: 'cufe-2', fullNumber: 'DE2', prefix: 'DE', number: 2, fecha: '2026-09-28T11:00:00-05:00', qrCodeContent: 'QR-2',
+      });
+
+      await service.reconciliarPendientes();
+
+      expect(documentosRepo.save).toHaveBeenCalledWith(expect.objectContaining({
+        numeroCompleto: 'DE2', qrContenido: 'QR-2', fechaEmision: new Date('2026-09-28T11:00:00-05:00'),
+      }));
+    });
+
     it('si la consulta todavía no es final, deja el documento PENDIENTE sin tocar el estado', async () => {
       documentosRepo.find.mockResolvedValue([
         {
@@ -788,12 +880,18 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
     });
   });
 
-  describe('obtenerDocumentoPorVenta / reintentarPorVenta / obtenerLinksDescarga', () => {
-    it('obtenerDocumentoPorVenta busca por ventaId', async () => {
+  describe('documentos por venta', () => {
+    it('obtenerDocumentoPorVenta busca por ventaId Y negocioId (nunca solo por ventaId)', async () => {
       documentosRepo.findOne.mockResolvedValue({ id: 'doc-1', ventaId: 'venta-1' });
-      const resultado = await service.obtenerDocumentoPorVenta('venta-1');
-      expect(documentosRepo.findOne).toHaveBeenCalledWith({ where: { ventaId: 'venta-1' } });
+      const resultado = await service.obtenerDocumentoPorVenta('venta-1', 'neg-1');
+      expect(documentosRepo.findOne).toHaveBeenCalledWith({ where: { ventaId: 'venta-1', negocioId: 'neg-1' } });
       expect(resultado).toEqual({ id: 'doc-1', ventaId: 'venta-1' });
+    });
+
+    it('obtenerDocumentoPorVenta devuelve null si el documento es de otro negocio', async () => {
+      documentosRepo.findOne.mockResolvedValue(null);
+      const resultado = await service.obtenerDocumentoPorVenta('venta-de-otro', 'neg-1');
+      expect(resultado).toBeNull();
     });
 
     it('reintentarPorVenta llama a intentarEmitir con el documento y la habilitación del negocio', async () => {
@@ -801,48 +899,224 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
         id: 'doc-1', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'FACTURA' as const,
         estado: EstadoDocumentoElectronico.PENDIENTE, intentos: 0,
       };
-      documentosRepo.findOneOrFail.mockResolvedValue(documento);
+      documentosRepo.findOne.mockResolvedValue(documento);
       habilitacionRepo.findOneOrFail.mockResolvedValue({ ...HABILITACION_CON_RESOLUCION });
       alegraClient.crearFactura.mockResolvedValue({ alegraDocumentId: 'doc-r', status: 'SENT', legalStatus: 'ACCEPTED', isFinal: true });
 
-      await service.reintentarPorVenta('venta-1');
+      await service.reintentarPorVenta('venta-1', 'neg-1');
+
+      expect(documentosRepo.findOne).toHaveBeenCalledWith({ where: { ventaId: 'venta-1', negocioId: 'neg-1' } });
+      expect(alegraClient.crearFactura).toHaveBeenCalled();
+    });
+
+    it('reintentarPorVenta lanza NotFoundException (404) si el documento es de otro negocio, sin tocar Alegra', async () => {
+      documentosRepo.findOne.mockResolvedValue(null);
+      await expect(service.reintentarPorVenta('venta-de-otro', 'neg-1')).rejects.toBeInstanceOf(NotFoundException);
+      expect(alegraClient.crearFactura).not.toHaveBeenCalled();
+    });
+
+    it('reintentarPorVenta también rechaza (400) una factura ya aceptada', async () => {
+      documentosRepo.findOne.mockResolvedValue({
+        id: 'doc-1', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'FACTURA', estado: EstadoDocumentoElectronico.ACEPTADO, intentos: 1,
+      });
+      await expect(service.reintentarPorVenta('venta-1', 'neg-1')).rejects.toBeInstanceOf(BadRequestException);
+      expect(alegraClient.crearFactura).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('facturas por id', () => {
+    const DOC_ACEPTADO = {
+      id: 'doc-1', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'FACTURA' as const, estado: EstadoDocumentoElectronico.ACEPTADO,
+      alegraDocumentId: 'inv-1', cufe: 'cufe-1', numeroCompleto: 'DE1', qrContenido: 'QR-1', intentos: 1,
+    };
+
+    it('listarFacturas filtra siempre por negocio y aplica estado, fechas, búsqueda y paginación', async () => {
+      const listado = qbEncadenable({ items: [DOC_ACEPTADO], total: 31 });
+      const resumen = qbEncadenable({ conteos: [] });
+      documentosRepo.createQueryBuilder.mockReturnValueOnce(listado).mockReturnValueOnce(resumen);
+
+      const resultado = await service.listarFacturas('neg-1', {
+        estado: EstadoDocumentoElectronico.RECHAZADO, desde: '2026-09-01', hasta: '2026-09-28', q: 'sbox', pagina: 2, porPagina: 10,
+      });
+
+      expect(listado.where).toHaveBeenCalledWith('doc.negocioId = :negocioId', { negocioId: 'neg-1' });
+      expect(listado.andWhere).toHaveBeenCalledWith('doc.estado = :estado', { estado: 'RECHAZADO' });
+      // Fechas y orden sobre la MISMA fecha que muestra la tabla (emisión; creación solo si nunca se emitió) —
+      // un reintento reusa el documento, así que `createdAt` puede ser semanas anterior al número vigente.
+      expect(listado.andWhere).toHaveBeenCalledWith('COALESCE(doc.fechaEmision, doc.createdAt) >= :desde', { desde: new Date('2026-09-01T00:00:00.000Z') });
+      expect(listado.andWhere).toHaveBeenCalledWith('COALESCE(doc.fechaEmision, doc.createdAt) <= :hasta', { hasta: new Date('2026-09-28T23:59:59.999Z') });
+      expect(listado.orderBy).toHaveBeenCalledWith('COALESCE(doc.fechaEmision, doc.createdAt)', 'DESC');
+      expect(listado.andWhere).toHaveBeenCalledWith('(doc.numeroCompleto ILIKE :q OR doc.nombreCliente ILIKE :q)', { q: '%sbox%' });
+      expect(listado.offset).toHaveBeenCalledWith(10);
+      expect(listado.limit).toHaveBeenCalledWith(10);
+      expect(resultado).toEqual(expect.objectContaining({ items: [DOC_ACEPTADO], total: 31, pagina: 2, porPagina: 10 }));
+    });
+
+    it('el resumen respeta negocio y fechas pero NO el filtro de estado, y agrupa aceptadas/pendientes/rechazadas', async () => {
+      const listado = qbEncadenable();
+      const resumen = qbEncadenable({
+        conteos: [
+          { estado: 'ACEPTADO', cantidad: '3' }, { estado: 'ACEPTADO_CON_OBSERVACIONES', cantidad: '1' },
+          { estado: 'PENDIENTE', cantidad: '2' }, { estado: 'ERROR', cantidad: '1' }, { estado: 'RECHAZADO', cantidad: '4' },
+        ],
+      });
+      documentosRepo.createQueryBuilder.mockReturnValueOnce(listado).mockReturnValueOnce(resumen);
+
+      const resultado = await service.listarFacturas('neg-1', { estado: EstadoDocumentoElectronico.RECHAZADO });
+
+      expect(resumen.where).toHaveBeenCalledWith('doc.negocioId = :negocioId', { negocioId: 'neg-1' });
+      expect(resumen.andWhere).not.toHaveBeenCalledWith('doc.estado = :estado', expect.anything());
+      expect(resultado.resumen).toEqual({ aceptados: 4, pendientes: 3, rechazados: 4 });
+    });
+
+    it('listarFacturas informa si el negocio tiene algún logo resoluble', async () => {
+      documentosRepo.createQueryBuilder.mockReturnValueOnce(qbEncadenable()).mockReturnValueOnce(qbEncadenable());
+      logoNegocio.resolverLogo.mockResolvedValue(Buffer.from('png'));
+      expect((await service.listarFacturas('neg-1', {})).tieneLogo).toBe(true);
+    });
+
+    it('obtenerFactura devuelve documento + venta + QR, sin consultar Alegra si el snapshot ya está completo', async () => {
+      documentosRepo.findOne.mockResolvedValue({ ...DOC_ACEPTADO });
+
+      const resultado = await service.obtenerFactura('doc-1', 'neg-1');
+
+      expect(documentosRepo.findOne).toHaveBeenCalledWith({ where: { id: 'doc-1', negocioId: 'neg-1' } });
+      expect(ventasRepo.findOne).toHaveBeenCalledWith({
+        where: { id: 'venta-1', negocioId: 'neg-1' }, relations: { items: true, pagos: true, cliente: true },
+      });
+      expect(alegraClient.consultarFactura).not.toHaveBeenCalled();
+      expect(resultado.qrDataUrl).toBe('data:image/png;base64,QR');
+      expect(facturaPdf.generarQrDataUrl).toHaveBeenCalledWith('QR-1');
+    });
+
+    it('obtenerFactura completa una sola vez el snapshot de un documento viejo consultando Alegra', async () => {
+      const viejo: any = { ...DOC_ACEPTADO, numeroCompleto: undefined, qrContenido: undefined };
+      documentosRepo.findOne.mockResolvedValue(viejo);
+      habilitacionRepo.findOneOrFail.mockResolvedValue({ ...HABILITACION_CON_RESOLUCION, ambiente: 'SANDBOX' });
+      alegraClient.consultarFactura.mockResolvedValue({
+        alegraDocumentId: 'inv-1', status: 'SENT', legalStatus: 'ACCEPTED', isFinal: true,
+        cufe: 'cufe-1', fullNumber: 'DE1', prefix: 'DE', number: 1, fecha: '2026-09-01T10:00:00-05:00', qrCodeContent: 'QR-VIEJO',
+      });
+
+      await service.obtenerFactura('doc-1', 'neg-1');
+
+      expect(alegraClient.consultarFactura).toHaveBeenCalledTimes(1);
+      expect(documentosRepo.save).toHaveBeenCalledWith(expect.objectContaining({ numeroCompleto: 'DE1', qrContenido: 'QR-VIEJO', ambiente: 'SANDBOX' }));
+    });
+
+    it('obtenerFactura no se rompe si Alegra falla durante el backfill', async () => {
+      documentosRepo.findOne.mockResolvedValue({ ...DOC_ACEPTADO, numeroCompleto: undefined, qrContenido: undefined });
+      habilitacionRepo.findOneOrFail.mockResolvedValue({ ...HABILITACION_CON_RESOLUCION });
+      alegraClient.consultarFactura.mockRejectedValue(new Error('Alegra caído'));
+
+      const resultado = await service.obtenerFactura('doc-1', 'neg-1');
+
+      expect(resultado.documento.id).toBe('doc-1');
+      expect(resultado.qrDataUrl).toBeNull();
+    });
+
+    it('404 si la factura es de otro negocio (obtener, pdf, xml, reintentar)', async () => {
+      documentosRepo.findOne.mockResolvedValue(null);
+      await expect(service.obtenerFactura('doc-x', 'neg-1')).rejects.toBeInstanceOf(NotFoundException);
+      await expect(service.generarPdf('doc-x', 'neg-1')).rejects.toBeInstanceOf(NotFoundException);
+      await expect(service.descargarXml('doc-x', 'neg-1')).rejects.toBeInstanceOf(NotFoundException);
+      await expect(service.reintentarFactura('doc-x', 'neg-1')).rejects.toBeInstanceOf(NotFoundException);
+      expect(alegraClient.consultarFactura).not.toHaveBeenCalled();
+      expect(alegraClient.crearFactura).not.toHaveBeenCalled();
+    });
+
+    it('generarPdf responde 409 si todavía no hay CUFE', async () => {
+      documentosRepo.findOne.mockResolvedValue({ ...DOC_ACEPTADO, estado: EstadoDocumentoElectronico.PENDIENTE, cufe: undefined });
+      await expect(service.generarPdf('doc-1', 'neg-1')).rejects.toBeInstanceOf(ConflictException);
+      expect(facturaPdf.generar).not.toHaveBeenCalled();
+    });
+
+    it('generarPdf responde 409 para documentos DEE_POS legados', async () => {
+      documentosRepo.findOne.mockResolvedValue({ ...DOC_ACEPTADO, tipo: 'DEE_POS' });
+      await expect(service.generarPdf('doc-1', 'neg-1')).rejects.toBeInstanceOf(ConflictException);
+    });
+
+    it('generarPdf arma el PDF con documento, venta y logo del negocio', async () => {
+      documentosRepo.findOne.mockResolvedValue({ ...DOC_ACEPTADO });
+      logoNegocio.resolverLogo.mockResolvedValue(Buffer.from('logo'));
+
+      const resultado = await service.generarPdf('doc-1', 'neg-1');
+
+      expect(facturaPdf.generar).toHaveBeenCalledWith({
+        documento: expect.objectContaining({ id: 'doc-1' }), venta: expect.objectContaining({ id: 'venta-1' }), logo: Buffer.from('logo'),
+      });
+      expect(resultado.nombreArchivo).toBe('DE1.pdf');
+    });
+
+    it('descargarXml descarga el XML de la URL temporal de Alegra y lo devuelve (la URL nunca sale del backend)', async () => {
+      documentosRepo.findOne.mockResolvedValue({ ...DOC_ACEPTADO });
+      habilitacionRepo.findOneOrFail.mockResolvedValue({ ...HABILITACION_CON_RESOLUCION });
+      alegraClient.consultarFactura.mockResolvedValue({ alegraDocumentId: 'inv-1', status: 'SENT', isFinal: true, urlXml: 'https://s3/x.xml?firma' });
+      const fetchOriginal = global.fetch;
+      global.fetch = jest.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => new TextEncoder().encode('<Invoice/>').buffer }) as any;
+
+      try {
+        const resultado = await service.descargarXml('doc-1', 'neg-1');
+        expect(global.fetch).toHaveBeenCalledWith('https://s3/x.xml?firma');
+        expect(resultado).toEqual({ nombreArchivo: 'DE1.xml', contenido: Buffer.from('<Invoice/>') });
+      } finally {
+        global.fetch = fetchOriginal;
+      }
+    });
+
+    it('descargarXml usa consultarDocumento (legado) para documentos DEE_POS', async () => {
+      documentosRepo.findOne.mockResolvedValue({ ...DOC_ACEPTADO, tipo: 'DEE_POS' });
+      habilitacionRepo.findOneOrFail.mockResolvedValue({ ...HABILITACION_CON_RESOLUCION });
+      alegraClient.consultarDocumento.mockResolvedValue({ status: 'REGISTERED', urlXml: 'https://s3/pos.xml' });
+      const fetchOriginal = global.fetch;
+      global.fetch = jest.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => new TextEncoder().encode('<x/>').buffer }) as any;
+
+      try {
+        await service.descargarXml('doc-1', 'neg-1');
+        expect(alegraClient.consultarDocumento).toHaveBeenCalledWith(expect.objectContaining({ tipo: 'DEE_POS' }));
+        expect(alegraClient.consultarFactura).not.toHaveBeenCalled();
+      } finally {
+        global.fetch = fetchOriginal;
+      }
+    });
+
+    it('reintentarFactura rechaza (400) una factura ya aceptada — evita emitir una segunda factura real', async () => {
+      documentosRepo.findOne.mockResolvedValue({ ...DOC_ACEPTADO });
+      await expect(service.reintentarFactura('doc-1', 'neg-1')).rejects.toBeInstanceOf(BadRequestException);
+      expect(alegraClient.crearFactura).not.toHaveBeenCalled();
+    });
+
+    it('reintentarFactura rechaza (400) un pendiente que ya está en curso ante la DIAN (tiene trackingReference)', async () => {
+      documentosRepo.findOne.mockResolvedValue({
+        ...DOC_ACEPTADO, estado: EstadoDocumentoElectronico.PENDIENTE, trackingReference: { documentId: 'inv-1' },
+      });
+      await expect(service.reintentarFactura('doc-1', 'neg-1')).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('reintentarFactura permite reintentar una rechazada', async () => {
+      documentosRepo.findOne.mockResolvedValue({ ...DOC_ACEPTADO, estado: EstadoDocumentoElectronico.RECHAZADO });
+      habilitacionRepo.findOneOrFail.mockResolvedValue({ ...HABILITACION_CON_RESOLUCION });
+
+      await service.reintentarFactura('doc-1', 'neg-1');
 
       expect(alegraClient.crearFactura).toHaveBeenCalled();
     });
 
-    it('obtenerLinksDescarga devuelve vacío si el documento no tiene alegraDocumentId todavía', async () => {
-      documentosRepo.findOneOrFail.mockResolvedValue({ id: 'doc-1', negocioId: 'neg-1', tipo: 'FACTURA' });
-      const resultado = await service.obtenerLinksDescarga('venta-1');
-      expect(resultado).toEqual({});
-      expect(alegraClient.consultarFactura).not.toHaveBeenCalled();
-      expect(alegraClient.consultarDocumento).not.toHaveBeenCalled();
+    it('resumenPorVentas devuelve id y estado del documento de cada venta del negocio', async () => {
+      documentosRepo.find.mockResolvedValue([{ id: 'doc-1', ventaId: 'venta-1', estado: EstadoDocumentoElectronico.ACEPTADO }]);
+
+      const mapa = await service.resumenPorVentas('neg-1', ['venta-1', 'venta-2']);
+
+      expect(documentosRepo.find).toHaveBeenCalledWith({
+        where: { negocioId: 'neg-1', ventaId: expect.anything() }, select: { id: true, ventaId: true, estado: true },
+      });
+      expect(mapa.get('venta-1')).toEqual({ id: 'doc-1', estado: 'ACEPTADO' });
+      expect(mapa.has('venta-2')).toBe(false);
     });
 
-    it('obtenerLinksDescarga usa consultarFactura (GET /invoices) para documentos tipo FACTURA', async () => {
-      documentosRepo.findOneOrFail.mockResolvedValue({
-        id: 'doc-1', negocioId: 'neg-1', alegraDocumentId: 'alegra-1', tipo: 'FACTURA',
-      });
-      habilitacionRepo.findOneOrFail.mockResolvedValue({ negocioId: 'neg-1', ambiente: 'PRODUCCION' });
-      alegraClient.consultarFactura.mockResolvedValue({ alegraDocumentId: 'alegra-1', status: 'SENT', urlXml: 'x.xml', urlPdf: 'x.pdf' });
-
-      const resultado = await service.obtenerLinksDescarga('venta-1');
-
-      expect(alegraClient.consultarFactura).toHaveBeenCalledWith(expect.objectContaining({ documentId: 'alegra-1' }));
-      expect(alegraClient.consultarDocumento).not.toHaveBeenCalled();
-      expect(resultado).toEqual({ urlXml: 'x.xml', urlPdf: 'x.pdf' });
-    });
-
-    it('obtenerLinksDescarga usa consultarDocumento (legado) para documentos históricos tipo DEE_POS', async () => {
-      documentosRepo.findOneOrFail.mockResolvedValue({
-        id: 'doc-1', negocioId: 'neg-1', alegraDocumentId: 'alegra-1', tipo: 'DEE_POS',
-      });
-      habilitacionRepo.findOneOrFail.mockResolvedValue({ negocioId: 'neg-1', ambiente: 'PRODUCCION' });
-      alegraClient.consultarDocumento.mockResolvedValue({ status: 'REGISTERED', urlXml: 'x.xml', urlPdf: undefined });
-
-      const resultado = await service.obtenerLinksDescarga('venta-1');
-
-      expect(alegraClient.consultarDocumento).toHaveBeenCalledWith(expect.objectContaining({ tipo: 'DEE_POS' }));
-      expect(resultado).toEqual({ urlXml: 'x.xml', urlPdf: undefined });
+    it('resumenPorVentas no consulta la DB si no hay ventas', async () => {
+      expect((await service.resumenPorVentas('neg-1', [])).size).toBe(0);
+      expect(documentosRepo.find).not.toHaveBeenCalled();
     });
   });
 });

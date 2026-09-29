@@ -36,6 +36,10 @@ export class Negocio extends BaseEntity {
   @Column({ name: 'departamento_codigo', nullable: true })
   departamentoCodigo?: string;
 
+  /** Logo oficial del negocio (ruta relativa `/uploads/negocios/logos/...`) — lo usa el PDF de factura electrónica. */
+  @Column({ name: 'logo_url', type: 'varchar', nullable: true })
+  logoUrl?: string | null;
+
   @Column({ type: 'enum', enum: PlanNegocio, default: PlanNegocio.FREE })
   plan: PlanNegocio;
 
