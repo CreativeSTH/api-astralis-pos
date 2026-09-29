@@ -10,7 +10,7 @@ import { BaseEntity } from '../../common/entities/base.entity';
 import { Sucursal } from '../../sucursales/entities/sucursal.entity';
 import { TurnoCaja } from '../../caja/entities/turno-caja.entity';
 import { TipoVenta, EstadoVenta } from '../../common/enums/venta.enum';
-import { TipoComprobante } from '../../common/enums/tipo-comprobante.enum';
+import { TipoComprobanteVenta } from '../../common/enums/tipo-comprobante.enum';
 import { VentaItem } from './venta-item.entity';
 import { VentaPago } from './venta-pago.entity';
 import { Cuota } from './cuota.entity';
@@ -121,10 +121,10 @@ export class Venta extends BaseEntity {
   @Column({
     name: 'tipo_comprobante_emitido',
     type: 'enum',
-    enum: TipoComprobante,
+    enum: TipoComprobanteVenta,
     nullable: true,
   })
-  tipoComprobanteEmitido?: TipoComprobante;
+  tipoComprobanteEmitido?: TipoComprobanteVenta;
 
   @Column({ name: 'plantilla_comprobante_id', nullable: true })
   plantillaComprobanteId?: string;

@@ -46,6 +46,7 @@ import { CatalogoClienteModule } from './catalogo-cliente/catalogo-cliente.modul
 import { PaquetesModule } from './paquetes/paquetes.module';
 import { SuscripcionesModule } from './suscripciones/suscripciones.module';
 import { FacturacionElectronicaModule } from './facturacion-electronica/facturacion-electronica.module';
+import { PoliticaFacturacionModule } from './politica-facturacion/politica-facturacion.module';
 import { OnboardingModule } from './onboarding/onboarding.module';
 
 @Module({
@@ -109,6 +110,7 @@ import { OnboardingModule } from './onboarding/onboarding.module';
     PaquetesModule,
     SuscripcionesModule,
     FacturacionElectronicaModule,
+    PoliticaFacturacionModule,
     OnboardingModule,
   ],
   providers: [

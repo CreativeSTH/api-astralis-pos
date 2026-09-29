@@ -33,6 +33,7 @@ import { Alerta } from '../alertas/entities/alerta.entity';
 import { TipoAlerta, SeveridadAlerta } from '../common/enums/alerta.enum';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { Venta } from '../ventas/entities/venta.entity';
+import { TipoComprobanteVenta } from '../common/enums/tipo-comprobante.enum';
 import { calcularDigitoVerificacion, limpiarNit } from '../common/utils/nit';
 import { diaColombia, finDiaColombia, inicioDiaColombia } from '../common/utils/fecha-colombia';
 
@@ -478,6 +479,10 @@ export class FacturacionElectronicaService {
    * try/catch de intentarEmitir envuelve toda la lógica real de red.
    */
   async emitirDocumento(venta: { id: string; negocioId: string; tipoComprobanteEmitido?: string }): Promise<void> {
+    // La política de facturación ya decidió el comprobante al crear la venta: solo una venta
+    // FACTURA_ELECTRONICA lleva documento electrónico (un recibo nunca genera un segundo documento).
+    if (venta.tipoComprobanteEmitido !== TipoComprobanteVenta.FACTURA_ELECTRONICA) return;
+
     const habilitacion = await this.habilitacionRepository.findOne({ where: { negocioId: venta.negocioId } });
     if (!habilitacion || habilitacion.estado !== EstadoHabilitacion.HABILITADO) return;
 

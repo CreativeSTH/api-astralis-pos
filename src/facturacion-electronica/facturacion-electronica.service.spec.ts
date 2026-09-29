@@ -445,7 +445,7 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
       expect(documentosRepo.save).not.toHaveBeenCalled();
     });
 
-    it('crea el documento en PENDIENTE con tipo FACTURA siempre (aunque tipoComprobanteEmitido sea RECIBO) y llama a intentarEmitir si el negocio está HABILITADO', async () => {
+    it('crea el documento en PENDIENTE con tipo FACTURA y llama a intentarEmitir si la venta es FACTURA_ELECTRONICA y el negocio está HABILITADO', async () => {
       habilitacionRepo.findOne.mockResolvedValue({ ...HABILITACION_CON_RESOLUCION });
       alegraClient.crearFactura.mockResolvedValue({
         alegraDocumentId: 'doc-9',
@@ -455,7 +455,7 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
         isFinal: true,
       });
 
-      await service.emitirDocumento({ id: 'venta-1', negocioId: 'neg-1', tipoComprobanteEmitido: 'RECIBO' } as any);
+      await service.emitirDocumento({ id: 'venta-1', negocioId: 'neg-1', tipoComprobanteEmitido: 'FACTURA_ELECTRONICA' } as any);
 
       expect(documentosRepo.save).toHaveBeenCalled();
       const documentoCreado = documentosRepo.save.mock.calls[0][0];
@@ -476,9 +476,18 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
         isFinal: true,
       });
 
-      await service.emitirDocumento({ id: 'venta-1', negocioId: 'neg-1' } as any);
+      await service.emitirDocumento({ id: 'venta-1', negocioId: 'neg-1', tipoComprobanteEmitido: 'FACTURA_ELECTRONICA' } as any);
 
       expect(suscripcionesService.registrarConsumo).not.toHaveBeenCalled();
+    });
+
+    it('no emite nada si la venta no es FACTURA_ELECTRONICA, aunque el negocio esté HABILITADO (nunca dos documentos por venta)', async () => {
+      habilitacionRepo.findOne.mockResolvedValue({ ...HABILITACION_CON_RESOLUCION });
+
+      await service.emitirDocumento({ id: 'venta-1', negocioId: 'neg-1', tipoComprobanteEmitido: 'RECIBO' } as any);
+
+      expect(habilitacionRepo.findOne).not.toHaveBeenCalled();
+      expect(documentosRepo.save).not.toHaveBeenCalled();
     });
   });
 

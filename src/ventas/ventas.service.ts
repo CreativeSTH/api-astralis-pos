@@ -37,9 +37,11 @@ import { Domicilio } from '../domicilios/entities/domicilio.entity';
 import { DireccionCliente } from '../clientes/entities/direccion-cliente.entity';
 import { EstadoDomicilio } from '../common/enums/estado-domicilio.enum';
 import { Sucursal } from '../sucursales/entities/sucursal.entity';
-import { TipoComprobante } from '../common/enums/tipo-comprobante.enum';
+import { TipoComprobante, TipoComprobanteVenta } from '../common/enums/tipo-comprobante.enum';
 import { FacturacionElectronicaService } from '../facturacion-electronica/facturacion-electronica.service';
 import { NumeracionComprobanteService } from '../facturacion/numeracion-comprobante.service';
+import { PoliticaFacturacionService } from '../politica-facturacion/politica-facturacion.service';
+import { tipoComprobanteParaModo } from '../politica-facturacion/politica-facturacion.logic';
 import { PromocionesPricingService } from '../cupones/promociones-pricing.service';
 import { CuponValidacionService } from '../cupones/cupon-validacion.service';
 import { Promocion } from '../cupones/entities/promocion.entity';
@@ -72,6 +74,7 @@ export class VentasService {
     private readonly promocionesPricingService: PromocionesPricingService,
     private readonly cuponValidacionService: CuponValidacionService,
     private readonly facturacionElectronicaService: FacturacionElectronicaService,
+    private readonly politicaFacturacion: PoliticaFacturacionService,
     private readonly cls: ClsService,
   ) {}
 
@@ -139,10 +142,14 @@ export class VentasService {
   async crear(dto: CreateVentaDto): Promise<Venta> {
     await this.validarMetodosPago((dto.pagos ?? []).map((p) => p.metodoPago));
     await this.autorizarDescuentoSiAplica(dto);
+    // Una sola consulta por venta, antes de la transacción: decide el comprobante (y rechaza si
+    // el negocio es obligado y ya pasó la gracia sin facturación electrónica).
+    const { modo } = await this.politicaFacturacion.estado(this.getNegocioId());
+    const tipoComprobante = tipoComprobanteParaModo(modo);
     const { venta, domicilio } =
       dto.tipoVenta === TipoVenta.CREDITO
-        ? await this.crearVentaCredito(dto)
-        : await this.crearVentaContado(dto);
+        ? await this.crearVentaCredito(dto, tipoComprobante)
+        : await this.crearVentaContado(dto, tipoComprobante);
     await this.verificarStockPostVenta(venta);
     // Fire-and-forget a propósito: la venta ya está cobrada y confirmada, la
     // emisión del documento electrónico nunca debe bloquear ni fallar la
@@ -196,6 +203,7 @@ export class VentasService {
    */
   private async crearVentaContado(
     dto: CreateVentaDto,
+    tipoComprobante: TipoComprobanteVenta,
   ): Promise<VentaConDomicilio> {
     if (!dto.pagos || dto.pagos.length === 0) {
       throw new BadRequestException(
@@ -234,7 +242,7 @@ export class VentasService {
         manager,
         negocioId,
         dto.sucursalId,
-        dto.tipoComprobante,
+        tipoComprobante,
       );
 
       const ventaRepo = manager.getRepository(Venta);
@@ -320,6 +328,7 @@ export class VentasService {
    */
   private async crearVentaCredito(
     dto: CreateVentaDto,
+    tipoComprobante: TipoComprobanteVenta,
   ): Promise<VentaConDomicilio> {
     if (!dto.clienteId) {
       throw new BadRequestException('Una venta a crédito requiere un cliente');
@@ -394,7 +403,7 @@ export class VentasService {
         manager,
         negocioId,
         dto.sucursalId,
-        dto.tipoComprobante,
+        tipoComprobante,
       );
 
       const ventaRepo = manager.getRepository(Venta);
@@ -455,37 +464,37 @@ export class VentasService {
   }
 
   /**
-   * Asigna tipo + número de comprobante dentro de la misma transacción de la
-   * venta — nunca bloquea la venta por falta de configuración: si la
-   * sucursal no tiene plantilla/rango configurado, igual numera
-   * secuencialmente desde 1 (ver `NumeracionComprobanteService`).
+   * Asigna el comprobante dentro de la misma transacción de la venta. El tipo ya lo decidió la
+   * política de facturación: FACTURA_ELECTRONICA no consume consecutivo propio (su número es el de la
+   * factura electrónica); RECIBO numera secuencialmente por sucursal, sin bloquear nunca por falta de
+   * configuración (ver `NumeracionComprobanteService`). La plantilla es la de recibo en ambos casos:
+   * aporta logo, mensaje de cierre y términos a lo impreso.
    */
   private async resolverComprobante(
     manager: EntityManager,
     negocioId: string,
     sucursalId: string,
-    tipoSolicitado?: TipoComprobante,
+    tipo: TipoComprobanteVenta,
   ): Promise<{
-    numeroComprobante: string;
-    tipoComprobanteEmitido: TipoComprobante;
+    numeroComprobante?: string;
+    tipoComprobanteEmitido: TipoComprobanteVenta;
     plantillaComprobanteId?: string;
   }> {
     const sucursal = await manager
       .getRepository(Sucursal)
       .findOneOrFail({ where: { id: sucursalId } });
-    const tipo = tipoSolicitado ?? sucursal.tipoComprobanteDefecto;
-    const plantillaComprobanteId =
-      tipo === TipoComprobante.FACTURA
-        ? sucursal.plantillaFacturaDefectoId
-        : sucursal.plantillaReciboDefectoId;
+    const plantillaComprobanteId = sucursal.plantillaReciboDefectoId;
+
+    if (tipo === TipoComprobanteVenta.FACTURA_ELECTRONICA) {
+      return { tipoComprobanteEmitido: tipo, plantillaComprobanteId };
+    }
 
     const { numeroFormateado } = await this.numeracionComprobanteService.siguienteNumero(
       manager,
       negocioId,
       sucursalId,
-      tipo,
+      TipoComprobante.RECIBO,
     );
-
     return { numeroComprobante: numeroFormateado, tipoComprobanteEmitido: tipo, plantillaComprobanteId };
   }
 

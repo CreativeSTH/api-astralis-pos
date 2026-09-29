@@ -5,7 +5,8 @@ import { Venta } from './entities/venta.entity';
 import { Negocio } from '../negocios/entities/negocio.entity';
 import { Sucursal } from '../sucursales/entities/sucursal.entity';
 import { PlantillaComprobante, DatosDianPlantilla } from '../facturacion/entities/plantilla-comprobante.entity';
-import { TipoComprobante } from '../common/enums/tipo-comprobante.enum';
+import { TipoComprobante, TipoComprobanteVenta } from '../common/enums/tipo-comprobante.enum';
+import { DocumentoElectronico } from '../facturacion-electronica/entities/documento-electronico.entity';
 import { VentasService } from './ventas.service';
 
 export interface ItemComprobante {
@@ -23,7 +24,7 @@ export interface PagoComprobante {
 }
 
 export interface ReciboContenido {
-  tipo: TipoComprobante;
+  tipo: TipoComprobanteVenta;
   negocio: { nombre: string; nit?: string; logoUrl?: string };
   emisor: { nombrePersonaNatural?: string; direccion?: string; telefono?: string };
   numero: string;
@@ -57,6 +58,8 @@ export class ComprobantesService {
     private readonly sucursalesRepository: Repository<Sucursal>,
     @InjectRepository(PlantillaComprobante)
     private readonly plantillasRepository: Repository<PlantillaComprobante>,
+    @InjectRepository(DocumentoElectronico)
+    private readonly documentosRepository: Repository<DocumentoElectronico>,
     private readonly ventasService: VentasService,
   ) {}
 
@@ -64,11 +67,18 @@ export class ComprobantesService {
     const venta = await this.ventasService.findOne(ventaId);
     const negocio = await this.negociosRepository.findOneOrFail({ where: { id: venta.negocioId } });
     const plantilla = await this.resolverPlantilla(venta);
-    return this.construirContenido(venta, negocio, plantilla);
+    const numeroElectronico =
+      venta.tipoComprobanteEmitido === TipoComprobanteVenta.FACTURA_ELECTRONICA
+        ? ((await this.documentosRepository.findOne({ where: { ventaId: venta.id, negocioId: venta.negocioId } }))
+            ?.numeroCompleto ?? 'En validación DIAN')
+        : undefined;
+    return this.construirContenido(venta, negocio, plantilla, numeroElectronico);
   }
 
   private async resolverPlantilla(venta: Venta): Promise<PlantillaComprobante | null> {
-    const tipo = venta.tipoComprobanteEmitido ?? TipoComprobante.RECIBO;
+    // Solo la factura convencional histórica usa plantillas de factura; recibo y factura electrónica usan las de recibo.
+    const tipoPlantilla =
+      venta.tipoComprobanteEmitido === TipoComprobanteVenta.FACTURA ? TipoComprobante.FACTURA : TipoComprobante.RECIBO;
 
     if (venta.plantillaComprobanteId) {
       const propia = await this.plantillasRepository.findOne({
@@ -79,7 +89,7 @@ export class ComprobantesService {
 
     const sucursal = await this.sucursalesRepository.findOne({ where: { id: venta.sucursalId } });
     const idDefaultSucursal =
-      tipo === TipoComprobante.FACTURA ? sucursal?.plantillaFacturaDefectoId : sucursal?.plantillaReciboDefectoId;
+      tipoPlantilla === TipoComprobante.FACTURA ? sucursal?.plantillaFacturaDefectoId : sucursal?.plantillaReciboDefectoId;
     if (idDefaultSucursal) {
       const deSucursal = await this.plantillasRepository.findOne({
         where: { id: idDefaultSucursal, negocioId: venta.negocioId, activo: true },
@@ -88,12 +98,17 @@ export class ComprobantesService {
     }
 
     return this.plantillasRepository.findOne({
-      where: { negocioId: venta.negocioId, tipo, esPredeterminada: true, activo: true },
+      where: { negocioId: venta.negocioId, tipo: tipoPlantilla, esPredeterminada: true, activo: true },
     });
   }
 
-  private construirContenido(venta: Venta, negocio: Negocio, plantilla: PlantillaComprobante | null): ReciboContenido {
-    const tipo = venta.tipoComprobanteEmitido ?? TipoComprobante.RECIBO;
+  private construirContenido(
+    venta: Venta,
+    negocio: Negocio,
+    plantilla: PlantillaComprobante | null,
+    numeroElectronico?: string,
+  ): ReciboContenido {
+    const tipo = venta.tipoComprobanteEmitido ?? TipoComprobanteVenta.RECIBO;
     const config = plantilla?.configuracion ?? {};
 
     return {
@@ -104,7 +119,7 @@ export class ComprobantesService {
         direccion: config.direccion ?? negocio.direccion,
         telefono: config.telefono ?? negocio.telefono,
       },
-      numero: venta.numeroComprobante ?? venta.id.slice(0, 8),
+      numero: numeroElectronico ?? venta.numeroComprobante ?? venta.id.slice(0, 8),
       fecha: venta.createdAt,
       cliente: venta.nombreCliente,
       items: venta.items.map((item) => ({
@@ -121,7 +136,7 @@ export class ComprobantesService {
       pagos: (venta.pagos ?? []).map((pago) => ({ metodo: pago.metodoPago, monto: Number(pago.monto) })),
       mensajeCierre: config.mensajeCierre,
       terminos: config.terminos,
-      dian: tipo === TipoComprobante.FACTURA ? config.dian : undefined,
+      dian: tipo === TipoComprobanteVenta.FACTURA ? config.dian : undefined,
     };
   }
 }

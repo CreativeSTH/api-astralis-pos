@@ -22,6 +22,8 @@ import { CuponesModule } from '../cupones/cupones.module';
 import { Sucursal } from '../sucursales/entities/sucursal.entity';
 import { Negocio } from '../negocios/entities/negocio.entity';
 import { PlantillaComprobante } from '../facturacion/entities/plantilla-comprobante.entity';
+import { DocumentoElectronico } from '../facturacion-electronica/entities/documento-electronico.entity';
+import { PoliticaFacturacionModule } from '../politica-facturacion/politica-facturacion.module';
 
 @Module({
   imports: [
@@ -35,6 +37,7 @@ import { PlantillaComprobante } from '../facturacion/entities/plantilla-comproba
       Sucursal,
       Negocio,
       PlantillaComprobante,
+      DocumentoElectronico,
     ]),
     CajaModule,
     ClientesModule,
@@ -46,6 +49,7 @@ import { PlantillaComprobante } from '../facturacion/entities/plantilla-comproba
     FacturacionModule,
     FacturacionElectronicaModule,
     CuponesModule,
+    PoliticaFacturacionModule,
   ],
   controllers: [VentasController],
   providers: [VentasService, ComprobantesService],

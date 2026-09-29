@@ -114,8 +114,9 @@ export class CreateVentaDto {
   @ApiProperty({
     enum: TipoComprobante,
     required: false,
-    description: 'Si no se envía, se usa el tipo por defecto configurado en la sucursal (recibo por default)',
+    description: 'Ignorado: el comprobante lo decide la política de facturación del negocio',
   })
+  /** Ignorado desde la unificación de comprobantes: lo decide la política de facturación. Se acepta por compatibilidad con clientes viejos. */
   @IsOptional()
   @IsEnum(TipoComprobante)
   tipoComprobante?: TipoComprobante;
