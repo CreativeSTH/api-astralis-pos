@@ -1,4 +1,5 @@
 import { Test } from '@nestjs/testing';
+import { NotFoundException } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { TopeUvtService } from './tope-uvt.service';
 import { PoliticaFacturacionService } from './politica-facturacion.service';
@@ -24,7 +25,7 @@ const AHORA = new Date('2026-09-29T15:00:00Z');
 
 describe('TopeUvtService', () => {
   let service: TopeUvtService;
-  let negocios: { find: jest.Mock; save: jest.Mock };
+  let negocios: { find: jest.Mock; findOne: jest.Mock; save: jest.Mock };
   let ventas: { query: jest.Mock };
   let alertas: { findOne: jest.Mock; save: jest.Mock; create: jest.Mock };
   let usuarios: { findOne: jest.Mock };
@@ -50,6 +51,7 @@ describe('TopeUvtService', () => {
     } as Negocio;
     negocios = {
       find: jest.fn(async () => [negocio]),
+      findOne: jest.fn(async () => negocio),
       save: jest.fn(async (n) => n),
     };
     ventas = { query: jest.fn() };
@@ -283,5 +285,31 @@ describe('TopeUvtService', () => {
     expect(negocios.save).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'neg-2', avisoTopeUvtNivel: 70 }),
     );
+  });
+
+  describe('medicionActual (barra del tope)', () => {
+    it('no obligado declarado: mide igual que el cron', async () => {
+      ingresos(132_000_000, 0);
+      const m = await service.medicionActual('neg-1', AHORA);
+      expect(m).toMatchObject({ aplica: true, anio: 2026, ingresos: 132_000_000, tope: 183_309_000 });
+      expect(m.porcentaje).toBeCloseTo(72.01, 1);
+      expect(negocios.save).not.toHaveBeenCalled();
+    });
+
+    it('persona jurídica o responsable de IVA → no aplica, sin consultar ventas', async () => {
+      negocio.tipoPersona = TipoPersona.JURIDICA;
+      expect(await service.medicionActual('neg-1', AHORA)).toEqual({ aplica: false, anio: null, ingresos: 0, tope: null, porcentaje: 0 });
+      expect(ventas.query).not.toHaveBeenCalled();
+    });
+
+    it('ya obligado por el tope → no aplica (ya no hay tope que vigilar)', async () => {
+      negocio.origenObligacion = OrigenObligacion.TOPE_UVT;
+      expect((await service.medicionActual('neg-1', AHORA)).aplica).toBe(false);
+    });
+
+    it('negocio inexistente → 404', async () => {
+      negocios.findOne.mockResolvedValue(null);
+      await expect(service.medicionActual('nope', AHORA)).rejects.toBeInstanceOf(NotFoundException);
+    });
   });
 });

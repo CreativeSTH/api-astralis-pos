@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Negocio } from '../negocios/entities/negocio.entity';
@@ -39,6 +39,15 @@ const SEVERIDAD_POR_NIVEL = {
  * unificación de comprobantes, 4.3). El número es un mínimo: AURA no ve ventas por fuera del sistema,
  * consignaciones ni otros locales — los avisos lo dicen.
  */
+/** Lo que muestra la barra del tope en la página Facturación. */
+export interface MedicionTopeUvt {
+  aplica: boolean;
+  anio: number | null;
+  ingresos: number;
+  tope: number | null;
+  porcentaje: number;
+}
+
 @Injectable()
 export class TopeUvtService {
   private readonly logger = new Logger(TopeUvtService.name);
@@ -72,6 +81,24 @@ export class TopeUvtService {
         );
       }
     }
+  }
+
+  /** Para la barra de la página Facturación: misma medición que el cron, sin avisar ni guardar nada. */
+  async medicionActual(negocioId: string, ahora: Date = new Date()): Promise<MedicionTopeUvt> {
+    const negocio = await this.negocios.findOne({ where: { id: negocioId } });
+    if (!negocio) throw new NotFoundException('Negocio no encontrado');
+    const sinTope: MedicionTopeUvt = { aplica: false, anio: null, ingresos: 0, tope: null, porcentaje: 0 };
+    const aplica =
+      negocio.tipoPersona === TipoPersona.NATURAL &&
+      negocio.responsabilidadIva === ResponsabilidadIva.NO_RESPONSABLE &&
+      negocio.origenObligacion !== OrigenObligacion.TOPE_UVT;
+    if (!aplica) return sinTope;
+
+    const anioActual = Number(diaColombia(ahora).slice(0, 4));
+    const { medicion } = evaluarTope(await this.ingresosPorAnio(negocioId, anioActual));
+    if (!medicion) return { ...sinTope, aplica: true };
+    const { anio, ingresos, tope, porcentaje } = medicion;
+    return { aplica: true, anio, ingresos, tope, porcentaje };
   }
 
   async evaluarNegocio(negocio: Negocio, ahora: Date): Promise<void> {
@@ -174,7 +201,7 @@ export class TopeUvtService {
         porcentaje: medicion.porcentaje,
         yaFacturaElectronica,
         fechaLimiteGracia: estado?.fechaLimiteGracia ?? null,
-        linkFacturacion: `${process.env.FRONTEND_URL}/configuracion/facturacion-electronica`,
+        linkFacturacion: `${process.env.FRONTEND_URL}/facturacion/electronica`,
       });
 
       const severidad =
