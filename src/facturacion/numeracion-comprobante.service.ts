@@ -1,7 +1,10 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { EntityManager } from 'typeorm';
 import { NumeracionComprobante } from './entities/numeracion-comprobante.entity';
-import { TipoComprobante } from '../common/enums/tipo-comprobante.enum';
+import { TipoNumeracion } from '../common/enums/tipo-comprobante.enum';
+
+/** Prefijo con que nace una secuencia nueva: los recibos de caja salen `RC-1`, `RC-2`… (spec 4.5). */
+const PREFIJO_POR_DEFECTO: Partial<Record<TipoNumeracion, string>> = { [TipoNumeracion.RECIBO_CAJA]: 'RC' };
 
 function esViolacionUnicidad(err: unknown): boolean {
   return (
@@ -31,7 +34,7 @@ export class NumeracionComprobanteService {
     manager: EntityManager,
     negocioId: string,
     sucursalId: string,
-    tipo: TipoComprobante,
+    tipo: TipoNumeracion,
   ): Promise<ComprobanteAsignado> {
     const repo = manager.getRepository(NumeracionComprobante);
 
@@ -43,7 +46,7 @@ export class NumeracionComprobanteService {
     if (!numeracion) {
       try {
         numeracion = await repo.save(
-          repo.create({ negocioId, sucursalId, tipo, siguienteNumero: 1 }),
+          repo.create({ negocioId, sucursalId, tipo, siguienteNumero: 1, prefijo: PREFIJO_POR_DEFECTO[tipo] }),
         );
       } catch (err) {
         if (!esViolacionUnicidad(err)) throw err;
@@ -57,7 +60,7 @@ export class NumeracionComprobanteService {
 
     // El rango solo se exige para FACTURA (numeración de contingencia real) — RECIBO nunca se agota.
     if (numeracion.rangoHasta != null && numeracion.siguienteNumero > numeracion.rangoHasta) {
-      const etiqueta = tipo === TipoComprobante.FACTURA ? 'facturas' : 'recibos';
+      const etiqueta = tipo === TipoNumeracion.FACTURA ? 'facturas' : 'recibos';
       throw new BadRequestException(
         `Se agotó el rango autorizado para ${etiqueta} de esta sucursal — solicita una nueva resolución en Configuración > Facturación.`,
       );

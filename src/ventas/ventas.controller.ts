@@ -67,6 +67,13 @@ export class VentasController {
     return this.comprobantesService.obtenerContenido(id);
   }
 
+  @Get('abonos/:id/comprobante')
+  @RequierePermiso(ModuloPermiso.VENTAS, AccionPermiso.VER)
+  @ApiOperation({ summary: 'Contenido imprimible del recibo de caja de un abono a crédito' })
+  obtenerComprobanteAbono(@Param('id', ParseUUIDPipe) id: string) {
+    return this.comprobantesService.obtenerContenidoAbono(id);
+  }
+
   @Patch(':id/abonar-cuota')
   @RequierePermiso(ModuloPermiso.VENTAS, AccionPermiso.EDITAR)
   @ApiOperation({

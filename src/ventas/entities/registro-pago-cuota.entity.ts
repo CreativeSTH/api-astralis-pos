@@ -38,6 +38,24 @@ export class RegistroPagoCuota {
   @Column({ nullable: true })
   notas?: string;
 
+  /** Recibo de caja del abono (`RC-12`) — null en abonos anteriores a los recibos de caja. */
+  @Column({ name: 'numero_recibo', type: 'varchar', nullable: true })
+  numeroRecibo?: string | null;
+
+  /** Sucursal cuya secuencia numeró el recibo (la de la venta). */
+  @Column({ name: 'sucursal_id', type: 'varchar', nullable: true })
+  sucursalId?: string | null;
+
+  /** Foto del momento del abono, para reimprimir el recibo tal cual salió. */
+  @Column({ name: 'mora_pagada', type: 'numeric', precision: 12, scale: 2, default: 0 })
+  moraPagada: number;
+
+  @Column({ name: 'saldo_venta_anterior', type: 'numeric', precision: 12, scale: 2, nullable: true })
+  saldoVentaAnterior?: number | null;
+
+  @Column({ name: 'saldo_venta_nuevo', type: 'numeric', precision: 12, scale: 2, nullable: true })
+  saldoVentaNuevo?: number | null;
+
   @CreateDateColumn({ name: 'fecha' })
   fecha: Date;
 }

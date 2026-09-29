@@ -1,6 +1,8 @@
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { ComprobantesService, LEYENDA_NO_FACTURA } from './comprobantes.service';
+import { NotFoundException } from '@nestjs/common';
+import { ComprobantesService, LEYENDA_NO_FACTURA, LEYENDA_RECIBO_CAJA } from './comprobantes.service';
+import { RegistroPagoCuota } from './entities/registro-pago-cuota.entity';
 import { VentasService } from './ventas.service';
 import { Negocio } from '../negocios/entities/negocio.entity';
 import { Sucursal } from '../sucursales/entities/sucursal.entity';
@@ -16,6 +18,7 @@ describe('ComprobantesService — contenido imprimible', () => {
   let documentos: { findOne: jest.Mock };
   let clientes: { findOne: jest.Mock };
   let facturaPdf: { generarQrDataUrl: jest.Mock };
+  let registros: { findOne: jest.Mock };
   const ventaBase = {
     id: 'venta-1', negocioId: 'neg-1', sucursalId: 'suc-1', tipoVenta: 'CONTADO', clienteId: null,
     createdAt: new Date('2026-09-29T02:01:13Z'), nombreCliente: 'Consumidor final', items: [], pagos: [],
@@ -35,6 +38,7 @@ describe('ComprobantesService — contenido imprimible', () => {
     ventas = { findOne: jest.fn() };
     documentos = { findOne: jest.fn().mockResolvedValue(null) };
     clientes = { findOne: jest.fn().mockResolvedValue(null) };
+    registros = { findOne: jest.fn() };
     facturaPdf = { generarQrDataUrl: jest.fn().mockResolvedValue('data:image/png;base64,QR') };
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -46,6 +50,7 @@ describe('ComprobantesService — contenido imprimible', () => {
         { provide: getRepositoryToken(PlantillaComprobante), useValue: { findOne: jest.fn().mockResolvedValue(null) } },
         { provide: getRepositoryToken(DocumentoElectronico), useValue: documentos },
         { provide: getRepositoryToken(Cliente), useValue: clientes },
+        { provide: getRepositoryToken(RegistroPagoCuota), useValue: registros },
       ],
     }).compile();
     service = moduleRef.get(ComprobantesService);
@@ -113,6 +118,66 @@ describe('ComprobantesService — contenido imprimible', () => {
     expect(clientes.findOne).toHaveBeenCalledWith({ where: { id: 'cli-1', negocioId: 'neg-1' } });
     expect(contenido.electronica).toMatchObject({
       adquirente: { nombre: 'Ferretería SAS', identificacion: 'NIT 899999034' }, formaPago: 'Crédito',
+    });
+  });
+
+  describe('recibo de caja de un abono', () => {
+    const abono = {
+      id: 'abono-1', monto: 45_000, metodoPago: 'Nequi', referenciaPago: 'NQ-99', numeroRecibo: 'RC-7',
+      fecha: new Date('2026-09-29T15:00:00Z'), moraPagada: '5000.00', saldoVentaAnterior: '200000.00', saldoVentaNuevo: '160000.00',
+      cuota: { numero: 1, ventaId: 'venta-1' },
+    };
+    const ventaCredito = {
+      ...ventaBase, tipoVenta: 'CREDITO', nombreCliente: 'Ana Gómez', tipoComprobanteEmitido: 'RECIBO', numeroComprobante: 'R-15',
+      cuotas: [{ numero: 1 }, { numero: 2 }, { numero: 3 }],
+    };
+
+    it('arma el recibo con número RC, un ítem por el abono, el pago y la foto de saldos', async () => {
+      registros.findOne.mockResolvedValue(abono);
+      ventas.findOne.mockResolvedValue(ventaCredito);
+
+      const c = await service.obtenerContenidoAbono('abono-1');
+
+      expect(registros.findOne).toHaveBeenCalledWith({ where: { id: 'abono-1' }, relations: { cuota: true } });
+      expect(ventas.findOne).toHaveBeenCalledWith('venta-1');
+      expect(c).toMatchObject({
+        tipo: 'RECIBO_CAJA', numero: 'RC-7', fecha: abono.fecha, cliente: 'Ana Gómez',
+        items: [{ nombre: 'Abono cuota 1 de 3', cantidad: 1, subtotal: 45_000, baseImponible: 45_000, impuesto: 0 }],
+        subtotal: 45_000, descuento: 0, impuesto: 0, total: 45_000,
+        pagos: [{ metodo: 'Nequi', monto: 45_000 }],
+        mensajeCierre: '¡Gracias por su pago!', leyenda: LEYENDA_RECIBO_CAJA,
+        abono: {
+          numeroCuota: 1, totalCuotas: 3, comprobanteVenta: 'R-15', tipoComprobanteVenta: 'Recibo',
+          moraPagada: 5_000, saldoAnterior: 200_000, saldoNuevo: 160_000, referenciaPago: 'NQ-99',
+        },
+      });
+      expect(c.electronica).toBeUndefined();
+    });
+
+    it('venta con factura electrónica: referencia el número del documento', async () => {
+      registros.findOne.mockResolvedValue(abono);
+      ventas.findOne.mockResolvedValue({ ...ventaCredito, tipoComprobanteEmitido: 'FACTURA_ELECTRONICA', numeroComprobante: null });
+      documentos.findOne.mockResolvedValue({ numeroCompleto: 'FE17' });
+      const c = await service.obtenerContenidoAbono('abono-1');
+      expect(c.abono).toMatchObject({ comprobanteVenta: 'FE17', tipoComprobanteVenta: 'Factura electrónica' });
+    });
+
+    it('abono anterior a los recibos de caja: "Sin numerar" y sin saldos', async () => {
+      registros.findOne.mockResolvedValue({ ...abono, numeroRecibo: null, saldoVentaAnterior: null, saldoVentaNuevo: null, moraPagada: '0' });
+      ventas.findOne.mockResolvedValue(ventaCredito);
+      const c = await service.obtenerContenidoAbono('abono-1');
+      expect(c.numero).toBe('Sin numerar');
+      expect(c.abono).toMatchObject({ saldoAnterior: null, saldoNuevo: null, moraPagada: 0 });
+    });
+
+    it('abono inexistente → 404; abono de otro negocio → el 404 de VentasService.findOne', async () => {
+      registros.findOne.mockResolvedValue(null);
+      await expect(service.obtenerContenidoAbono('nope')).rejects.toBeInstanceOf(NotFoundException);
+
+      // Abono de otro negocio: mismo 404 que uno inexistente, sin revelar el id de la venta ajena.
+      registros.findOne.mockResolvedValue(abono);
+      ventas.findOne.mockRejectedValue(new NotFoundException('Venta con ID venta-ajena no encontrada'));
+      await expect(service.obtenerContenidoAbono('abono-1')).rejects.toThrow('Abono no encontrado');
     });
   });
 });

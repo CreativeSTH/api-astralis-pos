@@ -1,6 +1,6 @@
 import { Column, Entity, Index, Unique } from 'typeorm';
 import { BaseEntity } from '../../common/entities/base.entity';
-import { TipoComprobante } from '../../common/enums/tipo-comprobante.enum';
+import { TipoNumeracion } from '../../common/enums/tipo-comprobante.enum';
 
 /**
  * Numeración secuencial por sucursal+tipo — deliberadamente separada de
@@ -18,8 +18,8 @@ export class NumeracionComprobante extends BaseEntity {
   @Column({ name: 'sucursal_id' })
   sucursalId: string;
 
-  @Column({ type: 'enum', enum: TipoComprobante })
-  tipo: TipoComprobante;
+  @Column({ type: 'enum', enum: TipoNumeracion })
+  tipo: TipoNumeracion;
 
   @Column({ nullable: true })
   prefijo?: string;

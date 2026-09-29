@@ -539,6 +539,41 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
       expect(habilitacionRepo.save).toHaveBeenCalledWith(expect.objectContaining({ siguienteNumero: 43 }));
     });
 
+    it('venta a crédito sin pagos: un solo pago forma 2, medio 1 y vencimiento en la última cuota', async () => {
+      const documento: any = { id: 'doc-cr', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'FACTURA', estado: EstadoDocumentoElectronico.PENDIENTE, intentos: 0 };
+      ventasRepo.findOneOrFail.mockResolvedValue(
+        ventaDePrueba({
+          tipoVenta: 'CREDITO',
+          pagos: [],
+          cuotas: [
+            { numero: 2, fechaVencimiento: '2026-11-29' },
+            { numero: 3, fechaVencimiento: '2026-12-29' },
+            { numero: 1, fechaVencimiento: '2026-10-29' },
+          ],
+        } as any),
+      );
+
+      await service.intentarEmitir(documento, { ...HABILITACION_CON_RESOLUCION } as any);
+
+      const [llamado] = alegraClient.crearFactura.mock.calls[0];
+      expect(llamado.payments).toEqual([{ paymentForm: '2', paymentMethod: '1', paymentDueDate: '2026-12-29' }]);
+      expect(ventasRepo.findOneOrFail).toHaveBeenCalledWith(
+        expect.objectContaining({ relations: expect.objectContaining({ cuotas: true }) }),
+      );
+    });
+
+    it('venta a crédito sin cuotas cargadas (dato inconsistente): vence hoy en Colombia, nunca payments vacío', async () => {
+      const documento: any = { id: 'doc-cr2', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'FACTURA', estado: EstadoDocumentoElectronico.PENDIENTE, intentos: 0 };
+      ventasRepo.findOneOrFail.mockResolvedValue(ventaDePrueba({ tipoVenta: 'CREDITO', pagos: [], cuotas: [] } as any));
+
+      await service.intentarEmitir(documento, { ...HABILITACION_CON_RESOLUCION } as any);
+
+      const [llamado] = alegraClient.crearFactura.mock.calls[0];
+      expect(llamado.payments).toHaveLength(1);
+      expect(llamado.payments[0]).toMatchObject({ paymentForm: '2', paymentMethod: '1' });
+      expect(llamado.payments[0].paymentDueDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    });
+
     it('de noche en Colombia manda a Alegra la fecha de HOY en Colombia, no la del día UTC siguiente', async () => {
       // Solo se falsea el reloj — los setTimeout reales siguen funcionando para el resto del flujo.
       jest.useFakeTimers({ doNotFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'setImmediate', 'nextTick', 'queueMicrotask'] });

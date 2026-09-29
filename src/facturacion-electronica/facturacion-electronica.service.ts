@@ -597,13 +597,18 @@ export class FacturacionElectronicaService {
   }
 
   private mapearPagosAlegra(venta: Venta): PaymentAlegra[] {
-    // DIAN exige una fecha de vencimiento del pago — para CONTADO no aplica
-    // realmente, así que se usa la fecha de hoy. CREDITO sí tiene cuotas con
-    // fecha propia (`Cuota.fechaVencimiento`) que esto todavía no está usando
-    // (mapeo simplificado, ver nota de la clase).
+    // Crédito (Conceptos DIAN 974 y 5480 de 2025): la factura sale al vender y vence con la última
+    // cuota. Una venta a crédito no tiene `VentaPago` (se paga con abonos), así que se manda un solo
+    // pago de crédito — `payments` es obligatorio y, con forma 2, también `paymentDueDate`. Medio
+    // "1" (instrumento no definido): al vender todavía no se sabe cómo pagará cada cuota.
+    if (venta.tipoVenta === 'CREDITO') {
+      const vencimientos = (venta.cuotas ?? []).map((c) => c.fechaVencimiento).sort();
+      return [{ paymentForm: '2', paymentMethod: '1', paymentDueDate: vencimientos.at(-1) ?? diaColombia() }];
+    }
+    // Contado: DIAN exige una fecha de vencimiento del pago aunque no aplique — la de hoy.
     const fechaVencimiento = diaColombia();
     return (venta.pagos ?? []).map((pago) => ({
-      paymentForm: venta.tipoVenta === 'CREDITO' ? '2' : '1',
+      paymentForm: '1',
       paymentMethod: this.codigoMedioPagoDian(pago.metodoPago),
       paymentDueDate: fechaVencimiento,
     }));
@@ -627,7 +632,7 @@ export class FacturacionElectronicaService {
     try {
       const venta = await this.ventasRepository.findOneOrFail({
         where: { id: documento.ventaId },
-        relations: { items: true, pagos: true, cliente: true },
+        relations: { items: true, pagos: true, cliente: true, cuotas: true },
       });
       const negocio = await this.negociosRepository.findOneOrFail({ where: { id: documento.negocioId } });
       const resolution = this.resolutionDesdeHabilitacion(habilitacion);

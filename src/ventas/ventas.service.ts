@@ -37,7 +37,7 @@ import { Domicilio } from '../domicilios/entities/domicilio.entity';
 import { DireccionCliente } from '../clientes/entities/direccion-cliente.entity';
 import { EstadoDomicilio } from '../common/enums/estado-domicilio.enum';
 import { Sucursal } from '../sucursales/entities/sucursal.entity';
-import { TipoComprobante, TipoComprobanteVenta } from '../common/enums/tipo-comprobante.enum';
+import { TipoComprobanteVenta, TipoNumeracion } from '../common/enums/tipo-comprobante.enum';
 import { FacturacionElectronicaService } from '../facturacion-electronica/facturacion-electronica.service';
 import { NumeracionComprobanteService } from '../facturacion/numeracion-comprobante.service';
 import { PoliticaFacturacionService } from '../politica-facturacion/politica-facturacion.service';
@@ -46,8 +46,8 @@ import { PromocionesPricingService } from '../cupones/promociones-pricing.servic
 import { CuponValidacionService } from '../cupones/cupon-validacion.service';
 import { Promocion } from '../cupones/entities/promocion.entity';
 import { diasDesdeFechaColombia } from '../common/utils/fecha-colombia';
+import { TOLERANCIA_REDONDEO, aplicarAbono } from './abono.logic';
 
-const TOLERANCIA_REDONDEO = 1;
 const DIAS_MORA_PARA_EN_MORA = 60;
 
 interface VentaConDomicilio {
@@ -493,7 +493,7 @@ export class VentasService {
       manager,
       negocioId,
       sucursalId,
-      TipoComprobante.RECIBO,
+      TipoNumeracion.RECIBO,
     );
     return { numeroComprobante: numeroFormateado, tipoComprobanteEmitido: tipo, plantillaComprobanteId };
   }
@@ -861,7 +861,12 @@ export class VentasService {
   async abonarCuota(
     ventaId: string,
     dto: AbonarCuotaDto,
-  ): Promise<{ venta: Venta; cuotaAfectada: Cuota; mensaje: string }> {
+  ): Promise<{
+    venta: Venta;
+    cuotaAfectada: Cuota;
+    abono: { id: string; numeroRecibo: string };
+    mensaje: string;
+  }> {
     const negocioId = this.getNegocioId();
     const usuarioId = this.getUsuarioId();
     await this.validarMetodosPago([dto.metodoPago]);
@@ -897,41 +902,36 @@ export class VentasService {
 
       this.recalcularMoraDeCuota(cuota, Number(venta.tasaInteresMora));
 
-      const incluirMora = dto.incluirMora ?? true;
-      let restante = dto.montoAbono;
-      let montoMoraPagada = 0;
-
-      if (incluirMora && cuota.montoMora > 0) {
-        montoMoraPagada = Math.min(restante, Number(cuota.montoMora));
-        cuota.montoMora = Number(cuota.montoMora) - montoMoraPagada;
-        restante -= montoMoraPagada;
-      }
-
-      const montoPrincipalPagado = Math.min(
-        restante,
-        Number(cuota.saldoPendiente),
+      const { moraPagada, capitalPagado, saldoVentaAnterior, saldoVentaNuevo } = aplicarAbono(
+        cuota,
+        venta.cuotas,
+        dto.montoAbono,
+        dto.incluirMora ?? true,
       );
-      cuota.montoPagado = Number(cuota.montoPagado) + montoPrincipalPagado;
-      cuota.saldoPendiente =
-        Number(cuota.saldoPendiente) - montoPrincipalPagado;
-      cuota.montoTotalConMora =
-        Number(cuota.saldoPendiente) + Number(cuota.montoMora);
-
-      if (cuota.saldoPendiente <= TOLERANCIA_REDONDEO) {
-        cuota.pagada = true;
-        cuota.saldoPendiente = 0;
-        cuota.fechaPago = new Date();
-      }
       await cuotaRepo.save(cuota);
 
-      await manager.getRepository(RegistroPagoCuota).save(
-        manager.getRepository(RegistroPagoCuota).create({
+      // Recibo de caja (spec 4.5): soporte del pago, numerado en la sucursal de la venta con el
+      // mismo lock pesimista que los recibos de venta.
+      const { numeroFormateado: numeroRecibo } = await this.numeracionComprobanteService.siguienteNumero(
+        manager,
+        negocioId,
+        venta.sucursalId,
+        TipoNumeracion.RECIBO_CAJA,
+      );
+      const registroRepo = manager.getRepository(RegistroPagoCuota);
+      const registro = await registroRepo.save(
+        registroRepo.create({
           cuotaId: cuota.id,
           monto: dto.montoAbono,
           metodoPago: dto.metodoPago,
           referenciaPago: dto.referenciaPago,
           registradoPor: usuarioId,
           notas: dto.notas,
+          numeroRecibo,
+          sucursalId: venta.sucursalId,
+          moraPagada,
+          saldoVentaAnterior,
+          saldoVentaNuevo,
         }),
       );
 
@@ -956,7 +956,7 @@ export class VentasService {
 
       await this.clientesService.ajustarDeuda(
         venta.clienteId!,
-        -montoPrincipalPagado,
+        -capitalPagado,
       );
 
       const cuotasActualizadas = await cuotaRepo.find({
@@ -974,6 +974,7 @@ export class VentasService {
       return {
         venta,
         cuotaAfectada: cuota,
+        abono: { id: registro.id, numeroRecibo },
         mensaje: 'Abono registrado exitosamente',
       };
     });

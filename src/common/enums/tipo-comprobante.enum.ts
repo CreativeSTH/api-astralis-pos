@@ -13,3 +13,14 @@ export enum TipoComprobanteVenta {
   FACTURA = 'FACTURA',
   FACTURA_ELECTRONICA = 'FACTURA_ELECTRONICA',
 }
+
+/**
+ * Secuencias de `NumeracionComprobante`. Enum propio (no `TipoComprobante`) para que
+ * `RECIBO_CAJA` — el soporte de cada abono a crédito — no aparezca como tipo de plantilla ni
+ * como comprobante por defecto de la sucursal.
+ */
+export enum TipoNumeracion {
+  RECIBO = 'RECIBO',
+  FACTURA = 'FACTURA',
+  RECIBO_CAJA = 'RECIBO_CAJA',
+}

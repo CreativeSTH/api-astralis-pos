@@ -1,7 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Venta } from './entities/venta.entity';
+import { RegistroPagoCuota } from './entities/registro-pago-cuota.entity';
 import { Negocio } from '../negocios/entities/negocio.entity';
 import { Sucursal } from '../sucursales/entities/sucursal.entity';
 import { PlantillaComprobante, DatosDianPlantilla } from '../facturacion/entities/plantilla-comprobante.entity';
@@ -33,7 +34,7 @@ export interface PagoComprobante {
 }
 
 export interface ReciboContenido {
-  tipo: TipoComprobanteVenta;
+  tipo: TipoComprobanteVenta | 'RECIBO_CAJA';
   negocio: { nombre: string; nit?: string; logoUrl?: string };
   emisor: { nombrePersonaNatural?: string; direccion?: string; telefono?: string };
   numero: string;
@@ -51,9 +52,25 @@ export interface ReciboContenido {
   electronica?: ElectronicaComprobante;
   /** Solo en comprobantes que no son factura electrónica. */
   leyenda?: string;
+  /** Solo en el recibo de caja de un abono a crédito. */
+  abono?: AbonoComprobante;
 }
 
 export const LEYENDA_NO_FACTURA = 'Este documento no es una factura de venta.';
+export const LEYENDA_RECIBO_CAJA = 'Recibo de caja: soporte de pago. No es una factura de venta.';
+
+/** Bloque del recibo de caja (spec 4.5): a qué venta y cuota se abonó y cómo quedó el saldo. */
+export interface AbonoComprobante {
+  numeroCuota: number;
+  totalCuotas: number;
+  comprobanteVenta: string;
+  tipoComprobanteVenta: 'Factura electrónica' | 'Recibo' | 'Factura';
+  moraPagada: number;
+  /** null en abonos anteriores a los recibos de caja (no hay foto de ese momento). */
+  saldoAnterior: number | null;
+  saldoNuevo: number | null;
+  referenciaPago: string | null;
+}
 
 /** Bloque fiscal de una venta FACTURA_ELECTRONICA (spec de unificación de comprobantes, sección 5). */
 export interface ElectronicaComprobante {
@@ -100,6 +117,8 @@ export class ComprobantesService {
     private readonly documentosRepository: Repository<DocumentoElectronico>,
     @InjectRepository(Cliente)
     private readonly clientesRepository: Repository<Cliente>,
+    @InjectRepository(RegistroPagoCuota)
+    private readonly registrosPago: Repository<RegistroPagoCuota>,
     private readonly facturaPdf: FacturaPdfService,
     private readonly ventasService: VentasService,
   ) {}
@@ -111,6 +130,76 @@ export class ComprobantesService {
     const electronica =
       venta.tipoComprobanteEmitido === TipoComprobanteVenta.FACTURA_ELECTRONICA ? await this.bloqueElectronico(venta) : undefined;
     return this.construirContenido(venta, negocio, plantilla, electronica);
+  }
+
+  /**
+   * Recibo de caja de un abono. `VentasService.findOne` filtra por tenant; su 404 se reemplaza por el
+   * mismo del abono inexistente para no revelar el id de la venta de otro negocio.
+   */
+  async obtenerContenidoAbono(abonoId: string): Promise<ReciboContenido> {
+    const abono = await this.registrosPago.findOne({ where: { id: abonoId }, relations: { cuota: true } });
+    if (!abono) throw new NotFoundException('Abono no encontrado');
+    const venta = await this.ventasService.findOne(abono.cuota.ventaId).catch((error: unknown) => {
+      if (error instanceof NotFoundException) throw new NotFoundException('Abono no encontrado');
+      throw error;
+    });
+    const negocio = await this.negociosRepository.findOneOrFail({ where: { id: venta.negocioId } });
+    const plantilla = await this.resolverPlantilla(venta);
+    const config = plantilla?.configuracion ?? {};
+    const monto = Number(abono.monto);
+    const totalCuotas = venta.cuotas?.length ?? 0;
+    const numerico = (valor: unknown) => (valor === null || valor === undefined ? null : Number(valor));
+
+    return {
+      tipo: 'RECIBO_CAJA',
+      negocio: { nombre: negocio.nombre, nit: negocio.nit, logoUrl: plantilla?.logoUrl },
+      emisor: {
+        nombrePersonaNatural: config.nombrePersonaNatural,
+        direccion: config.direccion ?? negocio.direccion,
+        telefono: config.telefono ?? negocio.telefono,
+      },
+      numero: abono.numeroRecibo ?? 'Sin numerar',
+      fecha: abono.fecha,
+      cliente: venta.nombreCliente,
+      items: [
+        {
+          nombre: `Abono cuota ${abono.cuota.numero} de ${totalCuotas}`,
+          cantidad: 1,
+          subtotal: monto,
+          baseImponible: monto,
+          impuesto: 0,
+        },
+      ],
+      subtotal: monto,
+      descuento: 0,
+      impuesto: 0,
+      total: monto,
+      pagos: [{ metodo: abono.metodoPago, monto }],
+      mensajeCierre: '¡Gracias por su pago!',
+      leyenda: LEYENDA_RECIBO_CAJA,
+      abono: {
+        numeroCuota: abono.cuota.numero,
+        totalCuotas,
+        ...(await this.comprobanteDeVenta(venta)),
+        moraPagada: Number(abono.moraPagada ?? 0),
+        saldoAnterior: numerico(abono.saldoVentaAnterior),
+        saldoNuevo: numerico(abono.saldoVentaNuevo),
+        referenciaPago: abono.referenciaPago ?? null,
+      },
+    };
+  }
+
+  private async comprobanteDeVenta(
+    venta: Venta,
+  ): Promise<Pick<AbonoComprobante, 'comprobanteVenta' | 'tipoComprobanteVenta'>> {
+    if (venta.tipoComprobanteEmitido === TipoComprobanteVenta.FACTURA_ELECTRONICA) {
+      const doc = await this.documentosRepository.findOne({ where: { ventaId: venta.id, negocioId: venta.negocioId } });
+      return { comprobanteVenta: doc?.numeroCompleto ?? 'En validación DIAN', tipoComprobanteVenta: 'Factura electrónica' };
+    }
+    return {
+      comprobanteVenta: venta.numeroComprobante ?? venta.id.slice(0, 8),
+      tipoComprobanteVenta: venta.tipoComprobanteEmitido === TipoComprobanteVenta.FACTURA ? 'Factura' : 'Recibo',
+    };
   }
 
   /** Todo sale del snapshot del documento (mismos datos que el PDF — tirilla y PDF nunca se contradicen). */
