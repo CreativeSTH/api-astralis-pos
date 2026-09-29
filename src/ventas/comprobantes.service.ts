@@ -5,8 +5,7 @@ import { Venta } from './entities/venta.entity';
 import { RegistroPagoCuota } from './entities/registro-pago-cuota.entity';
 import { Negocio } from '../negocios/entities/negocio.entity';
 import { Sucursal } from '../sucursales/entities/sucursal.entity';
-import { PlantillaComprobante, DatosDianPlantilla } from '../facturacion/entities/plantilla-comprobante.entity';
-import { TipoComprobante, TipoComprobanteVenta } from '../common/enums/tipo-comprobante.enum';
+import { TipoComprobanteVenta } from '../common/enums/tipo-comprobante.enum';
 import { DocumentoElectronico } from '../facturacion-electronica/entities/documento-electronico.entity';
 import { EstadoDocumentoElectronico } from '../facturacion-electronica/entities/estado-documento-electronico.enum';
 import {
@@ -36,7 +35,7 @@ export interface PagoComprobante {
 export interface ReciboContenido {
   tipo: TipoComprobanteVenta | 'RECIBO_CAJA';
   negocio: { nombre: string; nit?: string; logoUrl?: string };
-  emisor: { nombrePersonaNatural?: string; direccion?: string; telefono?: string };
+  emisor: { direccion?: string; telefono?: string };
   numero: string;
   fecha: Date;
   cliente: string;
@@ -48,7 +47,6 @@ export interface ReciboContenido {
   pagos: PagoComprobante[];
   mensajeCierre?: string;
   terminos?: string;
-  dian?: DatosDianPlantilla;
   electronica?: ElectronicaComprobante;
   /** Solo en comprobantes que no son factura electrónica. */
   leyenda?: string;
@@ -97,12 +95,8 @@ export function encabezadoTirilla(doc: DocumentoElectronico | null): string | nu
 }
 
 /**
- * Arma el contenido a imprimir para una venta, resolviendo qué plantilla
- * aplica en cascada: la que quedó denormalizada en la venta (fidelidad en
- * reimpresión) → el default vigente de la sucursal → el default del
- * negocio → si nada está configurado, un contenido sintético equivalente
- * al recibo hardcodeado de siempre. Esta última rama es la garantía de
- * que ninguna sucursal sin configurar pierde la capacidad de imprimir.
+ * Arma el contenido a imprimir de una venta o de un abono: datos de la venta, formato de impresión
+ * del negocio (logo, mensaje de cierre, términos — fase 5b) y dirección/teléfono de la sucursal.
  */
 @Injectable()
 export class ComprobantesService {
@@ -111,8 +105,6 @@ export class ComprobantesService {
     private readonly negociosRepository: Repository<Negocio>,
     @InjectRepository(Sucursal)
     private readonly sucursalesRepository: Repository<Sucursal>,
-    @InjectRepository(PlantillaComprobante)
-    private readonly plantillasRepository: Repository<PlantillaComprobante>,
     @InjectRepository(DocumentoElectronico)
     private readonly documentosRepository: Repository<DocumentoElectronico>,
     @InjectRepository(Cliente)
@@ -126,10 +118,10 @@ export class ComprobantesService {
   async obtenerContenido(ventaId: string): Promise<ReciboContenido> {
     const venta = await this.ventasService.findOne(ventaId);
     const negocio = await this.negociosRepository.findOneOrFail({ where: { id: venta.negocioId } });
-    const plantilla = await this.resolverPlantilla(venta);
+    const encabezado = await this.encabezado(venta, negocio);
     const electronica =
       venta.tipoComprobanteEmitido === TipoComprobanteVenta.FACTURA_ELECTRONICA ? await this.bloqueElectronico(venta) : undefined;
-    return this.construirContenido(venta, negocio, plantilla, electronica);
+    return this.construirContenido(venta, negocio, encabezado, electronica);
   }
 
   /**
@@ -144,20 +136,14 @@ export class ComprobantesService {
       throw error;
     });
     const negocio = await this.negociosRepository.findOneOrFail({ where: { id: venta.negocioId } });
-    const plantilla = await this.resolverPlantilla(venta);
-    const config = plantilla?.configuracion ?? {};
+    const encabezado = await this.encabezado(venta, negocio);
     const monto = Number(abono.monto);
     const totalCuotas = venta.cuotas?.length ?? 0;
     const numerico = (valor: unknown) => (valor === null || valor === undefined ? null : Number(valor));
 
     return {
       tipo: 'RECIBO_CAJA',
-      negocio: { nombre: negocio.nombre, nit: negocio.nit, logoUrl: plantilla?.logoUrl },
-      emisor: {
-        nombrePersonaNatural: config.nombrePersonaNatural,
-        direccion: config.direccion ?? negocio.direccion,
-        telefono: config.telefono ?? negocio.telefono,
-      },
+      ...encabezado,
       numero: abono.numeroRecibo ?? 'Sin numerar',
       fecha: abono.fecha,
       cliente: venta.nombreCliente,
@@ -230,50 +216,29 @@ export class ComprobantesService {
     };
   }
 
-  private async resolverPlantilla(venta: Venta): Promise<PlantillaComprobante | null> {
-    // Solo la factura convencional histórica usa plantillas de factura; recibo y factura electrónica usan las de recibo.
-    const tipoPlantilla =
-      venta.tipoComprobanteEmitido === TipoComprobanteVenta.FACTURA ? TipoComprobante.FACTURA : TipoComprobante.RECIBO;
-
-    if (venta.plantillaComprobanteId) {
-      const propia = await this.plantillasRepository.findOne({
-        where: { id: venta.plantillaComprobanteId, negocioId: venta.negocioId, activo: true },
-      });
-      if (propia) return propia;
-    }
-
+  /** Logo del negocio (el mismo del PDF) y dirección/teléfono de la sucursal de la venta, con el negocio como respaldo. */
+  private async encabezado(venta: Venta, negocio: Negocio): Promise<Pick<ReciboContenido, 'negocio' | 'emisor'>> {
     const sucursal = await this.sucursalesRepository.findOne({ where: { id: venta.sucursalId } });
-    const idDefaultSucursal =
-      tipoPlantilla === TipoComprobante.FACTURA ? sucursal?.plantillaFacturaDefectoId : sucursal?.plantillaReciboDefectoId;
-    if (idDefaultSucursal) {
-      const deSucursal = await this.plantillasRepository.findOne({
-        where: { id: idDefaultSucursal, negocioId: venta.negocioId, activo: true },
-      });
-      if (deSucursal) return deSucursal;
-    }
-
-    return this.plantillasRepository.findOne({
-      where: { negocioId: venta.negocioId, tipo: tipoPlantilla, esPredeterminada: true, activo: true },
-    });
+    return {
+      negocio: { nombre: negocio.nombre, nit: negocio.nit, logoUrl: negocio.logoUrl ?? undefined },
+      emisor: {
+        direccion: sucursal?.direccion ?? negocio.direccion,
+        telefono: sucursal?.telefono ?? negocio.telefono,
+      },
+    };
   }
 
   private construirContenido(
     venta: Venta,
     negocio: Negocio,
-    plantilla: PlantillaComprobante | null,
+    encabezado: Pick<ReciboContenido, 'negocio' | 'emisor'>,
     electronica?: ElectronicaComprobante,
   ): ReciboContenido {
     const tipo = venta.tipoComprobanteEmitido ?? TipoComprobanteVenta.RECIBO;
-    const config = plantilla?.configuracion ?? {};
 
     return {
       tipo,
-      negocio: { nombre: negocio.nombre, nit: negocio.nit, logoUrl: plantilla?.logoUrl },
-      emisor: {
-        nombrePersonaNatural: config.nombrePersonaNatural,
-        direccion: config.direccion ?? negocio.direccion,
-        telefono: config.telefono ?? negocio.telefono,
-      },
+      ...encabezado,
       numero: electronica ? (electronica.numeroCompleto ?? 'En validación DIAN') : (venta.numeroComprobante ?? venta.id.slice(0, 8)),
       fecha: venta.createdAt,
       cliente: venta.nombreCliente,
@@ -289,9 +254,8 @@ export class ComprobantesService {
       impuesto: Number(venta.impuestoTotal),
       total: Number(venta.total),
       pagos: (venta.pagos ?? []).map((pago) => ({ metodo: pago.metodoPago, monto: Number(pago.monto) })),
-      mensajeCierre: config.mensajeCierre,
-      terminos: config.terminos,
-      dian: tipo === TipoComprobanteVenta.FACTURA ? config.dian : undefined,
+      mensajeCierre: negocio.mensajeCierreComprobante ?? undefined,
+      terminos: negocio.terminosComprobante ?? undefined,
       electronica,
       leyenda: tipo === TipoComprobanteVenta.FACTURA_ELECTRONICA ? undefined : LEYENDA_NO_FACTURA,
     };

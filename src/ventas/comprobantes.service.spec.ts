@@ -7,7 +7,6 @@ import { VentasService } from './ventas.service';
 import { Negocio } from '../negocios/entities/negocio.entity';
 import { Sucursal } from '../sucursales/entities/sucursal.entity';
 import { Cliente } from '../clientes/entities/cliente.entity';
-import { PlantillaComprobante } from '../facturacion/entities/plantilla-comprobante.entity';
 import { DocumentoElectronico } from '../facturacion-electronica/entities/documento-electronico.entity';
 import { EstadoDocumentoElectronico } from '../facturacion-electronica/entities/estado-documento-electronico.enum';
 import { FacturaPdfService } from '../facturacion-electronica/factura-pdf.service';
@@ -19,6 +18,7 @@ describe('ComprobantesService — contenido imprimible', () => {
   let clientes: { findOne: jest.Mock };
   let facturaPdf: { generarQrDataUrl: jest.Mock };
   let registros: { findOne: jest.Mock };
+  let sucursales: { findOne: jest.Mock };
   const ventaBase = {
     id: 'venta-1', negocioId: 'neg-1', sucursalId: 'suc-1', tipoVenta: 'CONTADO', clienteId: null,
     createdAt: new Date('2026-09-29T02:01:13Z'), nombreCliente: 'Consumidor final', items: [], pagos: [],
@@ -39,15 +39,23 @@ describe('ComprobantesService — contenido imprimible', () => {
     documentos = { findOne: jest.fn().mockResolvedValue(null) };
     clientes = { findOne: jest.fn().mockResolvedValue(null) };
     registros = { findOne: jest.fn() };
+    sucursales = { findOne: jest.fn().mockResolvedValue({ direccion: 'Calle Sucursal', telefono: null }) };
     facturaPdf = { generarQrDataUrl: jest.fn().mockResolvedValue('data:image/png;base64,QR') };
     const moduleRef = await Test.createTestingModule({
       providers: [
         ComprobantesService,
         { provide: VentasService, useValue: ventas },
         { provide: FacturaPdfService, useValue: facturaPdf },
-        { provide: getRepositoryToken(Negocio), useValue: { findOneOrFail: jest.fn().mockResolvedValue({ nombre: 'Ferretería', nit: '1' }) } },
-        { provide: getRepositoryToken(Sucursal), useValue: { findOne: jest.fn().mockResolvedValue(null) } },
-        { provide: getRepositoryToken(PlantillaComprobante), useValue: { findOne: jest.fn().mockResolvedValue(null) } },
+        {
+          provide: getRepositoryToken(Negocio),
+          useValue: {
+            findOneOrFail: jest.fn().mockResolvedValue({
+              nombre: 'Ferretería', nit: '1', logoUrl: '/uploads/negocios/logos/l.png', direccion: 'Calle Negocio',
+              telefono: '111', mensajeCierreComprobante: '¡Vuelve pronto!', terminosComprobante: 'Sin devoluciones',
+            }),
+          },
+        },
+        { provide: getRepositoryToken(Sucursal), useValue: sucursales },
         { provide: getRepositoryToken(DocumentoElectronico), useValue: documentos },
         { provide: getRepositoryToken(Cliente), useValue: clientes },
         { provide: getRepositoryToken(RegistroPagoCuota), useValue: registros },
@@ -178,6 +186,36 @@ describe('ComprobantesService — contenido imprimible', () => {
       registros.findOne.mockResolvedValue(abono);
       ventas.findOne.mockRejectedValue(new NotFoundException('Venta con ID venta-ajena no encontrada'));
       await expect(service.obtenerContenidoAbono('abono-1')).rejects.toThrow('Abono no encontrado');
+    });
+  });
+
+  describe('formato de impresión (fase 5b)', () => {
+    it('formato del negocio y dirección de la sucursal (teléfono del negocio si la sucursal no tiene)', async () => {
+      ventas.findOne.mockResolvedValue({ ...ventaBase, tipoComprobanteEmitido: 'RECIBO', numeroComprobante: '8' });
+      const c = await service.obtenerContenido('venta-1');
+      expect(sucursales.findOne).toHaveBeenCalledWith({ where: { id: 'suc-1' } });
+      expect(c).toMatchObject({
+        negocio: { nombre: 'Ferretería', nit: '1', logoUrl: '/uploads/negocios/logos/l.png' },
+        emisor: { direccion: 'Calle Sucursal', telefono: '111' },
+        mensajeCierre: '¡Vuelve pronto!',
+        terminos: 'Sin devoluciones',
+      });
+      expect(c).not.toHaveProperty('dian');
+    });
+
+    it('recibo de caja: logo y dirección igual que la venta, sin términos y con su mensaje fijo', async () => {
+      registros.findOne.mockResolvedValue({
+        id: 'abono-1', monto: 1000, metodoPago: 'Nequi', numeroRecibo: 'RC-1', fecha: new Date(), moraPagada: '0',
+        saldoVentaAnterior: null, saldoVentaNuevo: null, cuota: { numero: 1, ventaId: 'venta-1' },
+      });
+      ventas.findOne.mockResolvedValue({ ...ventaBase, cuotas: [{ numero: 1 }] });
+      const c = await service.obtenerContenidoAbono('abono-1');
+      expect(c).toMatchObject({
+        negocio: { logoUrl: '/uploads/negocios/logos/l.png' },
+        emisor: { direccion: 'Calle Sucursal' },
+        mensajeCierre: '¡Gracias por su pago!',
+      });
+      expect(c.terminos).toBeUndefined();
     });
   });
 });

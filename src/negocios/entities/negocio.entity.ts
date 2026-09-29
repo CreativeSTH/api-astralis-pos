@@ -41,6 +41,13 @@ export class Negocio extends BaseEntity {
   @Column({ name: 'logo_url', type: 'varchar', nullable: true })
   logoUrl?: string | null;
 
+  /** Formato de impresión del negocio (fase 5b): se imprime al pie de recibos y facturas. El logo es `logoUrl`. */
+  @Column({ name: 'mensaje_cierre_comprobante', type: 'varchar', nullable: true })
+  mensajeCierreComprobante?: string | null;
+
+  @Column({ name: 'terminos_comprobante', type: 'text', nullable: true })
+  terminosComprobante?: string | null;
+
   /** Perfil fiscal declarado por el administrador (ver PoliticaFacturacionService). null = sin declarar. */
   @Column({ name: 'tipo_persona', type: 'enum', enum: TipoPersona, nullable: true })
   tipoPersona?: TipoPersona | null;

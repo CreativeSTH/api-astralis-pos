@@ -126,9 +126,6 @@ export class Venta extends BaseEntity {
   })
   tipoComprobanteEmitido?: TipoComprobanteVenta;
 
-  @Column({ name: 'plantilla_comprobante_id', nullable: true })
-  plantillaComprobanteId?: string;
-
   /** Cupón redimido en esta venta (tipo=CUPON), si el cajero ingresó uno. Denormalizado para reportes/histórico. */
   @Column({ name: 'cupon_id', nullable: true })
   cuponId?: string;

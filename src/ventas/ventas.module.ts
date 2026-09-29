@@ -21,7 +21,6 @@ import { FacturacionElectronicaModule } from '../facturacion-electronica/factura
 import { CuponesModule } from '../cupones/cupones.module';
 import { Sucursal } from '../sucursales/entities/sucursal.entity';
 import { Negocio } from '../negocios/entities/negocio.entity';
-import { PlantillaComprobante } from '../facturacion/entities/plantilla-comprobante.entity';
 import { DocumentoElectronico } from '../facturacion-electronica/entities/documento-electronico.entity';
 import { Cliente } from '../clientes/entities/cliente.entity';
 import { PoliticaFacturacionModule } from '../politica-facturacion/politica-facturacion.module';
@@ -37,7 +36,6 @@ import { PoliticaFacturacionModule } from '../politica-facturacion/politica-fact
       Inventario,
       Sucursal,
       Negocio,
-      PlantillaComprobante,
       DocumentoElectronico,
       Cliente,
     ]),

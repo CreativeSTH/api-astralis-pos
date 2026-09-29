@@ -61,7 +61,7 @@ export class VentasController {
   @Get(':id/comprobante')
   @RequierePermiso(ModuloPermiso.VENTAS, AccionPermiso.VER)
   @ApiOperation({
-    summary: 'Contenido resuelto para imprimir el recibo/factura de una venta (plantilla + datos, listo para el print-agent)',
+    summary: 'Contenido resuelto para imprimir el comprobante de una venta (formato del negocio + datos, listo para el print-agent)',
   })
   obtenerComprobante(@Param('id', ParseUUIDPipe) id: string) {
     return this.comprobantesService.obtenerContenido(id);

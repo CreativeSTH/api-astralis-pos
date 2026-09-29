@@ -1,11 +1,11 @@
+/** Solo queda para el campo `tipoComprobante` del DTO de venta, que se ignora por compatibilidad (fase 1). */
 export enum TipoComprobante {
   RECIBO = 'RECIBO',
   FACTURA = 'FACTURA',
 }
 
 /**
- * Comprobante que quedó asociado a una venta. Enum propio (no `TipoComprobante`) para que
- * `FACTURA_ELECTRONICA` no aparezca en plantillas/numeraciones/sucursales, que comparten el otro.
+ * Comprobante que quedó asociado a una venta.
  * `FACTURA` (factura convencional) solo existe en ventas históricas — nunca se asigna a una nueva.
  */
 export enum TipoComprobanteVenta {
@@ -15,9 +15,8 @@ export enum TipoComprobanteVenta {
 }
 
 /**
- * Secuencias de `NumeracionComprobante`. Enum propio (no `TipoComprobante`) para que
- * `RECIBO_CAJA` — el soporte de cada abono a crédito — no aparezca como tipo de plantilla ni
- * como comprobante por defecto de la sucursal.
+ * Secuencias de `NumeracionComprobante`: recibos de venta, recibos de caja (abonos a crédito) y el
+ * rango de la factura convencional histórica.
  */
 export enum TipoNumeracion {
   RECIBO = 'RECIBO',

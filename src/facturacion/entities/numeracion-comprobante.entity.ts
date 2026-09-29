@@ -2,12 +2,7 @@ import { Column, Entity, Index, Unique } from 'typeorm';
 import { BaseEntity } from '../../common/entities/base.entity';
 import { TipoNumeracion } from '../../common/enums/tipo-comprobante.enum';
 
-/**
- * Numeración secuencial por sucursal+tipo — deliberadamente separada de
- * `PlantillaComprobante` (que es cosmética) para que cambiar cuál plantilla
- * es la predeterminada nunca resetee/huerfane una secuencia ya numerada.
- * Se llena/usa recién en Fase C (transaccional, dentro de `VentasService`).
- */
+/** Numeración secuencial por sucursal+tipo (recibos, recibos de caja y el rango de la factura convencional histórica). */
 @Entity('numeraciones_comprobante')
 @Unique(['sucursalId', 'tipo'])
 export class NumeracionComprobante extends BaseEntity {

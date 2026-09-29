@@ -36,7 +36,6 @@ import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { Domicilio } from '../domicilios/entities/domicilio.entity';
 import { DireccionCliente } from '../clientes/entities/direccion-cliente.entity';
 import { EstadoDomicilio } from '../common/enums/estado-domicilio.enum';
-import { Sucursal } from '../sucursales/entities/sucursal.entity';
 import { TipoComprobanteVenta, TipoNumeracion } from '../common/enums/tipo-comprobante.enum';
 import { FacturacionElectronicaService } from '../facturacion-electronica/facturacion-electronica.service';
 import { NumeracionComprobanteService } from '../facturacion/numeracion-comprobante.service';
@@ -467,27 +466,16 @@ export class VentasService {
    * Asigna el comprobante dentro de la misma transacción de la venta. El tipo ya lo decidió la
    * política de facturación: FACTURA_ELECTRONICA no consume consecutivo propio (su número es el de la
    * factura electrónica); RECIBO numera secuencialmente por sucursal, sin bloquear nunca por falta de
-   * configuración (ver `NumeracionComprobanteService`). La plantilla es la de recibo en ambos casos:
-   * aporta logo, mensaje de cierre y términos a lo impreso.
+   * configuración (ver `NumeracionComprobanteService`). Lo impreso (logo, mensaje, términos) sale del
+   * formato del negocio (fase 5b), no se guarda en la venta.
    */
   private async resolverComprobante(
     manager: EntityManager,
     negocioId: string,
     sucursalId: string,
     tipo: TipoComprobanteVenta,
-  ): Promise<{
-    numeroComprobante?: string;
-    tipoComprobanteEmitido: TipoComprobanteVenta;
-    plantillaComprobanteId?: string;
-  }> {
-    const sucursal = await manager
-      .getRepository(Sucursal)
-      .findOneOrFail({ where: { id: sucursalId } });
-    const plantillaComprobanteId = sucursal.plantillaReciboDefectoId;
-
-    if (tipo === TipoComprobanteVenta.FACTURA_ELECTRONICA) {
-      return { tipoComprobanteEmitido: tipo, plantillaComprobanteId };
-    }
+  ): Promise<{ numeroComprobante?: string; tipoComprobanteEmitido: TipoComprobanteVenta }> {
+    if (tipo === TipoComprobanteVenta.FACTURA_ELECTRONICA) return { tipoComprobanteEmitido: tipo };
 
     const { numeroFormateado } = await this.numeracionComprobanteService.siguienteNumero(
       manager,
@@ -495,7 +483,7 @@ export class VentasService {
       sucursalId,
       TipoNumeracion.RECIBO,
     );
-    return { numeroComprobante: numeroFormateado, tipoComprobanteEmitido: tipo, plantillaComprobanteId };
+    return { numeroComprobante: numeroFormateado, tipoComprobanteEmitido: tipo };
   }
 
   /**

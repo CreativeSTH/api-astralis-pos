@@ -11,7 +11,6 @@ import { DocumentoElectronico } from './entities/documento-electronico.entity';
 import { Negocio } from '../negocios/entities/negocio.entity';
 import { Alerta } from '../alertas/entities/alerta.entity';
 import { Venta } from '../ventas/entities/venta.entity';
-import { PlantillaComprobante } from '../facturacion/entities/plantilla-comprobante.entity';
 import { TiendaOnline } from '../tienda-online/entities/tienda-online.entity';
 import { SuscripcionesModule } from '../suscripciones/suscripciones.module';
 import { RealtimeModule } from '../realtime/realtime.module';
@@ -24,7 +23,6 @@ import { RealtimeModule } from '../realtime/realtime.module';
       Negocio,
       Alerta,
       Venta,
-      PlantillaComprobante,
       TiendaOnline,
     ]),
     SuscripcionesModule,
