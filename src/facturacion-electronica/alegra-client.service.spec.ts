@@ -1,4 +1,5 @@
-import { AlegraClientService } from './alegra-client.service';
+import { BadGatewayException } from '@nestjs/common';
+import { AlegraClientService, AlegraNoDisponibleError } from './alegra-client.service';
 
 describe('AlegraClientService', () => {
   let service: AlegraClientService;
@@ -340,6 +341,64 @@ describe('AlegraClientService', () => {
 
       expect(resultado.legalStatus).toBe('REJECTED');
       expect(resultado.errorMessages).toEqual(['Regla: X', 'Regla: Y']);
+    });
+
+    describe('contingencia (fase 6a)', () => {
+      const PARAMS_BASE = () => ({
+        token: 'reseller-token', baseUrl: 'https://sandbox-api.alegra.com/e-provider/col/v1', companyId: 'company-1',
+        number: 6, resolution: RESOLUCION, regimeCode: 'O-48', invoicePeriod: { startDate: '2026-09-01', endDate: '2026-09-01' },
+        customer: CUSTOMER, items: [ITEM], payments: PAGOS, totalAmounts: TOTALES,
+      });
+      const ACEPTADA = { ok: true, json: async () => ({ invoice: { id: 'inv-9', status: 'SENT', legalStatus: 'ACCEPTED', isFinal: true } }) };
+
+      it('transcripción de contingencia: documentType "04" (no "03", que en Alegra es mandato) y additionalDocumentReference', async () => {
+        fetchMock.mockResolvedValue(ACEPTADA);
+
+        await service.crearFactura({
+          ...PARAMS_BASE(),
+          documentType: '04',
+          additionalDocumentReference: { number: 'CONT501', issueDate: '2026-09-28' },
+        });
+
+        const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+        expect(body.documentType).toBe('04');
+        expect(body.additionalDocumentReference).toEqual({ number: 'CONT501', issueDate: '2026-09-28' });
+      });
+
+      it('sin additionalDocumentReference no manda la clave', async () => {
+        fetchMock.mockResolvedValue(ACEPTADA);
+        await service.crearFactura(PARAMS_BASE());
+        const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+        expect('additionalDocumentReference' in body).toBe(false);
+      });
+
+      it('un fetch que falla (red caída o timeout) es AlegraNoDisponibleError', async () => {
+        fetchMock.mockRejectedValue(new TypeError('fetch failed'));
+        await expect(service.crearFactura(PARAMS_BASE())).rejects.toBeInstanceOf(AlegraNoDisponibleError);
+      });
+
+      it('un 5xx es AlegraNoDisponibleError', async () => {
+        fetchMock.mockResolvedValue({ ok: false, status: 503, json: async () => ({ message: 'Service Unavailable' }) });
+        await expect(service.crearFactura(PARAMS_BASE())).rejects.toBeInstanceOf(AlegraNoDisponibleError);
+      });
+
+      it('un error EPR5 (mantenimiento DIAN) es AlegraNoDisponibleError aunque venga con 4xx', async () => {
+        fetchMock.mockResolvedValue({ ok: false, status: 400, json: async () => ({ message: 'EPR500 servicio en mantenimiento' }) });
+        await expect(service.crearFactura(PARAMS_BASE())).rejects.toBeInstanceOf(AlegraNoDisponibleError);
+      });
+
+      it('un 4xx de validación NO es indisponibilidad', async () => {
+        fetchMock.mockResolvedValue({ ok: false, status: 400, json: async () => ({ message: 'identificationType is not one of enum values' }) });
+        const error = await service.crearFactura(PARAMS_BASE()).catch((e: unknown) => e);
+        expect(error).toBeInstanceOf(BadGatewayException);
+        expect(error).not.toBeInstanceOf(AlegraNoDisponibleError);
+      });
+
+      it('manda un signal de timeout', async () => {
+        fetchMock.mockResolvedValue(ACEPTADA);
+        await service.crearFactura(PARAMS_BASE());
+        expect(fetchMock.mock.calls[0][1].signal).toBeDefined();
+      });
     });
   });
 

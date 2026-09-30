@@ -92,4 +92,32 @@ export class HabilitacionFacturacionElectronica extends BaseEntity {
 
   @Column({ name: 'error_mensaje', nullable: true })
   errorMensaje?: string;
+
+  // ── Resolución de contingencia (fase 6a) — tipo "Factura de talonario o de papel" en la DIAN.
+  // Sin clave técnica: la DIAN no la asigna a este rango (anexo técnico v1.9, §11.4, Nota-2).
+
+  @Column({ name: 'contingencia_resolucion_numero', type: 'varchar', nullable: true })
+  contingenciaResolucionNumero?: string | null;
+
+  @Column({ name: 'contingencia_prefijo', type: 'varchar', nullable: true })
+  contingenciaPrefijo?: string | null;
+
+  @Column({ name: 'contingencia_fecha_inicio', type: 'date', nullable: true })
+  contingenciaFechaInicio?: string | null;
+
+  @Column({ name: 'contingencia_fecha_fin', type: 'date', nullable: true })
+  contingenciaFechaFin?: string | null;
+
+  @Column({ name: 'contingencia_rango_desde', type: 'int', nullable: true })
+  contingenciaRangoDesde?: number | null;
+
+  @Column({ name: 'contingencia_rango_hasta', type: 'int', nullable: true })
+  contingenciaRangoHasta?: number | null;
+
+  @Column({ name: 'contingencia_siguiente_numero', type: 'int', nullable: true })
+  contingenciaSiguienteNumero?: number | null;
+
+  /** Primer fallo por indisponibilidad de Alegra de la racha actual; null = Alegra respondió la última vez. */
+  @Column({ name: 'alegra_no_disponible_desde', type: 'timestamptz', nullable: true })
+  alegraNoDisponibleDesde?: Date | null;
 }

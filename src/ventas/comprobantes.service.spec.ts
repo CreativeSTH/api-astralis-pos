@@ -129,6 +129,67 @@ describe('ComprobantesService — contenido imprimible', () => {
     });
   });
 
+  describe('factura de contingencia (fase 6a)', () => {
+    const docContingencia = {
+      estado: EstadoDocumentoElectronico.PENDIENTE, periodoContingenciaId: 'per-1', ambiente: 'PRODUCCION',
+      numeroCompleto: 'CONT501', prefijo: 'CONT', fechaEmision: new Date('2026-09-28T15:00:00Z'), qrContenido: 'NumFac: CONT501',
+      resolucionNumero: '18764000009999', resolucionFechaInicio: '2026-01-01', resolucionFechaFin: '2028-01-01',
+      resolucionRangoDesde: 1, resolucionRangoHasta: 5000,
+      emisorRazonSocial: 'Tienda S.A.S.', emisorNit: '900123456', emisorDireccion: 'Cra 1', emisorCiudad: 'Medellín',
+    };
+    const original = { ...process.env };
+    afterEach(() => {
+      process.env = { ...original };
+    });
+
+    it('título de papel, número y resolución de contingencia, QR provisional, fabricante, sin encabezado "en validación"', async () => {
+      ventas.findOne.mockResolvedValue(ventaElectronica);
+      documentos.findOne.mockResolvedValue(docContingencia);
+      const contenido = await service.obtenerContenido('venta-1');
+      expect(contenido.electronica).toEqual(expect.objectContaining({
+        contingencia: true, titulo: 'FACTURA DE VENTA DE TALONARIO O DE PAPEL', etiquetaCodigo: 'CUDE',
+        encabezado: null, numeroCompleto: 'CONT501', qrDataUrl: 'data:image/png;base64,QR',
+      }));
+      expect(facturaPdf.generarQrDataUrl).toHaveBeenCalledWith('NumFac: CONT501');
+      expect(contenido.electronica!.resolucion).toContain('18764000009999');
+      expect(contenido.electronica!.fabricanteSoftware).toMatch(/^Software: AURA/);
+      expect(contenido.numero).toBe('CONT501');
+    });
+
+    it('el emisor es el negocio, no el fabricante del software', async () => {
+      process.env.AURA_FABRICANTE_NOMBRE = 'Sebastian Torres';
+      process.env.AURA_FABRICANTE_NIT = '1047444002-2';
+      ventas.findOne.mockResolvedValue(ventaElectronica);
+      documentos.findOne.mockResolvedValue(docContingencia);
+      const contenido = await service.obtenerContenido('venta-1');
+      expect(contenido.electronica!.emisor).toEqual(expect.objectContaining({ razonSocial: 'Tienda S.A.S.', nitConDv: expect.stringMatching(/^900123456-/) }));
+      expect(JSON.stringify(contenido.electronica!.emisor)).not.toContain('1047444002');
+      expect(contenido.electronica!.fabricanteSoftware).toBe('Software: AURA — fabricante Sebastian Torres (NIT 1047444002-2)');
+    });
+
+    it('rechazada por la DIAN: el papel sigue siendo válido (sin encabezado de rechazo) y conserva el QR', async () => {
+      ventas.findOne.mockResolvedValue(ventaElectronica);
+      documentos.findOne.mockResolvedValue({ ...docContingencia, estado: EstadoDocumentoElectronico.RECHAZADO });
+      const contenido = await service.obtenerContenido('venta-1');
+      expect(contenido.electronica!.encabezado).toBeNull();
+      expect(contenido.electronica!.qrDataUrl).toBe('data:image/png;base64,QR');
+    });
+
+    it('en sandbox: encabezado de documento de prueba', async () => {
+      ventas.findOne.mockResolvedValue(ventaElectronica);
+      documentos.findOne.mockResolvedValue({ ...docContingencia, ambiente: 'SANDBOX' });
+      expect((await service.obtenerContenido('venta-1')).electronica!.encabezado).toBe('DOCUMENTO DE PRUEBA — SIN VALIDEZ FISCAL');
+    });
+
+    it('factura electrónica normal: título de siempre, CUFE y sin fabricante', async () => {
+      ventas.findOne.mockResolvedValue(ventaElectronica);
+      documentos.findOne.mockResolvedValue(docAceptado);
+      expect((await service.obtenerContenido('venta-1')).electronica).toEqual(expect.objectContaining({
+        contingencia: false, titulo: 'FACTURA ELECTRÓNICA DE VENTA', etiquetaCodigo: 'CUFE', fabricanteSoftware: null,
+      }));
+    });
+  });
+
   describe('recibo de caja de un abono', () => {
     const abono = {
       id: 'abono-1', monto: 45_000, metodoPago: 'Nequi', referenciaPago: 'NQ-99', numeroRecibo: 'RC-7',

@@ -15,6 +15,8 @@ import { Alerta } from '../alertas/entities/alerta.entity';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { TipoAlerta } from '../common/enums/alerta.enum';
 import { Venta } from '../ventas/entities/venta.entity';
+import { ContingenciaService } from './contingencia.service';
+import { AlegraNoDisponibleError } from './alegra-client.service';
 
 type AlegraClientMock = {
   crearCompania: jest.Mock;
@@ -101,6 +103,15 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
   let alertasRepo: { findOne: jest.Mock; create: jest.Mock; save: jest.Mock };
   let realtimeGateway: { emitToNegocio: jest.Mock };
   let qbWhereMock: { where: jest.Mock; andWhere: jest.Mock; getMany: jest.Mock };
+  let contingencia: {
+    periodoActivo: jest.Mock;
+    asignarNumero: jest.Mock;
+    registrarIndisponibilidad: jest.Mock;
+    registrarDisponibilidad: jest.Mock;
+    estaAbierto: jest.Mock;
+    periodosAutomaticosAbiertos: jest.Mock;
+    finalizar: jest.Mock;
+  };
 
   beforeEach(async () => {
     habilitacionRepo = { findOne: jest.fn(), findOneOrFail: jest.fn(), create: jest.fn((x) => x), save: jest.fn(async (x) => x) };
@@ -145,6 +156,15 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
     suscripcionesService = { registrarConsumo: jest.fn(), miEstado: jest.fn() };
     alertasRepo = { findOne: jest.fn().mockResolvedValue(null), create: jest.fn((x) => x), save: jest.fn(async (x) => x) };
     realtimeGateway = { emitToNegocio: jest.fn() };
+    contingencia = {
+      periodoActivo: jest.fn().mockResolvedValue(null),
+      asignarNumero: jest.fn(),
+      registrarIndisponibilidad: jest.fn().mockResolvedValue(undefined),
+      registrarDisponibilidad: jest.fn().mockResolvedValue(undefined),
+      estaAbierto: jest.fn().mockResolvedValue(false),
+      periodosAutomaticosAbiertos: jest.fn().mockResolvedValue([]),
+      finalizar: jest.fn().mockResolvedValue(undefined),
+    };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -159,6 +179,7 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
         { provide: RealtimeGateway, useValue: realtimeGateway },
         { provide: FacturaPdfService, useValue: facturaPdf },
         { provide: LogoNegocioService, useValue: logoNegocio },
+        { provide: ContingenciaService, useValue: contingencia },
       ],
     }).compile();
 
@@ -1210,6 +1231,180 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
     it('resumenPorVentas no consulta la DB si no hay ventas', async () => {
       expect((await service.resumenPorVentas('neg-1', [])).size).toBe(0);
       expect(documentosRepo.find).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('contingencia (fase 6a)', () => {
+    const HAB = {
+      ...HABILITACION_CON_RESOLUCION,
+      contingenciaPrefijo: 'CONT',
+      contingenciaResolucionNumero: '18764000009999',
+      contingenciaFechaInicio: '2026-01-01',
+      contingenciaFechaFin: '2028-01-01',
+      contingenciaRangoDesde: 1,
+      contingenciaRangoHasta: 5000,
+    };
+    const VENTA = { id: 'venta-1', negocioId: 'neg-1', tipoComprobanteEmitido: 'FACTURA_ELECTRONICA' };
+
+    beforeEach(() => {
+      habilitacionRepo.findOne.mockResolvedValue({ ...HAB });
+      ventasRepo.findOneOrFail.mockResolvedValue(
+        ventaDePrueba({ negocioId: 'neg-1', subtotal: 10000, impuestoTotal: 1900, total: 11900 } as never),
+      );
+      negociosRepo.findOneOrFail.mockResolvedValue({ nit: '900123456', nombre: 'Tienda' });
+    });
+
+    it('con un período abierto no llama a Alegra: congela la resolución de contingencia y deja PENDIENTE', async () => {
+      contingencia.periodoActivo.mockResolvedValue({ id: 'per-1', fin: null });
+      contingencia.asignarNumero.mockResolvedValue({ numero: 501, habilitacion: { ...HAB } });
+
+      await service.emitirDocumento(VENTA);
+
+      expect(alegraClient.crearFactura).not.toHaveBeenCalled();
+      const guardado = documentosRepo.save.mock.calls.at(-1)[0];
+      expect(guardado).toEqual(
+        expect.objectContaining({
+          periodoContingenciaId: 'per-1',
+          transcritaDeTalonario: false,
+          estado: 'PENDIENTE',
+          prefijo: 'CONT',
+          numero: 501,
+          numeroCompleto: 'CONT501',
+          resolucionNumero: '18764000009999',
+          resolucionRangoDesde: 1,
+          resolucionRangoHasta: 5000,
+          emisorNit: '900123456',
+        }),
+      );
+      expect(guardado.fechaEmision).toBeInstanceOf(Date);
+      expect(guardado.qrContenido).toContain('NumFac: CONT501');
+      expect(guardado.qrContenido).toContain('NitFac: 900123456');
+      expect(realtimeGateway.emitToNegocio).toHaveBeenCalledWith('neg-1', 'documentos-electronicos:cambio', expect.anything());
+    });
+
+    it('una transcripción de talonario usa el número y la fecha del papel y no asigna número', async () => {
+      const fecha = new Date('2026-09-28T15:00:00Z');
+      await service.emitirDocumento(VENTA, { talonario: { numero: 77, fecha, periodoId: 'per-9' } });
+
+      expect(contingencia.asignarNumero).not.toHaveBeenCalled();
+      expect(alegraClient.crearFactura).not.toHaveBeenCalled();
+      expect(documentosRepo.save.mock.calls.at(-1)[0]).toEqual(
+        expect.objectContaining({
+          periodoContingenciaId: 'per-9',
+          transcritaDeTalonario: true,
+          numero: 77,
+          numeroCompleto: 'CONT77',
+          fechaEmision: fecha,
+        }),
+      );
+    });
+
+    it('transmite un documento de contingencia con documentType "04", su número fijo y la resolución congelada', async () => {
+      const documento = {
+        id: 'doc-1',
+        negocioId: 'neg-1',
+        ventaId: 'venta-1',
+        tipo: 'FACTURA',
+        estado: 'PENDIENTE',
+        intentos: 0,
+        periodoContingenciaId: 'per-1',
+        prefijo: 'CONT',
+        numero: 501,
+        numeroCompleto: 'CONT501',
+        fechaEmision: new Date('2026-09-28T15:00:00Z'),
+        resolucionNumero: '18764000009999',
+        resolucionFechaInicio: '2026-01-01',
+        resolucionFechaFin: '2028-01-01',
+        resolucionRangoDesde: 1,
+        resolucionRangoHasta: 5000,
+      } as unknown as DocumentoElectronico;
+      alegraClient.crearFactura.mockResolvedValue({
+        alegraDocumentId: 'inv-9',
+        cufe: 'cude-1',
+        status: 'SENT',
+        legalStatus: 'ACCEPTED',
+        isFinal: true,
+        fecha: '2026-09-29T10:00:00-05:00',
+      });
+
+      await service.intentarEmitir(documento, { ...HAB, siguienteNumero: 40 } as never);
+
+      const params = alegraClient.crearFactura.mock.calls[0][0];
+      expect(params.documentType).toBe('04');
+      expect(params.number).toBe(501);
+      expect(params.additionalDocumentReference).toEqual({ number: 'CONT501', issueDate: '2026-09-28' });
+      expect(params.invoicePeriod).toEqual({ startDate: '2026-09-28', endDate: '2026-09-28' });
+      expect(params.resolution).toEqual(
+        expect.objectContaining({ prefix: 'CONT', resolutionNumber: '18764000009999', technicalKey: '' }),
+      );
+      expect(documento.estado).toBe('ACEPTADO');
+      expect(documento.cufe).toBe('cude-1');
+      // La fecha de la factura de papel no se pisa con la de transmisión, y el consecutivo de la FE no avanza.
+      expect(documento.fechaEmision).toEqual(new Date('2026-09-28T15:00:00Z'));
+      expect(habilitacionRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('una indisponibilidad de Alegra en una emisión normal la registra', async () => {
+      alegraClient.crearFactura.mockRejectedValue(new AlegraNoDisponibleError('fetch failed'));
+      const documento = {
+        id: 'doc-2', negocioId: 'neg-1', ventaId: 'venta-1', estado: 'PENDIENTE', intentos: 0, periodoContingenciaId: null,
+      } as unknown as DocumentoElectronico;
+      await service.intentarEmitir(documento, { ...HAB } as never);
+      expect(contingencia.registrarIndisponibilidad).toHaveBeenCalled();
+    });
+
+    it('un rechazo no cuenta como indisponibilidad; una respuesta cualquiera corta la racha', async () => {
+      alegraClient.crearFactura.mockResolvedValue({ alegraDocumentId: 'inv-1', status: 'SENT', legalStatus: 'REJECTED', isFinal: true });
+      const documento = {
+        id: 'doc-3', negocioId: 'neg-1', ventaId: 'venta-1', estado: 'PENDIENTE', intentos: 0, periodoContingenciaId: null,
+      } as unknown as DocumentoElectronico;
+      await service.intentarEmitir(documento, { ...HAB } as never);
+      expect(contingencia.registrarIndisponibilidad).not.toHaveBeenCalled();
+      expect(contingencia.registrarDisponibilidad).toHaveBeenCalled();
+    });
+
+    it('reconciliarPendientes no transmite documentos de un período todavía abierto', async () => {
+      documentosRepo.find.mockResolvedValue([{ id: 'doc-1', negocioId: 'neg-1', estado: 'PENDIENTE', periodoContingenciaId: 'per-1' }]);
+      contingencia.estaAbierto.mockResolvedValue(true);
+      await service.reconciliarPendientes();
+      expect(alegraClient.crearFactura).not.toHaveBeenCalled();
+    });
+
+    it('reconciliarPendientes transmite los de un período ya cerrado', async () => {
+      documentosRepo.find.mockResolvedValue([
+        {
+          id: 'doc-1', negocioId: 'neg-1', ventaId: 'venta-1', estado: 'PENDIENTE', intentos: 0, periodoContingenciaId: 'per-1',
+          prefijo: 'CONT', numero: 3, numeroCompleto: 'CONT3', fechaEmision: new Date('2026-09-28T15:00:00Z'),
+        },
+      ]);
+      contingencia.estaAbierto.mockResolvedValue(false);
+      await service.reconciliarPendientes();
+      expect(alegraClient.crearFactura).toHaveBeenCalledWith(expect.objectContaining({ documentType: '04', number: 3 }));
+    });
+
+    it('reintentar un documento de un período abierto es 400', async () => {
+      documentosRepo.findOne.mockResolvedValue({ id: 'doc-1', negocioId: 'neg-1', estado: 'PENDIENTE', periodoContingenciaId: 'per-1' });
+      contingencia.estaAbierto.mockResolvedValue(true);
+      await expect(service.reintentarFactura('doc-1', 'neg-1')).rejects.toThrow('contingencia sigue abierta');
+    });
+
+    it('verificarFinContingenciasAutomaticas cierra un período automático si Alegra ya responde', async () => {
+      contingencia.periodosAutomaticosAbiertos.mockResolvedValue([{ id: 'per-1', negocioId: 'neg-1' }]);
+      alegraClient.consultarCompania.mockResolvedValue({ posAutorizado: true });
+      await service.verificarFinContingenciasAutomaticas();
+      expect(contingencia.finalizar).toHaveBeenCalledWith('neg-1', null);
+    });
+
+    it('verificarFinContingenciasAutomaticas deja abierto si Alegra sigue caído', async () => {
+      contingencia.periodosAutomaticosAbiertos.mockResolvedValue([{ id: 'per-1', negocioId: 'neg-1' }]);
+      alegraClient.consultarCompania.mockRejectedValue(new Error('fetch failed'));
+      await service.verificarFinContingenciasAutomaticas();
+      expect(contingencia.finalizar).not.toHaveBeenCalled();
+    });
+
+    it('la alerta de 48 h por created_at excluye los documentos de contingencia (tienen su propio plazo)', async () => {
+      await service.alertarDocumentosVencidos();
+      expect(qbWhereMock.andWhere).toHaveBeenCalledWith('doc.periodo_contingencia_id IS NULL');
     });
   });
 });

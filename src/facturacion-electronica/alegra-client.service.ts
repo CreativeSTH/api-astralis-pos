@@ -125,6 +125,23 @@ export interface ResolutionAlegra {
   technicalKey: string;
 }
 
+/**
+ * Alegra no respondió (red caída, más de TIMEOUT_EMISION_MS, HTTP ≥ 500 o mantenimiento DIAN EPR5xx).
+ * Es la única falla que cuenta para entrar en contingencia automática (fase 6a) — un rechazo o un 4xx
+ * de validación no: ahí el problema es el documento, no la disponibilidad. Extiende BadGatewayException
+ * para que todo el código que ya atrapa errores de Alegra siga funcionando igual.
+ */
+export class AlegraNoDisponibleError extends BadGatewayException {}
+
+export const TIMEOUT_EMISION_MS = 20_000;
+
+/**
+ * "Contingencia Facturador Electrónico" en la API de Alegra/Alanube = factura tipo 03 de la DIAN
+ * (transcripción de una factura de talonario o de papel). OJO: en Alegra "03" es MANDATO — nunca usar
+ * el código DIAN acá. Confirmado con el MCP de Alanube (`explain_co_field documentType`, 2026-09-29).
+ */
+export const DOCUMENT_TYPE_CONTINGENCIA_FACTURADOR = '04';
+
 @Injectable()
 export class AlegraClientService {
   /**
@@ -279,6 +296,10 @@ export class AlegraClientService {
     items: ItemFacturaAlegra[];
     payments: PaymentAlegra[];
     totalAmounts: TotalAmountsFacturaAlegra;
+    /** '01' estándar (default) o DOCUMENT_TYPE_CONTINGENCIA_FACTURADOR para transcribir una factura de papel. */
+    documentType?: '01' | '04';
+    /** Obligatorio con '04': número (con prefijo) y fecha ('YYYY-MM-DD') de la factura de papel entregada. */
+    additionalDocumentReference?: { number: string; issueDate: string };
   }): Promise<{
     alegraDocumentId: string;
     cufe?: string;
@@ -297,23 +318,32 @@ export class AlegraClientService {
     urlXml?: string;
     urlZip?: string;
   }> {
-    const res = await fetch(`${params.baseUrl}/invoices`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${params.token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        documentType: '01',
-        number: params.number,
-        invoicePeriod: params.invoicePeriod,
-        resolution: params.resolution,
-        company: { id: params.companyId, regimeCode: params.regimeCode },
-        customer: params.customer,
-        items: params.items,
-        payments: params.payments,
-        totalAmounts: params.totalAmounts,
-      }),
-    });
+    let res: Response;
+    try {
+      res = await fetch(`${params.baseUrl}/invoices`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${params.token}`, 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(TIMEOUT_EMISION_MS),
+        body: JSON.stringify({
+          documentType: params.documentType ?? '01',
+          number: params.number,
+          invoicePeriod: params.invoicePeriod,
+          resolution: params.resolution,
+          company: { id: params.companyId, regimeCode: params.regimeCode },
+          customer: params.customer,
+          items: params.items,
+          payments: params.payments,
+          totalAmounts: params.totalAmounts,
+          ...(params.additionalDocumentReference ? { additionalDocumentReference: params.additionalDocumentReference } : {}),
+        }),
+      });
+    } catch (error) {
+      throw new AlegraNoDisponibleError(`Alegra no respondió: ${error instanceof Error ? error.message : String(error)}`);
+    }
     if (!res.ok) {
-      throw new BadGatewayException(await extraerMensajeError(res, 'Alegra rechazó la creación de la factura'));
+      const mensaje = await extraerMensajeError(res, 'Alegra rechazó la creación de la factura');
+      if (res.status >= 500 || mensaje.includes('EPR5')) throw new AlegraNoDisponibleError(mensaje);
+      throw new BadGatewayException(mensaje);
     }
     const data = await res.json();
     const invoice = data.invoice;

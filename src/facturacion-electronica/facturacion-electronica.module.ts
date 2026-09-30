@@ -6,8 +6,12 @@ import { FacturacionElectronicaCronService } from './facturacion-electronica-cro
 import { AlegraClientService } from './alegra-client.service';
 import { FacturaPdfService } from './factura-pdf.service';
 import { LogoNegocioService } from './logo-negocio.service';
+import { ContingenciaService } from './contingencia.service';
+import { ContingenciaController } from './contingencia.controller';
+import { CartaContingenciaPdfService } from './carta-contingencia-pdf.service';
 import { HabilitacionFacturacionElectronica } from './entities/habilitacion-facturacion-electronica.entity';
 import { DocumentoElectronico } from './entities/documento-electronico.entity';
+import { PeriodoContingencia } from './entities/periodo-contingencia.entity';
 import { Negocio } from '../negocios/entities/negocio.entity';
 import { Alerta } from '../alertas/entities/alerta.entity';
 import { Venta } from '../ventas/entities/venta.entity';
@@ -20,6 +24,7 @@ import { RealtimeModule } from '../realtime/realtime.module';
     TypeOrmModule.forFeature([
       HabilitacionFacturacionElectronica,
       DocumentoElectronico,
+      PeriodoContingencia,
       Negocio,
       Alerta,
       Venta,
@@ -28,14 +33,16 @@ import { RealtimeModule } from '../realtime/realtime.module';
     SuscripcionesModule,
     RealtimeModule,
   ],
-  controllers: [FacturacionElectronicaController],
+  controllers: [FacturacionElectronicaController, ContingenciaController],
   providers: [
     FacturacionElectronicaService,
     AlegraClientService,
     FacturacionElectronicaCronService,
     FacturaPdfService,
     LogoNegocioService,
+    ContingenciaService,
+    CartaContingenciaPdfService,
   ],
-  exports: [FacturacionElectronicaService, FacturaPdfService],
+  exports: [FacturacionElectronicaService, FacturaPdfService, ContingenciaService],
 })
 export class FacturacionElectronicaModule {}

@@ -6,22 +6,27 @@ import { Negocio } from '../negocios/entities/negocio.entity';
 import { HabilitacionFacturacionElectronica } from '../facturacion-electronica/entities/habilitacion-facturacion-electronica.entity';
 import { OrigenObligacion, ResponsabilidadIva, TipoPersona } from '../negocios/entities/perfil-fiscal.enum';
 import { EstadoHabilitacion } from '../facturacion-electronica/entities/estado-habilitacion.enum';
+import { PeriodoContingencia } from '../facturacion-electronica/entities/periodo-contingencia.entity';
+import { IsNull } from 'typeorm';
 
 describe('PoliticaFacturacionService', () => {
   let service: PoliticaFacturacionService;
   let negocios: { findOne: jest.Mock; save: jest.Mock };
   let habilitaciones: { findOne: jest.Mock };
+  let periodos: { count: jest.Mock };
   let negocio: Record<string, unknown>;
 
   beforeEach(async () => {
     negocio = { id: 'neg-1', tipoPersona: null, responsabilidadIva: null, perfilFiscalDeclaradoEn: null, obligadoDesde: null, origenObligacion: null };
     negocios = { findOne: jest.fn(async () => negocio), save: jest.fn(async (n) => n) };
     habilitaciones = { findOne: jest.fn().mockResolvedValue(null) };
+    periodos = { count: jest.fn().mockResolvedValue(0) };
     const moduleRef = await Test.createTestingModule({
       providers: [
         PoliticaFacturacionService,
         { provide: getRepositoryToken(Negocio), useValue: negocios },
         { provide: getRepositoryToken(HabilitacionFacturacionElectronica), useValue: habilitaciones },
+        { provide: getRepositoryToken(PeriodoContingencia), useValue: periodos },
       ],
     }).compile();
     service = moduleRef.get(PoliticaFacturacionService);
@@ -32,6 +37,20 @@ describe('PoliticaFacturacionService', () => {
     expect((await service.estado('neg-1')).modo).toBe('ELECTRONICA');
     expect(negocios.findOne).toHaveBeenCalledWith({ where: { id: 'neg-1' } });
     expect(habilitaciones.findOne).toHaveBeenCalledWith({ where: { negocioId: 'neg-1' } });
+  });
+
+  it('estado informa si hay una contingencia abierta (fase 6a)', async () => {
+    expect((await service.estado('neg-1')).contingenciaActiva).toBe(false);
+    periodos.count.mockResolvedValue(1);
+    expect((await service.estado('neg-1')).contingenciaActiva).toBe(true);
+    expect(periodos.count).toHaveBeenCalledWith({ where: { negocioId: 'neg-1', fin: IsNull() } });
+  });
+
+  it('declararPerfil también devuelve contingenciaActiva', async () => {
+    const estado = await service.declararPerfil('neg-1', 'usr-1', {
+      tipoPersona: TipoPersona.NATURAL, responsabilidadIva: ResponsabilidadIva.NO_RESPONSABLE, aceptaDeclaracion: true,
+    });
+    expect(estado.contingenciaActiva).toBe(false);
   });
 
   it('estado de un negocio inexistente → 404', async () => {

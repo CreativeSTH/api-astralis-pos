@@ -14,6 +14,8 @@ import { EstadoHabilitacion } from './entities/estado-habilitacion.enum';
 import { EstadoDocumentoElectronico } from './entities/estado-documento-electronico.enum';
 import {
   AlegraClientService,
+  AlegraNoDisponibleError,
+  DOCUMENT_TYPE_CONTINGENCIA_FACTURADOR,
   CustomerAlegra,
   DocumentoAsociadoAlegra,
   ItemFacturaAlegra,
@@ -26,6 +28,8 @@ import { CargarResolucionDto } from './dto/cargar-resolucion.dto';
 import { FiltrosFacturasDto } from './dto/filtros-facturas.dto';
 import { FacturaPdfService } from './factura-pdf.service';
 import { LogoNegocioService } from './logo-negocio.service';
+import { ContingenciaService } from './contingencia.service';
+import { contenidoQrContingencia, resolucionContingenciaDesdeDocumento } from './contingencia.util';
 import { encriptar, desencriptar } from '../common/utils/cifrado';
 import { Negocio } from '../negocios/entities/negocio.entity';
 import { SuscripcionesService } from '../suscripciones/suscripciones.service';
@@ -115,6 +119,7 @@ export class FacturacionElectronicaService {
     private readonly realtimeGateway: RealtimeGateway,
     private readonly facturaPdf: FacturaPdfService,
     private readonly logoNegocio: LogoNegocioService,
+    private readonly contingencia: ContingenciaService,
   ) {}
 
   async obtenerOCrearHabilitacion(negocioId: string): Promise<HabilitacionFacturacionElectronica> {
@@ -478,13 +483,30 @@ export class FacturacionElectronicaService {
    * nunca debe lanzar una excepción que se propague hacia arriba, por eso el
    * try/catch de intentarEmitir envuelve toda la lógica real de red.
    */
-  async emitirDocumento(venta: { id: string; negocioId: string; tipoComprobanteEmitido?: string }): Promise<void> {
+  async emitirDocumento(
+    venta: { id: string; negocioId: string; tipoComprobanteEmitido?: string },
+    opciones: { talonario?: { numero: number; fecha: Date; periodoId: string } } = {},
+  ): Promise<void> {
     // La política de facturación ya decidió el comprobante al crear la venta: solo una venta
     // FACTURA_ELECTRONICA lleva documento electrónico (un recibo nunca genera un segundo documento).
     if (venta.tipoComprobanteEmitido !== TipoComprobanteVenta.FACTURA_ELECTRONICA) return;
 
     const habilitacion = await this.habilitacionRepository.findOne({ where: { negocioId: venta.negocioId } });
     if (!habilitacion || habilitacion.estado !== EstadoHabilitacion.HABILITADO) return;
+
+    // Fase 6a: factura de papel con numeración de contingencia — no se llama a Alegra ahora; se
+    // transmite (documentType "04") cuando se cierra el período.
+    if (opciones.talonario) {
+      const { numero, fecha, periodoId } = opciones.talonario;
+      await this.registrarDocumentoContingencia(venta.id, habilitacion, periodoId, numero, fecha, true);
+      return;
+    }
+    const periodo = await this.contingencia.periodoActivo(venta.negocioId);
+    if (periodo) {
+      const { numero, habilitacion: conNumero } = await this.contingencia.asignarNumero(venta.negocioId);
+      await this.registrarDocumentoContingencia(venta.id, conNumero, periodo.id, numero, new Date(), false);
+      return;
+    }
 
     const documento = this.documentosRepository.create({
       negocioId: venta.negocioId,
@@ -619,6 +641,7 @@ export class FacturacionElectronicaService {
     documento: DocumentoElectronico,
     habilitacion: HabilitacionFacturacionElectronica,
   ): Promise<void> {
+    if (documento.periodoContingenciaId) return this.transmitirContingencia(documento, habilitacion);
     const token = process.env.ALEGRA_RESELLER_TOKEN!;
     const baseUrl = baseUrlPara(habilitacion.ambiente);
 
@@ -663,23 +686,11 @@ export class FacturacionElectronicaService {
       // rechace este intento con un motivo real (ver abajo).
       documento.errorMensaje = undefined;
       documento.erroresDetalle = null;
+      this.aplicarEstadoEmision(documento, resultado);
 
-      if (!resultado.isFinal) {
-        // DIAN intermitente — no reenviar en el próximo ciclo, `reconciliarPendientes`
-        // consulta el `trackingReference` guardado en vez de reintentar el envío.
-        documento.trackingReference = resultado.trackingReference ?? null;
-        documento.estado = EstadoDocumentoElectronico.PENDIENTE;
-      } else if (resultado.legalStatus === 'ACCEPTED') {
-        documento.estado = EstadoDocumentoElectronico.ACEPTADO;
-      } else if (resultado.legalStatus === 'ACCEPTED_WITH_OBSERVATIONS') {
-        documento.estado = EstadoDocumentoElectronico.ACEPTADO_CON_OBSERVACIONES;
-        documento.erroresDetalle = resultado.errorMessages ?? null;
-      } else if (resultado.legalStatus === 'REJECTED') {
-        documento.estado = EstadoDocumentoElectronico.RECHAZADO;
-        documento.errorMensaje = resultado.governmentResponseMessage;
-        documento.erroresDetalle = resultado.errorMessages ?? null;
-      }
-
+      // Alegra respondió: se corta la racha de indisponibilidad (fase 6a). Antes del save de abajo,
+      // que guarda la misma entidad con los dos cambios.
+      await this.contingencia.registrarDisponibilidad(habilitacion);
       // El envío llegó a Alegra (no lanzó) — el número quedó consumido ante la DIAN,
       // así que el correlativo avanza sin importar si terminó ACEPTADO o RECHAZADO.
       habilitacion.siguienteNumero = numero + 1;
@@ -689,6 +700,14 @@ export class FacturacionElectronicaService {
       // EPR5xx (mantenimiento DIAN) no cuenta como fallo real — se resta el intento que se acaba de sumar arriba.
       if (documento.errorMensaje?.includes('EPR5')) {
         documento.intentos -= 1;
+      }
+      // Solo la indisponibilidad (no un rechazo ni un 4xx) cuenta para la contingencia automática.
+      if (error instanceof AlegraNoDisponibleError) {
+        await this.contingencia
+          .registrarIndisponibilidad(habilitacion)
+          .catch((e: unknown) =>
+            this.logger.error('No se pudo registrar la indisponibilidad de Alegra', e instanceof Error ? e.stack : String(e)),
+          );
       }
     }
 
@@ -701,6 +720,105 @@ export class FacturacionElectronicaService {
       habilitacion.ambiente === 'PRODUCCION'
     ) {
       await this.suscripcionesService.registrarConsumo(documento.negocioId, 'documentosDianPorMes');
+    }
+  }
+
+  /** Estado del documento según la respuesta de Alegra — compartido por la emisión normal y la de contingencia. */
+  private aplicarEstadoEmision(
+    documento: DocumentoElectronico,
+    resultado: {
+      isFinal: boolean;
+      legalStatus?: string;
+      trackingReference?: Record<string, unknown>;
+      governmentResponseMessage?: string;
+      errorMessages?: string[];
+    },
+  ): void {
+    if (!resultado.isFinal) {
+      // DIAN intermitente — no reenviar en el próximo ciclo, `reconciliarPendientes`
+      // consulta el `trackingReference` guardado en vez de reintentar el envío.
+      documento.trackingReference = resultado.trackingReference ?? null;
+      documento.estado = EstadoDocumentoElectronico.PENDIENTE;
+    } else if (resultado.legalStatus === 'ACCEPTED') {
+      documento.estado = EstadoDocumentoElectronico.ACEPTADO;
+    } else if (resultado.legalStatus === 'ACCEPTED_WITH_OBSERVATIONS') {
+      documento.estado = EstadoDocumentoElectronico.ACEPTADO_CON_OBSERVACIONES;
+      documento.erroresDetalle = resultado.errorMessages ?? null;
+    } else if (resultado.legalStatus === 'REJECTED') {
+      documento.estado = EstadoDocumentoElectronico.RECHAZADO;
+      documento.errorMensaje = resultado.governmentResponseMessage;
+      documento.erroresDetalle = resultado.errorMessages ?? null;
+    }
+  }
+
+  /**
+   * Transcripción de una factura de papel (factura tipo 03 de la DIAN = `documentType "04"` en Alegra).
+   * Número y resolución salen del snapshot del documento (los del papel entregado), nunca de la habilitación
+   * actual; `fechaEmision` sigue siendo la del papel. No avanza el consecutivo de la factura electrónica.
+   */
+  private async transmitirContingencia(
+    documento: DocumentoElectronico,
+    habilitacion: HabilitacionFacturacionElectronica,
+  ): Promise<void> {
+    documento.intentos += 1;
+    documento.ultimoIntentoEn = new Date();
+    try {
+      const venta = await this.ventasRepository.findOneOrFail({
+        where: { id: documento.ventaId },
+        relations: { items: true, pagos: true, cliente: true, cuotas: true },
+      });
+      const diaPapel = diaColombia(documento.fechaEmision!);
+      const resultado = await this.alegraClient.crearFactura({
+        token: process.env.ALEGRA_RESELLER_TOKEN!,
+        baseUrl: baseUrlPara(habilitacion.ambiente),
+        companyId: habilitacion.alegraCompanyId!,
+        documentType: DOCUMENT_TYPE_CONTINGENCIA_FACTURADOR,
+        number: documento.numero!,
+        additionalDocumentReference: { number: documento.numeroCompleto!, issueDate: diaPapel },
+        regimeCode: REGIME_CODE_RESPONSABLE_IVA,
+        invoicePeriod: { startDate: diaPapel, endDate: diaPapel },
+        resolution: resolucionContingenciaDesdeDocumento(documento),
+        customer: this.mapearCustomerAlegra(venta),
+        items: this.mapearItemsAlegra(venta),
+        payments: this.mapearPagosAlegra(venta),
+        totalAmounts: this.mapearTotalesAlegra(venta),
+      });
+      documento.alegraDocumentId = resultado.alegraDocumentId;
+      // Sin `fecha`: la de la factura de papel no se pisa con la de transmisión.
+      this.aplicarDatosAlegra(documento, { ...resultado, fecha: undefined });
+      documento.errorMensaje = undefined;
+      documento.erroresDetalle = null;
+      this.aplicarEstadoEmision(documento, resultado);
+    } catch (error) {
+      documento.errorMensaje = error instanceof Error ? error.message : String(error);
+    }
+    await this.documentosRepository.save(documento);
+    this.realtimeGateway.emitToNegocio(documento.negocioId, 'documentos-electronicos:cambio', documento);
+    if (
+      (documento.estado === EstadoDocumentoElectronico.ACEPTADO ||
+        documento.estado === EstadoDocumentoElectronico.ACEPTADO_CON_OBSERVACIONES) &&
+      habilitacion.ambiente === 'PRODUCCION'
+    ) {
+      await this.suscripcionesService.registrarConsumo(documento.negocioId, 'documentosDianPorMes');
+    }
+  }
+
+  /** Cron: un período AUTOMATICO se cierra solo cuando Alegra vuelve a responder (los MANUAL los cierra el administrador). */
+  async verificarFinContingenciasAutomaticas(): Promise<void> {
+    for (const periodo of await this.contingencia.periodosAutomaticosAbiertos()) {
+      const habilitacion = await this.habilitacionRepository.findOne({ where: { negocioId: periodo.negocioId } });
+      if (!habilitacion?.alegraCompanyId) continue;
+      try {
+        await this.alegraClient.consultarCompania({
+          token: process.env.ALEGRA_RESELLER_TOKEN!,
+          baseUrl: baseUrlPara(habilitacion.ambiente),
+          companyId: habilitacion.alegraCompanyId,
+          tipo: 'invoices',
+        });
+      } catch {
+        continue; // sigue caído
+      }
+      await this.contingencia.finalizar(periodo.negocioId, null);
     }
   }
 
@@ -741,6 +859,10 @@ export class FacturacionElectronicaService {
       if (documento.ultimoIntentoEn && documento.ultimoIntentoEn > haceCincoMin) continue;
       const habilitacion = await this.habilitacionRepository.findOne({ where: { negocioId: documento.negocioId } });
       if (!habilitacion || habilitacion.estado !== EstadoHabilitacion.HABILITADO) continue;
+      // Fase 6a: la transcripción se transmite recién cuando se supera el inconveniente (período cerrado).
+      if (documento.periodoContingenciaId && (await this.contingencia.estaAbierto(documento.periodoContingenciaId))) {
+        continue;
+      }
 
       if (documento.trackingReference) {
         await this.consultarPendiente(documento, habilitacion);
@@ -804,6 +926,8 @@ export class FacturacionElectronicaService {
       .createQueryBuilder('doc')
       .where('doc.estado = :estado', { estado: EstadoDocumentoElectronico.PENDIENTE })
       .andWhere(`doc.created_at < NOW() - INTERVAL '48 hours'`)
+      // Los de contingencia tienen su propio plazo (48 h desde el fin del período): ContingenciaService.alertarPlazos.
+      .andWhere('doc.periodo_contingencia_id IS NULL')
       .getMany();
 
     for (const documento of vencidos) {
@@ -849,7 +973,7 @@ export class FacturacionElectronicaService {
 
   async reintentarPorVenta(ventaId: string, negocioId: string): Promise<DocumentoElectronico> {
     const documento = await this.documentoDelNegocioOFallar(ventaId, negocioId);
-    this.exigirReintentable(documento);
+    await this.exigirReintentable(documento);
     const habilitacion = await this.habilitacionRepository.findOneOrFail({ where: { negocioId: documento.negocioId } });
     await this.intentarEmitir(documento, habilitacion);
     return this.documentoDelNegocioOFallar(ventaId, negocioId);
@@ -972,7 +1096,7 @@ export class FacturacionElectronicaService {
 
   async reintentarFactura(id: string, negocioId: string): Promise<DocumentoElectronico> {
     const documento = await this.facturaDelNegocioOFallar(id, negocioId);
-    this.exigirReintentable(documento);
+    await this.exigirReintentable(documento);
     const habilitacion = await this.habilitacionRepository.findOneOrFail({ where: { negocioId } });
     await this.intentarEmitir(documento, habilitacion);
     return this.facturaDelNegocioOFallar(id, negocioId);
@@ -1001,7 +1125,10 @@ export class FacturacionElectronicaService {
    * factura real con un número nuevo para la misma venta. Solo se reintenta lo rechazado o lo
    * que nunca llegó a Alegra (pendiente sin `trackingReference`).
    */
-  private exigirReintentable(documento: DocumentoElectronico): void {
+  private async exigirReintentable(documento: DocumentoElectronico): Promise<void> {
+    if (documento.periodoContingenciaId && (await this.contingencia.estaAbierto(documento.periodoContingenciaId))) {
+      throw new BadRequestException('La contingencia sigue abierta: esta factura se transmite al terminarla');
+    }
     const reintentable =
       documento.estado === EstadoDocumentoElectronico.RECHAZADO ||
       documento.estado === EstadoDocumentoElectronico.ERROR ||
@@ -1056,6 +1183,48 @@ export class FacturacionElectronicaService {
     documento.emisorCiudad = habilitacion.ciudad ?? negocio.ciudadNombre;
     documento.nombreCliente = venta.nombreCliente;
     documento.total = Number(venta.total);
+  }
+
+  /** Factura de talonario o de papel (Res. 000227, art. 1.5.1.2.2.2): snapshot con la resolución de contingencia y QR provisional. */
+  private async registrarDocumentoContingencia(
+    ventaId: string,
+    habilitacion: HabilitacionFacturacionElectronica,
+    periodoId: string,
+    numero: number,
+    fecha: Date,
+    transcritaDeTalonario: boolean,
+  ): Promise<void> {
+    const venta = await this.ventasRepository.findOneOrFail({ where: { id: ventaId }, relations: { cliente: true } });
+    const negocio = await this.negociosRepository.findOneOrFail({ where: { id: venta.negocioId } });
+    const documento = this.documentosRepository.create({
+      negocioId: venta.negocioId,
+      ventaId: venta.id,
+      tipo: 'FACTURA',
+      estado: EstadoDocumentoElectronico.PENDIENTE,
+      periodoContingenciaId: periodoId,
+      transcritaDeTalonario,
+    });
+    // El emisor es siempre el negocio (congelarDatosEmision); solo la resolución se reemplaza por la de contingencia.
+    this.congelarDatosEmision(documento, habilitacion, negocio, venta, numero);
+    documento.prefijo = habilitacion.contingenciaPrefijo ?? undefined;
+    documento.numeroCompleto = `${habilitacion.contingenciaPrefijo ?? ''}${numero}`;
+    documento.resolucionNumero = habilitacion.contingenciaResolucionNumero ?? undefined;
+    documento.resolucionFechaInicio = habilitacion.contingenciaFechaInicio ?? undefined;
+    documento.resolucionFechaFin = habilitacion.contingenciaFechaFin ?? undefined;
+    documento.resolucionRangoDesde = habilitacion.contingenciaRangoDesde ?? undefined;
+    documento.resolucionRangoHasta = habilitacion.contingenciaRangoHasta ?? undefined;
+    documento.fechaEmision = fecha;
+    documento.qrContenido = contenidoQrContingencia({
+      numeroCompleto: documento.numeroCompleto,
+      fecha,
+      nitEmisor: negocio.nit ?? '',
+      documentoAdquirente: this.mapearCustomerAlegra(venta).identificationNumber,
+      subtotal: Number(venta.subtotal) - Number(venta.descuentoTotal ?? 0),
+      iva: Number(venta.impuestoTotal),
+      total: Number(venta.total),
+    });
+    const guardado = await this.documentosRepository.save(documento);
+    this.realtimeGateway.emitToNegocio(guardado.negocioId, 'documentos-electronicos:cambio', guardado);
   }
 
   /** Lo que Alegra confirma pisa lo calculado localmente (ej. `fullNumber` real vs. prefijo+número armado a mano). */

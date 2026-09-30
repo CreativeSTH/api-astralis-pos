@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Negocio } from '../negocios/entities/negocio.entity';
 import { HabilitacionFacturacionElectronica } from '../facturacion-electronica/entities/habilitacion-facturacion-electronica.entity';
+import { PeriodoContingencia } from '../facturacion-electronica/entities/periodo-contingencia.entity';
 import { Venta } from '../ventas/entities/venta.entity';
 import { Alerta } from '../alertas/entities/alerta.entity';
 import { Usuario } from '../usuarios/entities/usuario.entity';
@@ -18,6 +19,7 @@ import { TopeUvtCronService } from './tope-uvt-cron.service';
     TypeOrmModule.forFeature([
       Negocio,
       HabilitacionFacturacionElectronica,
+      PeriodoContingencia,
       Venta,
       Alerta,
       Usuario,

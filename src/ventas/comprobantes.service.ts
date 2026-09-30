@@ -15,6 +15,7 @@ import {
   nitConDv,
   textoResolucion,
 } from '../facturacion-electronica/factura-pdf.service';
+import { fabricanteSoftware } from '../facturacion-electronica/contingencia.util';
 import { Cliente } from '../clientes/entities/cliente.entity';
 import { VentasService } from './ventas.service';
 
@@ -55,6 +56,9 @@ export interface ReciboContenido {
 }
 
 export const LEYENDA_NO_FACTURA = 'Este documento no es una factura de venta.';
+export const TITULO_FACTURA_ELECTRONICA = 'FACTURA ELECTRÓNICA DE VENTA';
+/** Res. DIAN 000227 de 2025, art. 1.5.1.2.2.2, num. 1: denominación expresa obligatoria (fase 6a). */
+export const TITULO_FACTURA_CONTINGENCIA = 'FACTURA DE VENTA DE TALONARIO O DE PAPEL';
 export const LEYENDA_RECIBO_CAJA = 'Recibo de caja: soporte de pago. No es una factura de venta.';
 
 /** Bloque del recibo de caja (spec 4.5): a qué venta y cuota se abonó y cómo quedó el saldo. */
@@ -84,10 +88,20 @@ export interface ElectronicaComprobante {
   adquirente: { nombre: string; identificacion: string };
   formaPago: 'Contado' | 'Crédito';
   proveedorTecnologico: string;
+  /** Fase 6a: factura de talonario o de papel expedida en contingencia. */
+  contingencia: boolean;
+  titulo: string;
+  /** Una transcripción de contingencia lleva CUDE, no CUFE (anexo técnico v1.9 §11.4). */
+  etiquetaCodigo: 'CUFE' | 'CUDE';
+  /** Solo en contingencia (requisito num. 13): fabricante del software. El emisor sigue siendo el negocio. */
+  fabricanteSoftware: string | null;
 }
 
 /** Spec 5: rechazada > sin CUFE todavía > sandbox. null = factura válida, sin encabezado. */
 export function encabezadoTirilla(doc: DocumentoElectronico | null): string | null {
+  // Fase 6a: la factura de papel es válida desde que se entrega, aunque la transcripción todavía no se
+  // haya transmitido o la hayan rechazado.
+  if (doc?.periodoContingenciaId) return doc.ambiente === 'SANDBOX' ? 'DOCUMENTO DE PRUEBA — SIN VALIDEZ FISCAL' : null;
   if (doc?.estado === EstadoDocumentoElectronico.RECHAZADO) return 'RECHAZADA POR LA DIAN — SIN VALIDEZ FISCAL';
   if (!doc?.cufe) return 'EN VALIDACIÓN DIAN — REIMPRIMIBLE';
   if (doc.ambiente === 'SANDBOX') return 'DOCUMENTO DE PRUEBA — SIN VALIDEZ FISCAL';
@@ -194,7 +208,11 @@ export class ComprobantesService {
     const cliente = venta.clienteId
       ? await this.clientesRepository.findOne({ where: { id: venta.clienteId, negocioId: venta.negocioId } })
       : null;
-    const conQr = !!doc?.cufe && !!doc.qrContenido && doc.estado !== EstadoDocumentoElectronico.RECHAZADO;
+    const contingencia = !!doc?.periodoContingenciaId;
+    // En contingencia el QR existe desde el principio (provisional); en la FE normal, solo con CUFE.
+    const conQr = contingencia
+      ? !!doc!.qrContenido
+      : !!doc?.cufe && !!doc.qrContenido && doc.estado !== EstadoDocumentoElectronico.RECHAZADO;
     return {
       estado: doc?.estado ?? EstadoDocumentoElectronico.PENDIENTE,
       encabezado: encabezadoTirilla(doc),
@@ -213,6 +231,10 @@ export class ComprobantesService {
       adquirente: adquirenteFactura(cliente),
       formaPago: venta.tipoVenta === 'CREDITO' ? 'Crédito' : 'Contado',
       proveedorTecnologico: PROVEEDOR_TECNOLOGICO,
+      contingencia,
+      titulo: contingencia ? TITULO_FACTURA_CONTINGENCIA : TITULO_FACTURA_ELECTRONICA,
+      etiquetaCodigo: contingencia ? 'CUDE' : 'CUFE',
+      fabricanteSoftware: contingencia ? fabricanteSoftware() : null,
     };
   }
 

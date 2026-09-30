@@ -4,6 +4,11 @@ import { EstadoDocumentoElectronico } from './estado-documento-electronico.enum'
 
 @Entity('documentos_electronicos')
 @Index('IDX_documentos_electronicos_negocio_created', ['negocioId', 'createdAt'])
+// Un número de contingencia no se reutiliza nunca (fase 6a).
+@Index('UQ_documentos_electronicos_contingencia_numero', ['negocioId', 'prefijo', 'numero'], {
+  unique: true,
+  where: '"periodo_contingencia_id" IS NOT NULL',
+})
 export class DocumentoElectronico extends BaseEntity {
   @Index()
   @Column({ name: 'negocio_id' })
@@ -101,4 +106,13 @@ export class DocumentoElectronico extends BaseEntity {
 
   @Column({ type: 'numeric', precision: 12, scale: 2, nullable: true })
   total?: number;
+
+  /** Fase 6a: período en que se expidió como factura de talonario o de papel; null = factura electrónica normal. */
+  @Index('IDX_documentos_electronicos_periodo_contingencia')
+  @Column({ name: 'periodo_contingencia_id', type: 'varchar', nullable: true })
+  periodoContingenciaId: string | null;
+
+  /** true = el papel lo escribió el negocio a mano y se registró en AURA después (no lo imprimió AURA). */
+  @Column({ name: 'transcrita_de_talonario', default: false })
+  transcritaDeTalonario: boolean;
 }

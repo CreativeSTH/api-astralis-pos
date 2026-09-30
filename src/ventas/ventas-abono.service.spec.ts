@@ -20,6 +20,7 @@ import { PromocionesPricingService } from '../cupones/promociones-pricing.servic
 import { CuponValidacionService } from '../cupones/cupon-validacion.service';
 import { FacturacionElectronicaService } from '../facturacion-electronica/facturacion-electronica.service';
 import { PoliticaFacturacionService } from '../politica-facturacion/politica-facturacion.service';
+import { ContingenciaService } from '../facturacion-electronica/contingencia.service';
 import { TipoNumeracion } from '../common/enums/tipo-comprobante.enum';
 
 describe('VentasService.abonarCuota — recibo de caja', () => {
@@ -123,6 +124,7 @@ describe('VentasService.abonarCuota — recibo de caja', () => {
         { provide: CuponValidacionService, useValue: {} },
         { provide: FacturacionElectronicaService, useValue: {} },
         { provide: PoliticaFacturacionService, useValue: {} },
+        { provide: ContingenciaService, useValue: {} },
         {
           provide: ClsService,
           useValue: {

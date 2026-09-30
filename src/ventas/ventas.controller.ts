@@ -11,6 +11,7 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { VentasService } from './ventas.service';
 import { ComprobantesService } from './comprobantes.service';
+import { TranscribirTalonarioDto } from './dto/transcribir-talonario.dto';
 import { CreateVentaDto } from './dto/create-venta.dto';
 import { CancelarVentaDto } from './dto/cancelar-venta.dto';
 import { AbonarCuotaDto } from './dto/abonar-cuota.dto';
@@ -38,6 +39,13 @@ export class VentasController {
   })
   create(@Body() dto: CreateVentaDto) {
     return this.ventasService.crear(dto);
+  }
+
+  /** Fase 6a: una factura de talonario escrita a mano durante una contingencia. */
+  @Post('transcripcion-talonario')
+  @RequierePermiso(ModuloPermiso.FACTURACION_ELECTRONICA_DIAN, AccionPermiso.EDITAR)
+  transcribirTalonario(@Body() dto: TranscribirTalonarioDto) {
+    return this.ventasService.transcribirTalonario(dto);
   }
 
   @Get()

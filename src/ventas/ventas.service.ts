@@ -40,6 +40,8 @@ import { TipoComprobanteVenta, TipoNumeracion } from '../common/enums/tipo-compr
 import { FacturacionElectronicaService } from '../facturacion-electronica/facturacion-electronica.service';
 import { NumeracionComprobanteService } from '../facturacion/numeracion-comprobante.service';
 import { PoliticaFacturacionService } from '../politica-facturacion/politica-facturacion.service';
+import { ContingenciaService } from '../facturacion-electronica/contingencia.service';
+import { TranscribirTalonarioDto } from './dto/transcribir-talonario.dto';
 import { tipoComprobanteParaModo } from '../politica-facturacion/politica-facturacion.logic';
 import { PromocionesPricingService } from '../cupones/promociones-pricing.service';
 import { CuponValidacionService } from '../cupones/cupon-validacion.service';
@@ -74,6 +76,7 @@ export class VentasService {
     private readonly cuponValidacionService: CuponValidacionService,
     private readonly facturacionElectronicaService: FacturacionElectronicaService,
     private readonly politicaFacturacion: PoliticaFacturacionService,
+    private readonly contingenciaService: ContingenciaService,
     private readonly cls: ClsService,
   ) {}
 
@@ -139,6 +142,29 @@ export class VentasService {
 
   /** Punto de entrada único: crea venta CONTADO o CREDITO según `dto.tipoVenta`. */
   async crear(dto: CreateVentaDto): Promise<Venta> {
+    return this.crearConOpciones(dto, {});
+  }
+
+  /**
+   * Fase 6a: registra una venta que ya se facturó en un talonario de papel durante una contingencia.
+   * La venta entra al turno de caja actual; el documento electrónico toma número y fecha del papel.
+   * El número se valida antes de crear la venta, para no dejar una venta sin su documento.
+   */
+  async transcribirTalonario(dto: TranscribirTalonarioDto): Promise<Venta> {
+    const negocioId = this.getNegocioId();
+    const { modo } = await this.politicaFacturacion.estado(negocioId);
+    if (modo !== 'ELECTRONICA') {
+      throw new BadRequestException('Registrar facturas de talonario solo aplica con facturación electrónica activa');
+    }
+    const fecha = new Date(dto.talonario.fecha);
+    const periodo = await this.contingenciaService.validarTalonario(negocioId, dto.talonario.numero, fecha);
+    return this.crearConOpciones(dto.venta, { talonario: { numero: dto.talonario.numero, fecha, periodoId: periodo.id } });
+  }
+
+  private async crearConOpciones(
+    dto: CreateVentaDto,
+    opciones: { talonario?: { numero: number; fecha: Date; periodoId: string } },
+  ): Promise<Venta> {
     await this.validarMetodosPago((dto.pagos ?? []).map((p) => p.metodoPago));
     await this.autorizarDescuentoSiAplica(dto);
     // Una sola consulta por venta, antes de la transacción: decide el comprobante (y rechaza si
@@ -154,7 +180,7 @@ export class VentasService {
     // emisión del documento electrónico nunca debe bloquear ni fallar la
     // respuesta al cajero — ver FacturacionElectronicaService.emitirDocumento,
     // que nunca lanza (fail-closed interno + try/catch de red).
-    this.facturacionElectronicaService.emitirDocumento(venta).catch(() => {
+    this.facturacionElectronicaService.emitirDocumento(venta, opciones).catch(() => {
       // emitirDocumento ya loggea/persiste sus propios errores en DocumentoElectronico;
       // este catch solo evita una promesa rechazada sin manejar.
     });
