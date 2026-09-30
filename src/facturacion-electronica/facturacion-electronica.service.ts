@@ -28,7 +28,7 @@ import { CargarResolucionDto } from './dto/cargar-resolucion.dto';
 import { FiltrosFacturasDto } from './dto/filtros-facturas.dto';
 import { FacturaPdfService } from './factura-pdf.service';
 import { LogoNegocioService } from './logo-negocio.service';
-import { ContingenciaService } from './contingencia.service';
+import { ContingenciaService, ResolucionContingenciaSnapshot } from './contingencia.service';
 import { contenidoQrContingencia, resolucionContingenciaDesdeDocumento } from './contingencia.util';
 import { encriptar, desencriptar } from '../common/utils/cifrado';
 import { Negocio } from '../negocios/entities/negocio.entity';
@@ -485,7 +485,17 @@ export class FacturacionElectronicaService {
    */
   async emitirDocumento(
     venta: { id: string; negocioId: string; tipoComprobanteEmitido?: string },
-    opciones: { talonario?: { numero: number; fecha: Date; periodoId: string } } = {},
+    opciones: {
+      talonario?: {
+        numero: number;
+        fecha: Date;
+        periodoId: string;
+        /** true (default, 6a) = escrita a mano; false = impresa por la caja sin conexión (6b). */
+        transcrita?: boolean;
+        /** 6b: la resolución del bloque con que se imprimió; reemplaza a la vigente de la habilitación. */
+        resolucion?: ResolucionContingenciaSnapshot;
+      };
+    } = {},
   ): Promise<void> {
     // La política de facturación ya decidió el comprobante al crear la venta: solo una venta
     // FACTURA_ELECTRONICA lleva documento electrónico (un recibo nunca genera un segundo documento).
@@ -497,8 +507,19 @@ export class FacturacionElectronicaService {
     // Fase 6a: factura de papel con numeración de contingencia — no se llama a Alegra ahora; se
     // transmite (documentType "04") cuando se cierra el período.
     if (opciones.talonario) {
-      const { numero, fecha, periodoId } = opciones.talonario;
-      await this.registrarDocumentoContingencia(venta.id, habilitacion, periodoId, numero, fecha, true);
+      const { numero, fecha, periodoId, transcrita = true, resolucion } = opciones.talonario;
+      const conResolucion = resolucion
+        ? ({
+            ...habilitacion,
+            contingenciaResolucionNumero: resolucion.numero,
+            contingenciaPrefijo: resolucion.prefijo,
+            contingenciaFechaInicio: resolucion.fechaInicio,
+            contingenciaFechaFin: resolucion.fechaFin,
+            contingenciaRangoDesde: resolucion.rangoDesde,
+            contingenciaRangoHasta: resolucion.rangoHasta,
+          } as HabilitacionFacturacionElectronica)
+        : habilitacion;
+      await this.registrarDocumentoContingencia(venta.id, conResolucion, periodoId, numero, fecha, transcrita);
       return;
     }
     const periodo = await this.contingencia.periodoActivo(venta.negocioId);

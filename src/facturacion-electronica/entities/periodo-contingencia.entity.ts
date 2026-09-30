@@ -1,7 +1,7 @@
 import { Column, Entity, Index } from 'typeorm';
 import { BaseEntity } from '../../common/entities/base.entity';
 
-export type OrigenContingencia = 'AUTOMATICA' | 'MANUAL';
+export type OrigenContingencia = 'AUTOMATICA' | 'MANUAL' | 'SIN_CONEXION';
 
 /**
  * Un período de "inconveniente tecnológico del facturador" (Res. DIAN 000227 de 2025, art. 1.5.1.5.7.1,
@@ -13,6 +13,7 @@ export type OrigenContingencia = 'AUTOMATICA' | 'MANUAL';
 @Index('IDX_periodos_contingencia_negocio_inicio', ['negocioId', 'inicio'])
 // Como máximo un período abierto por negocio.
 @Index('UQ_periodos_contingencia_abierto', ['negocioId'], { unique: true, where: '"fin" IS NULL' })
+@Index('UQ_periodos_contingencia_episodio', ['episodioId'], { unique: true, where: '"episodio_id" IS NOT NULL' })
 export class PeriodoContingencia extends BaseEntity {
   @Column({ name: 'negocio_id' })
   negocioId: string;
@@ -43,4 +44,8 @@ export class PeriodoContingencia extends BaseEntity {
 
   @Column({ name: 'aviso_fin_en', type: 'timestamptz', nullable: true })
   avisoFinEn: Date | null;
+
+  /** Fase 6b: episodio sin conexión de una caja (id generado por el pos-agent). */
+  @Column({ name: 'episodio_id', type: 'varchar', nullable: true })
+  episodioId: string | null;
 }

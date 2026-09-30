@@ -3,6 +3,10 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, LessThanOrEqual, MoreThanOrEqual, Not, QueryFailedError, Repository } from 'typeorm';
 import { HabilitacionFacturacionElectronica } from './entities/habilitacion-facturacion-electronica.entity';
 import { PeriodoContingencia } from './entities/periodo-contingencia.entity';
+import { ReservaContingencia } from './entities/reserva-contingencia.entity';
+import { PROVEEDOR_TECNOLOGICO, nitConDv } from './factura-pdf.service';
+import { fabricanteSoftware } from './contingencia.util';
+import { Negocio } from '../negocios/entities/negocio.entity';
 import { DocumentoElectronico } from './entities/documento-electronico.entity';
 import { EstadoHabilitacion } from './entities/estado-habilitacion.enum';
 import { EstadoDocumentoElectronico } from './entities/estado-documento-electronico.enum';
@@ -29,6 +33,34 @@ export interface ResolucionContingencia {
   rangoDesde: number;
   rangoHasta: number;
   siguienteNumero: number;
+}
+
+/** Fase 6b: números por bloque reservado para una caja. */
+export const TAMANO_BLOQUE_CONTINGENCIA = 50;
+
+export type ResolucionContingenciaSnapshot = Omit<ResolucionContingencia, 'siguienteNumero'>;
+
+export interface BloqueContingencia {
+  desde: number;
+  hasta: number;
+  resolucion: ResolucionContingenciaSnapshot;
+}
+
+export interface EpisodioSinConexion {
+  id: string;
+  inicio: string;
+  fin: string;
+}
+
+export interface DatosSinConexion {
+  /** Nombre comercial y NIT del negocio, para el encabezado del recibo provisional. */
+  negocio: { nombre: string; nit?: string } | null;
+  /** SANDBOX: la tirilla sin conexión lleva "DOCUMENTO DE PRUEBA", igual que en línea. */
+  ambiente: 'SANDBOX' | 'PRODUCCION' | null;
+  emisor: { razonSocial: string; nitConDv: string; direccion: string } | null;
+  fabricanteSoftware: string;
+  proveedorTecnologico: string;
+  resolucion: ResolucionContingencia | null;
 }
 
 export interface EstadoContingencia {
@@ -61,6 +93,10 @@ export class ContingenciaService {
     @InjectRepository(Alerta)
     private readonly alertas: Repository<Alerta>,
     private readonly realtime: RealtimeGateway,
+    @InjectRepository(ReservaContingencia)
+    private readonly reservas: Repository<ReservaContingencia>,
+    @InjectRepository(Negocio)
+    private readonly negocios: Repository<Negocio>,
   ) {}
 
   private async habilitacionOFallar(negocioId: string): Promise<HabilitacionFacturacionElectronica> {
@@ -270,6 +306,111 @@ export class ContingenciaService {
     if (tipo === 'INICIO') periodo.avisoInicioEn = new Date();
     else periodo.avisoFinEn = new Date();
     return this.periodos.save(periodo);
+  }
+
+  /**
+   * Fase 6b: reserva un bloque para una caja. Avanza el consecutivo de la habilitación más allá del
+   * bloque, así ni el backend ni otra caja usan esos números.
+   */
+  async reservarBloque(
+    negocioId: string,
+    terminalId: string,
+    cantidad = TAMANO_BLOQUE_CONTINGENCIA,
+  ): Promise<BloqueContingencia> {
+    return this.habilitaciones.manager.transaction(async (manager) => {
+      const h = await manager.findOne(HabilitacionFacturacionElectronica, {
+        where: { negocioId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!h || !this.tieneResolucion(h)) throw new BadRequestException('No hay resolución de contingencia cargada');
+      const desde = h.contingenciaSiguienteNumero ?? h.contingenciaRangoDesde!;
+      if (desde > h.contingenciaRangoHasta!) {
+        throw new BadRequestException('Se agotó la numeración de contingencia: solicita un rango nuevo a la DIAN');
+      }
+      const hasta = Math.min(desde + cantidad - 1, h.contingenciaRangoHasta!);
+      h.contingenciaSiguienteNumero = hasta + 1;
+      await manager.save(HabilitacionFacturacionElectronica, h);
+      const resolucion: ResolucionContingenciaSnapshot = {
+        numero: h.contingenciaResolucionNumero!,
+        prefijo: h.contingenciaPrefijo!,
+        fechaInicio: h.contingenciaFechaInicio!,
+        fechaFin: h.contingenciaFechaFin!,
+        rangoDesde: h.contingenciaRangoDesde!,
+        rangoHasta: h.contingenciaRangoHasta!,
+      };
+      await manager.save(
+        ReservaContingencia,
+        this.reservas.create({
+          negocioId,
+          terminalId,
+          desde,
+          hasta,
+          resolucionNumero: resolucion.numero,
+          prefijo: resolucion.prefijo,
+          fechaInicio: resolucion.fechaInicio,
+          fechaFin: resolucion.fechaFin,
+          rangoDesde: resolucion.rangoDesde,
+          rangoHasta: resolucion.rangoHasta,
+        }),
+      );
+      return { desde, hasta, resolucion };
+    });
+  }
+
+  /** Fase 6b: el período de contingencia de un episodio sin conexión de una caja (idempotente por episodio). */
+  async asegurarPeriodoSinConexion(negocioId: string, episodio: EpisodioSinConexion): Promise<PeriodoContingencia> {
+    const propio = await this.periodos.findOne({ where: { negocioId, episodioId: episodio.id } });
+    if (propio) return propio;
+    const inicio = new Date(episodio.inicio);
+    const fin = new Date(episodio.fin);
+    const cubre = await this.periodos.findOne({
+      where: [
+        { negocioId, inicio: LessThanOrEqual(inicio), fin: IsNull() },
+        { negocioId, inicio: LessThanOrEqual(inicio), fin: MoreThanOrEqual(fin) },
+      ],
+    });
+    if (cubre) return cubre;
+    const periodo = await this.periodos.save(
+      this.periodos.create({
+        negocioId,
+        inicio,
+        fin,
+        origen: 'SIN_CONEXION',
+        motivo: 'Sin conexión a internet en la caja',
+        declaradoPor: null,
+        finalizadoPor: null,
+        episodioId: episodio.id,
+      }),
+    );
+    await this.crearAlerta(
+      negocioId,
+      periodo.id,
+      'Una caja vendió sin conexión a internet (contingencia). Descarga y envía las cartas de inicio y fin a la DIAN desde Facturación > Contingencia.',
+    );
+    this.realtime.emitToNegocio(negocioId, 'contingencia:cambio', null);
+    return periodo;
+  }
+
+  /** Fase 6b: lo que la caja necesita para imprimir una factura de papel sin conexión (la guarda en su foto). */
+  async datosSinConexion(negocioId: string): Promise<DatosSinConexion> {
+    const h = await this.habilitaciones.findOne({ where: { negocioId } });
+    const negocio = await this.negocios.findOne({ where: { id: negocioId } });
+    const estado = await this.estado(negocioId);
+    return {
+      negocio: negocio ? { nombre: negocio.nombre, nit: negocio.nit ?? undefined } : null,
+      ambiente: h?.ambiente ?? null,
+      // El emisor es siempre el negocio, nunca AURA.
+      emisor: negocio
+        ? {
+            razonSocial: h?.razonSocial ?? negocio.nombre,
+            nitConDv: nitConDv(negocio.nit),
+            direccion: [h?.direccion ?? negocio.direccion, h?.ciudad ?? negocio.ciudadNombre].filter(Boolean).join(', '),
+          }
+        : null,
+      fabricanteSoftware: fabricanteSoftware(),
+      proveedorTecnologico: PROVEEDOR_TECNOLOGICO,
+      resolucion: estado.resolucion,
+    };
   }
 
   periodosAutomaticosAbiertos(): Promise<PeriodoContingencia[]> {

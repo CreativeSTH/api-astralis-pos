@@ -17,6 +17,8 @@ import { Cuota } from './cuota.entity';
 import { Cliente } from '../../clientes/entities/cliente.entity';
 
 @Entity('ventas')
+// Fase 6b: una venta sin conexión nunca se registra dos veces.
+@Index('UQ_ventas_negocio_id_local', ['negocioId', 'idLocal'], { unique: true, where: '"id_local" IS NOT NULL' })
 export class Venta extends BaseEntity {
   @Index()
   @Column({ name: 'negocio_id' })
@@ -34,6 +36,17 @@ export class Venta extends BaseEntity {
 
   @Column({ name: 'turno_id' })
   turnoId: string;
+
+  /** Fase 6b: UUID generado en la caja para la venta hecha sin conexión (idempotencia al sincronizar). */
+  @Column({ name: 'id_local', type: 'varchar', nullable: true })
+  idLocal: string | null;
+
+  @Column({ name: 'vendida_sin_conexion', default: false })
+  vendidaSinConexion: boolean;
+
+  /** Número impreso en la caja sin conexión (recibo provisional `SC…` o factura de papel `CONT…`). */
+  @Column({ name: 'numero_sin_conexion', type: 'varchar', nullable: true })
+  numeroSinConexion: string | null;
 
   @ManyToOne(() => TurnoCaja)
   @JoinColumn({ name: 'turno_id' })

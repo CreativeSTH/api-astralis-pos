@@ -1299,6 +1299,31 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
       );
     });
 
+    it('venta sin conexión (6b): transcrita false y la resolución del bloque, aunque la habilitación ya tenga otra', async () => {
+      const fecha = new Date('2026-09-28T15:00:00Z');
+      await service.emitirDocumento(VENTA, {
+        talonario: {
+          numero: 7,
+          fecha,
+          periodoId: 'per-ep',
+          transcrita: false,
+          resolucion: { numero: '18764000000001', prefijo: 'VIEJ', fechaInicio: '2025-01-01', fechaFin: '2027-01-01', rangoDesde: 1, rangoHasta: 100 },
+        },
+      });
+      expect(documentosRepo.save.mock.calls.at(-1)[0]).toEqual(
+        expect.objectContaining({
+          periodoContingenciaId: 'per-ep',
+          transcritaDeTalonario: false,
+          numero: 7,
+          numeroCompleto: 'VIEJ7',
+          prefijo: 'VIEJ',
+          resolucionNumero: '18764000000001',
+          resolucionRangoHasta: 100,
+          fechaEmision: fecha,
+        }),
+      );
+    });
+
     it('transmite un documento de contingencia con documentType "04", su número fijo y la resolución congelada', async () => {
       const documento = {
         id: 'doc-1',

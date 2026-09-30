@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { VentasService } from './ventas.service';
 import { ComprobantesService } from './comprobantes.service';
 import { VentasController } from './ventas.controller';
+import { VentasSinConexionController } from './ventas-sin-conexion.controller';
 import { Venta } from './entities/venta.entity';
 import { VentaItem } from './entities/venta-item.entity';
 import { VentaPago } from './entities/venta-pago.entity';
@@ -51,7 +52,7 @@ import { PoliticaFacturacionModule } from '../politica-facturacion/politica-fact
     CuponesModule,
     PoliticaFacturacionModule,
   ],
-  controllers: [VentasController],
+  controllers: [VentasSinConexionController, VentasController],
   providers: [VentasService, ComprobantesService],
   exports: [VentasService],
 })

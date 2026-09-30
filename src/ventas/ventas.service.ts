@@ -40,7 +40,9 @@ import { TipoComprobanteVenta, TipoNumeracion } from '../common/enums/tipo-compr
 import { FacturacionElectronicaService } from '../facturacion-electronica/facturacion-electronica.service';
 import { NumeracionComprobanteService } from '../facturacion/numeracion-comprobante.service';
 import { PoliticaFacturacionService } from '../politica-facturacion/politica-facturacion.service';
-import { ContingenciaService } from '../facturacion-electronica/contingencia.service';
+import { ContingenciaService, ResolucionContingenciaSnapshot } from '../facturacion-electronica/contingencia.service';
+import { SincronizarSinConexionDto } from './dto/sincronizar-sin-conexion.dto';
+import { SeveridadAlerta } from '../common/enums/alerta.enum';
 import { TranscribirTalonarioDto } from './dto/transcribir-talonario.dto';
 import { tipoComprobanteParaModo } from '../politica-facturacion/politica-facturacion.logic';
 import { PromocionesPricingService } from '../cupones/promociones-pricing.service';
@@ -50,6 +52,33 @@ import { diasDesdeFechaColombia } from '../common/utils/fecha-colombia';
 import { TOLERANCIA_REDONDEO, aplicarAbono } from './abono.logic';
 
 const DIAS_MORA_PARA_EN_MORA = 60;
+
+/** Fase 6b: una venta hecha sin conexión, ya impresa con estos montos. */
+export interface OpcionesSinConexion {
+  idLocal: string;
+  creadaEn: Date;
+  turnoId: string;
+  numeroImpreso: string;
+  precios: Map<string, { precioUnitario: number; porcentajeImpuesto: number }>;
+}
+
+export interface OpcionesCreacionVenta {
+  talonario?: {
+    numero: number;
+    fecha: Date;
+    periodoId: string;
+    transcrita?: boolean;
+    resolucion?: ResolucionContingenciaSnapshot;
+  };
+  sinConexion?: OpcionesSinConexion;
+}
+
+export type ResultadoSincronizacion = {
+  idLocal: string;
+  estado: 'OK' | 'DUPLICADA' | 'ERROR';
+  ventaId?: string;
+  mensaje?: string;
+};
 
 interface VentaConDomicilio {
   venta: Venta;
@@ -161,10 +190,73 @@ export class VentasService {
     return this.crearConOpciones(dto.venta, { talonario: { numero: dto.talonario.numero, fecha, periodoId: periodo.id } });
   }
 
-  private async crearConOpciones(
-    dto: CreateVentaDto,
-    opciones: { talonario?: { numero: number; fecha: Date; periodoId: string } },
-  ): Promise<Venta> {
+  /**
+   * Fase 6b: registra las ventas que una caja hizo sin conexión. Idempotente por `idLocal`; cada venta
+   * se procesa por separado (un error no frena las demás). Con factura de papel, el período de
+   * contingencia es el del episodio sin conexión.
+   */
+  async sincronizarSinConexion(dto: SincronizarSinConexionDto): Promise<ResultadoSincronizacion[]> {
+    const negocioId = this.getNegocioId();
+    const periodos = new Map<string, string>();
+    for (const episodio of dto.episodios) {
+      if (dto.ventas.some((v) => v.episodioId === episodio.id && v.comprobante.tipo === 'CONTINGENCIA')) {
+        periodos.set(episodio.id, (await this.contingenciaService.asegurarPeriodoSinConexion(negocioId, episodio)).id);
+      }
+    }
+    const resultados: ResultadoSincronizacion[] = [];
+    for (const v of dto.ventas) {
+      const existente = await this.ventasRepository.findOne({ where: { negocioId, idLocal: v.idLocal } });
+      if (existente) {
+        resultados.push({ idLocal: v.idLocal, estado: 'DUPLICADA', ventaId: existente.id });
+        continue;
+      }
+      try {
+        const creadaEn = new Date(v.creadaEn);
+        const venta = await this.crearConOpciones(
+          {
+            sucursalId: v.sucursalId,
+            bodegaId: v.bodegaId,
+            tipoVenta: v.tipoVenta,
+            clienteId: v.clienteId,
+            nombreCliente: v.nombreCliente,
+            items: v.items.map((i) => ({ productoId: i.productoId, cantidad: i.cantidad })),
+            pagos: v.pagos,
+            numeroCuotas: v.numeroCuotas,
+            fechaPrimerPago: v.fechaPrimerPago,
+            // El cupo ya se validó en la caja con su foto; acá no se rechaza (se alerta si se pasó).
+            omitirValidacionCredito: true,
+          } as CreateVentaDto,
+          {
+            sinConexion: {
+              idLocal: v.idLocal,
+              creadaEn,
+              turnoId: v.turnoId,
+              numeroImpreso: v.comprobante.numeroImpreso,
+              precios: new Map(
+                v.items.map((i) => [i.productoId, { precioUnitario: i.precioUnitario, porcentajeImpuesto: i.porcentajeImpuesto }]),
+              ),
+            },
+            talonario:
+              v.comprobante.tipo === 'CONTINGENCIA' && v.comprobante.numero && periodos.has(v.episodioId)
+                ? {
+                    numero: v.comprobante.numero,
+                    fecha: creadaEn,
+                    periodoId: periodos.get(v.episodioId)!,
+                    transcrita: false,
+                    resolucion: v.comprobante.resolucion,
+                  }
+                : undefined,
+          },
+        );
+        resultados.push({ idLocal: v.idLocal, estado: 'OK', ventaId: venta.id });
+      } catch (error) {
+        resultados.push({ idLocal: v.idLocal, estado: 'ERROR', mensaje: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    return resultados;
+  }
+
+  private async crearConOpciones(dto: CreateVentaDto, opciones: OpcionesCreacionVenta): Promise<Venta> {
     await this.validarMetodosPago((dto.pagos ?? []).map((p) => p.metodoPago));
     await this.autorizarDescuentoSiAplica(dto);
     // Una sola consulta por venta, antes de la transacción: decide el comprobante (y rechaza si
@@ -173,8 +265,8 @@ export class VentasService {
     const tipoComprobante = tipoComprobanteParaModo(modo);
     const { venta, domicilio } =
       dto.tipoVenta === TipoVenta.CREDITO
-        ? await this.crearVentaCredito(dto, tipoComprobante)
-        : await this.crearVentaContado(dto, tipoComprobante);
+        ? await this.crearVentaCredito(dto, tipoComprobante, opciones.sinConexion)
+        : await this.crearVentaContado(dto, tipoComprobante, opciones.sinConexion);
     await this.verificarStockPostVenta(venta);
     // Fire-and-forget a propósito: la venta ya está cobrada y confirmada, la
     // emisión del documento electrónico nunca debe bloquear ni fallar la
@@ -229,6 +321,7 @@ export class VentasService {
   private async crearVentaContado(
     dto: CreateVentaDto,
     tipoComprobante: TipoComprobanteVenta,
+    sinConexion?: OpcionesSinConexion,
   ): Promise<VentaConDomicilio> {
     if (!dto.pagos || dto.pagos.length === 0) {
       throw new BadRequestException(
@@ -237,8 +330,11 @@ export class VentasService {
     }
     const negocioId = this.getNegocioId();
     const usuarioId = this.getUsuarioId();
-    // Se valida antes de abrir la transacción para fallar rápido si no hay caja abierta.
-    const turno = await this.cajaService.obtenerTurnoAbierto(dto.sucursalId);
+    // Se valida antes de abrir la transacción para fallar rápido si no hay caja abierta. Sin conexión
+    // (fase 6b) se respeta el turno donde vendió la caja.
+    const turno = sinConexion
+      ? await this.turnoDeVentaSinConexion(sinConexion.turnoId, dto.sucursalId)
+      : await this.cajaService.obtenerTurnoAbierto(dto.sucursalId);
 
     return this.dataSource.transaction(async (manager) => {
       const {
@@ -248,7 +344,7 @@ export class VentasService {
         impuestoTotal,
         costoTotal,
         promocionesAplicadas,
-      } = await this.procesarItemsYStock(manager, dto, negocioId);
+      } = await this.procesarItemsYStock(manager, dto, negocioId, sinConexion);
       const cupon = await this.resolverCupon(manager, negocioId, dto, itemsEntities);
       const { descuentoTotal, total } = this.aplicarDescuentoVenta(
         dto,
@@ -280,6 +376,7 @@ export class VentasService {
         nombreCliente: dto.nombreCliente ?? 'Consumidor final',
         tipoVenta: TipoVenta.CONTADO,
         estado: EstadoVenta.COMPLETADA,
+        ...this.camposSinConexion(sinConexion),
         subtotal,
         descuentoTotal,
         impuestoTotal,
@@ -301,6 +398,7 @@ export class VentasService {
         ),
       });
       venta = await ventaRepo.save(venta);
+      await this.fijarHoraSinConexion(manager, venta, sinConexion);
 
       await this.registrarUsosDePromociones(
         manager,
@@ -354,6 +452,7 @@ export class VentasService {
   private async crearVentaCredito(
     dto: CreateVentaDto,
     tipoComprobante: TipoComprobanteVenta,
+    sinConexion?: OpcionesSinConexion,
   ): Promise<VentaConDomicilio> {
     if (!dto.clienteId) {
       throw new BadRequestException('Una venta a crédito requiere un cliente');
@@ -365,7 +464,9 @@ export class VentasService {
     }
     const negocioId = this.getNegocioId();
     const usuarioId = this.getUsuarioId();
-    const turno = await this.cajaService.obtenerTurnoAbierto(dto.sucursalId);
+    const turno = sinConexion
+      ? await this.turnoDeVentaSinConexion(sinConexion.turnoId, dto.sucursalId)
+      : await this.cajaService.obtenerTurnoAbierto(dto.sucursalId);
     const cliente = await this.clientesService.findOne(dto.clienteId);
 
     return this.dataSource.transaction(async (manager) => {
@@ -376,7 +477,7 @@ export class VentasService {
         impuestoTotal,
         costoTotal,
         promocionesAplicadas,
-      } = await this.procesarItemsYStock(manager, dto, negocioId);
+      } = await this.procesarItemsYStock(manager, dto, negocioId, sinConexion);
       const cupon = await this.resolverCupon(manager, negocioId, dto, itemsEntities);
       const { descuentoTotal, total } = this.aplicarDescuentoVenta(
         dto,
@@ -441,6 +542,7 @@ export class VentasService {
         nombreCliente: dto.nombreCliente ?? cliente.nombre,
         tipoVenta: TipoVenta.CREDITO,
         estado: EstadoVenta.ACTIVA,
+        ...this.camposSinConexion(sinConexion),
         subtotal,
         descuentoTotal,
         impuestoTotal,
@@ -457,6 +559,7 @@ export class VentasService {
         cuotas: cuotasEntities,
       });
       venta = await ventaRepo.save(venta);
+      await this.fijarHoraSinConexion(manager, venta, sinConexion);
 
       await this.registrarUsosDePromociones(
         manager,
@@ -475,6 +578,12 @@ export class VentasService {
         usuarioId,
       );
       await this.clientesService.ajustarDeuda(dto.clienteId!, total);
+      if (sinConexion && Number(cliente.deudaActual) + total > Number(cliente.limiteCredito)) {
+        await this.alertasService.crear({
+          severidad: SeveridadAlerta.ALTA,
+          mensaje: `La venta a crédito hecha sin conexión a ${cliente.nombre} dejó su deuda por encima del cupo.`,
+        });
+      }
 
       const domicilio = await this.crearDomicilioSiAplica(
         manager,
@@ -654,11 +763,40 @@ export class VentasService {
     return { descuentoTotal, total };
   }
 
+  /** Fase 6b: marca de la venta sin conexión (idempotencia y número impreso en la caja). */
+  private camposSinConexion(sinConexion?: OpcionesSinConexion): Partial<Venta> {
+    if (!sinConexion) return {};
+    return { idLocal: sinConexion.idLocal, vendidaSinConexion: true, numeroSinConexion: sinConexion.numeroImpreso };
+  }
+
+  /** Fase 6b: la hora real de la venta (reportes y cierres por día), no la de sincronización. */
+  private async fijarHoraSinConexion(manager: EntityManager, venta: Venta, sinConexion?: OpcionesSinConexion): Promise<void> {
+    if (!sinConexion) return;
+    await manager.getRepository(Venta).update(venta.id, { createdAt: sinConexion.creadaEn });
+    venta.createdAt = sinConexion.creadaEn;
+  }
+
+  /** Fase 6b: el turno donde la caja vendió sin conexión; se respeta aunque ya esté cerrado (se alerta). */
+  private async turnoDeVentaSinConexion(turnoId: string, sucursalId: string): Promise<TurnoCaja> {
+    const turno = await this.dataSource
+      .getRepository(TurnoCaja)
+      .findOne({ where: { id: turnoId, negocioId: this.getNegocioId(), sucursalId } });
+    if (!turno) throw new BadRequestException('El turno de caja de la venta sin conexión no existe en esta sucursal');
+    if (turno.estado !== EstadoTurnoCaja.ABIERTO) {
+      await this.alertasService.crear({
+        severidad: SeveridadAlerta.ALTA,
+        mensaje: `Se registró una venta hecha sin conexión en un turno de caja ya cerrado (${turno.id.slice(0, 8)}). Revisa el cuadre de ese turno.`,
+      });
+    }
+    return turno;
+  }
+
   /** Procesa items de venta: calcula totales por línea (aplicando promociones automáticas vigentes) y descuenta stock. Común a CONTADO/CREDITO. */
   private async procesarItemsYStock(
     manager: EntityManager,
     dto: CreateVentaDto,
     negocioId: string,
+    sinConexion?: Pick<OpcionesSinConexion, 'precios'>,
   ) {
     const productoRepo = manager.getRepository(Producto);
     const inventarioRepo = manager.getRepository(Inventario);
@@ -704,14 +842,18 @@ export class VentasService {
 
       // El precio nunca se confía del cliente: se recalcula acá, aplicando la promoción
       // automática vigente para este producto/sucursal/bodega si hay alguna.
-      const { precio: precioEfectivo, promocionId } =
-        await this.promocionesPricingService.precioEfectivo(
-          negocioId,
-          dto.sucursalId,
-          dto.bodegaId,
-          producto,
-          manager,
-        );
+      // Fase 6b: una venta sin conexión ya se imprimió como factura legal con estos montos — se
+      // respetan el precio y el impuesto de la foto de la caja, sin volver a aplicar promociones.
+      const precioCaja = sinConexion?.precios.get(producto.id);
+      const { precio: precioEfectivo, promocionId } = precioCaja
+        ? { precio: precioCaja.precioUnitario, promocionId: undefined }
+        : await this.promocionesPricingService.precioEfectivo(
+            negocioId,
+            dto.sucursalId,
+            dto.bodegaId,
+            producto,
+            manager,
+          );
 
       const descuento = itemDto.descuento ?? 0;
       const bruto = precioEfectivo * itemDto.cantidad;
@@ -721,8 +863,8 @@ export class VentasService {
           `El descuento supera el valor del producto "${producto.nombre}"`,
         );
       }
-      const impuesto =
-        baseImponible * (Number(producto.porcentajeImpuesto) / 100);
+      const porcentajeImpuesto = precioCaja ? precioCaja.porcentajeImpuesto : Number(producto.porcentajeImpuesto);
+      const impuesto = baseImponible * (porcentajeImpuesto / 100);
       const costoItem = Number(producto.costo) * itemDto.cantidad;
 
       subtotal += bruto;
@@ -757,17 +899,21 @@ export class VentasService {
       // Lock pesimista: sin esto, dos ventas concurrentes del mismo producto pueden leer el mismo
       // stock antes de que ninguna confirme y las dos "ganan" (sobreventa) — la transacción sola no
       // lo evita bajo el nivel de aislamiento por defecto de Postgres.
-      const inventario = await inventarioRepo.findOne({
+      let inventario = await inventarioRepo.findOne({
         where: { negocioId, productoId: producto.id, bodegaId: dto.bodegaId },
         lock: { mode: 'pessimistic_write' },
       });
       if (!inventario) {
-        throw new BadRequestException(
-          `No hay inventario registrado para "${producto.nombre}" en la bodega indicada`,
-        );
+        if (!sinConexion) {
+          throw new BadRequestException(
+            `No hay inventario registrado para "${producto.nombre}" en la bodega indicada`,
+          );
+        }
+        // Fase 6b: la venta ya ocurrió — se registra el faltante en negativo y se alerta después.
+        inventario = inventarioRepo.create({ negocioId, productoId: producto.id, bodegaId: dto.bodegaId, cantidad: 0 });
       }
       const nuevaCantidad = Number(inventario.cantidad) - itemDto.cantidad;
-      if (nuevaCantidad < 0) {
+      if (nuevaCantidad < 0 && !sinConexion) {
         throw new BadRequestException(
           `Stock insuficiente para "${producto.nombre}"`,
         );

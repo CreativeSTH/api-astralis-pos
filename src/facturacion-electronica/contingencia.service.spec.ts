@@ -9,6 +9,8 @@ import { EstadoHabilitacion } from './entities/estado-habilitacion.enum';
 import { Alerta } from '../alertas/entities/alerta.entity';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { TipoAlerta } from '../common/enums/alerta.enum';
+import { ReservaContingencia } from './entities/reserva-contingencia.entity';
+import { Negocio } from '../negocios/entities/negocio.entity';
 
 const RESOLUCION_CONTINGENCIA = {
   contingenciaResolucionNumero: '18764000009999', contingenciaPrefijo: 'CONT',
@@ -31,6 +33,8 @@ describe('ContingenciaService', () => {
   let alertasRepo: { findOne: jest.Mock; create: jest.Mock; save: jest.Mock };
   let realtime: { emitToNegocio: jest.Mock };
   let manager: { findOne: jest.Mock; count: jest.Mock; save: jest.Mock };
+  let reservas: { create: jest.Mock };
+  let negocios: { findOne: jest.Mock };
 
   beforeEach(async () => {
     manager = { findOne: jest.fn(), count: jest.fn().mockResolvedValue(0), save: jest.fn(async (_e, x) => x) };
@@ -49,6 +53,8 @@ describe('ContingenciaService', () => {
     documentosRepo = { count: jest.fn().mockResolvedValue(0), createQueryBuilder: jest.fn().mockReturnValue(qb) };
     alertasRepo = { findOne: jest.fn().mockResolvedValue(null), create: jest.fn((x) => x), save: jest.fn(async (x) => x) };
     realtime = { emitToNegocio: jest.fn() };
+    reservas = { create: jest.fn((x) => x) };
+    negocios = { findOne: jest.fn().mockResolvedValue({ id: 'neg-1', nombre: 'Tienda', nit: '900123456', direccion: 'Cra 1' }) };
 
     const modulo = await Test.createTestingModule({
       providers: [
@@ -58,6 +64,8 @@ describe('ContingenciaService', () => {
         { provide: getRepositoryToken(DocumentoElectronico), useValue: documentosRepo },
         { provide: getRepositoryToken(Alerta), useValue: alertasRepo },
         { provide: RealtimeGateway, useValue: realtime },
+        { provide: getRepositoryToken(ReservaContingencia), useValue: reservas },
+        { provide: getRepositoryToken(Negocio), useValue: negocios },
       ],
     }).compile();
     service = modulo.get(ContingenciaService);
@@ -227,6 +235,87 @@ describe('ContingenciaService', () => {
     it('devuelve el período que cubre la fecha', async () => {
       periodosRepo.findOne.mockResolvedValue({ id: 'per-1', inicio: new Date(0), fin: null });
       await expect(service.validarTalonario('neg-1', 10, fecha)).resolves.toEqual(expect.objectContaining({ id: 'per-1' }));
+    });
+  });
+
+  describe('fase 6b', () => {
+    describe('reservarBloque', () => {
+      it('reserva 50 números desde el siguiente libre, avanza el consecutivo y devuelve la resolución vigente', async () => {
+        manager.findOne.mockResolvedValue(habilitacion({ contingenciaSiguienteNumero: 7 }));
+        const bloque = await service.reservarBloque('neg-1', 'term-1');
+        expect(bloque).toEqual({
+          desde: 7,
+          hasta: 56,
+          resolucion: { numero: '18764000009999', prefijo: 'CONT', fechaInicio: '2026-01-01', fechaFin: '2028-01-01', rangoDesde: 1, rangoHasta: 5000 },
+        });
+        expect(manager.save).toHaveBeenCalledWith(HabilitacionFacturacionElectronica, expect.objectContaining({ contingenciaSiguienteNumero: 57 }));
+        expect(manager.save).toHaveBeenCalledWith(
+          ReservaContingencia,
+          expect.objectContaining({ terminalId: 'term-1', desde: 7, hasta: 56, prefijo: 'CONT' }),
+        );
+      });
+
+      it('recorta el bloque al final del rango', async () => {
+        manager.findOne.mockResolvedValue(habilitacion({ contingenciaSiguienteNumero: 4990 }));
+        expect((await service.reservarBloque('neg-1', 'term-1')).hasta).toBe(5000);
+      });
+
+      it('rango agotado es error', async () => {
+        manager.findOne.mockResolvedValue(habilitacion({ contingenciaSiguienteNumero: 5001 }));
+        await expect(service.reservarBloque('neg-1', 'term-1')).rejects.toThrow('Se agotó la numeración de contingencia');
+      });
+
+      it('sin resolución de contingencia es error', async () => {
+        manager.findOne.mockResolvedValue(habilitacion({ contingenciaResolucionNumero: null }));
+        await expect(service.reservarBloque('neg-1', 'term-1')).rejects.toBeInstanceOf(BadRequestException);
+      });
+    });
+
+    describe('asegurarPeriodoSinConexion', () => {
+      const EPISODIO = { id: 'ep-1', inicio: '2026-09-29T15:00:00.000Z', fin: '2026-09-29T17:00:00.000Z' };
+
+      it('si ya existe el período del episodio, lo devuelve', async () => {
+        periodosRepo.findOne.mockResolvedValueOnce({ id: 'per-ep', episodioId: 'ep-1' });
+        await expect(service.asegurarPeriodoSinConexion('neg-1', EPISODIO)).resolves.toEqual(expect.objectContaining({ id: 'per-ep' }));
+        expect(periodosRepo.save).not.toHaveBeenCalled();
+      });
+
+      it('si otro período ya cubre el episodio, usa ese', async () => {
+        periodosRepo.findOne.mockResolvedValueOnce(null).mockResolvedValueOnce({ id: 'per-manual' });
+        await expect(service.asegurarPeriodoSinConexion('neg-1', EPISODIO)).resolves.toEqual(expect.objectContaining({ id: 'per-manual' }));
+        expect(periodosRepo.save).not.toHaveBeenCalled();
+      });
+
+      it('si no, crea un período SIN_CONEXION cerrado con inicio y fin del episodio y avisa', async () => {
+        periodosRepo.findOne.mockResolvedValue(null);
+        const periodo = await service.asegurarPeriodoSinConexion('neg-1', EPISODIO);
+        expect(periodo).toEqual(
+          expect.objectContaining({
+            origen: 'SIN_CONEXION',
+            episodioId: 'ep-1',
+            inicio: new Date(EPISODIO.inicio),
+            fin: new Date(EPISODIO.fin),
+          }),
+        );
+        expect(alertasRepo.save).toHaveBeenCalledWith(expect.objectContaining({ tipo: TipoAlerta.CONTINGENCIA_FACTURACION }));
+      });
+    });
+
+    it('datosSinConexion: emisor del negocio (nunca AURA), fabricante y resolución vigente', async () => {
+      process.env.AURA_FABRICANTE_NOMBRE = 'Sebastian Torres';
+      process.env.AURA_FABRICANTE_NIT = '1047444002-2';
+      habilitacionRepo.findOne.mockResolvedValue(
+        habilitacion({ razonSocial: 'Tienda S.A.S.', direccion: 'Cra 1', ciudad: 'Medellín', ambiente: 'PRODUCCION' }),
+      );
+      const datos = await service.datosSinConexion('neg-1');
+      expect(datos.negocio).toEqual({ nombre: 'Tienda', nit: '900123456' });
+      expect(datos.ambiente).toBe('PRODUCCION');
+      expect(datos.emisor).toEqual({ razonSocial: 'Tienda S.A.S.', nitConDv: expect.stringMatching(/^900123456-/), direccion: 'Cra 1, Medellín' });
+      expect(datos.fabricanteSoftware).toContain('Sebastian Torres');
+      expect(datos.proveedorTecnologico).toContain('Alegra');
+      expect(datos.resolucion).toEqual(expect.objectContaining({ prefijo: 'CONT' }));
+      delete process.env.AURA_FABRICANTE_NOMBRE;
+      delete process.env.AURA_FABRICANTE_NIT;
     });
   });
 });

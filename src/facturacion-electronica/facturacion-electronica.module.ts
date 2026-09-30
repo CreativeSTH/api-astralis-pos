@@ -12,6 +12,7 @@ import { CartaContingenciaPdfService } from './carta-contingencia-pdf.service';
 import { HabilitacionFacturacionElectronica } from './entities/habilitacion-facturacion-electronica.entity';
 import { DocumentoElectronico } from './entities/documento-electronico.entity';
 import { PeriodoContingencia } from './entities/periodo-contingencia.entity';
+import { ReservaContingencia } from './entities/reserva-contingencia.entity';
 import { Negocio } from '../negocios/entities/negocio.entity';
 import { Alerta } from '../alertas/entities/alerta.entity';
 import { Venta } from '../ventas/entities/venta.entity';
@@ -25,6 +26,7 @@ import { RealtimeModule } from '../realtime/realtime.module';
       HabilitacionFacturacionElectronica,
       DocumentoElectronico,
       PeriodoContingencia,
+      ReservaContingencia,
       Negocio,
       Alerta,
       Venta,
