@@ -28,7 +28,7 @@ async function extraerMensajeError(
     if (!error) return fallback;
     const detalles =
       error.messages && typeof error.messages === 'object'
-        ? Object.values(error.messages).flat().join('; ')
+        ? aplanarMensajes(error.messages).join('; ')
         : undefined;
     return (
       [error.reason, detalles].filter(Boolean).join(' — ') ||
@@ -38,6 +38,34 @@ async function extraerMensajeError(
   } catch {
     return fallback;
   }
+}
+
+/**
+ * `messages` puede venir anidado varios niveles (bug real 2026-10-01: el 422 de BANCOLOMBIA_QR traía
+ * `{ payment_method: { messages: { sandbox_status_mandatory_if_sandbox: ['Debe ser completado'] } } }`
+ * y el `.flat()` de un solo nivel lo convertía en "[object Object]"). Devuelve "campo: mensaje".
+ */
+function aplanarMensajes(valor: unknown, campo?: string): string[] {
+  if (typeof valor === 'string') return [campo ? `${campo}: ${valor}` : valor];
+  if (Array.isArray(valor)) return valor.flatMap((v) => aplanarMensajes(v, campo));
+  if (valor && typeof valor === 'object') {
+    return Object.entries(valor).flatMap(([clave, v]) => aplanarMensajes(v, clave === 'messages' ? campo : clave));
+  }
+  return [];
+}
+
+/**
+ * El sandbox de Wompi exige `sandbox_status` (resultado simulado) en BANCOLOMBIA_QR — confirmado en vivo
+ * 2026-10-01 con un 422 `sandbox_status_mandatory_if_sandbox`, aunque la documentación lo muestra opcional.
+ * Se aprueba por defecto; si el llamador ya trae uno (p. ej. DECLINED para probar un rechazo), se respeta.
+ * Nunca se manda en producción.
+ */
+function conSandboxStatus(paymentMethod: Record<string, unknown>): Record<string, unknown> {
+  const esSandbox = baseUrl().includes('sandbox');
+  if (!esSandbox || paymentMethod['type'] !== 'BANCOLOMBIA_QR' || paymentMethod['sandbox_status']) {
+    return paymentMethod;
+  }
+  return { ...paymentMethod, sandbox_status: 'APPROVED' };
 }
 
 @Injectable()
@@ -88,7 +116,7 @@ export class WompiClientService {
         reference: params.reference,
         signature: params.signature,
         customer_email: params.customerEmail,
-        payment_method: params.paymentMethod,
+        payment_method: conSandboxStatus(params.paymentMethod),
       }),
     });
     if (!res.ok) {

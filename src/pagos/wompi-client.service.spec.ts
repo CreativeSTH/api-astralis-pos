@@ -355,3 +355,80 @@ describe('WompiClientService — payment sources', () => {
     ).rejects.toThrow('Wompi rechazó la transacción con la fuente de pago guardada');
   });
 });
+
+describe('WompiClientService — sandbox_status y mensajes de error (bug real 2026-10-01)', () => {
+  let service: WompiClientService;
+  const baseOriginal = process.env.WOMPI_BASE_URL;
+  const params = (paymentMethod: Record<string, unknown>) => ({
+    llavePrivada: 'prv_test_123',
+    amountInCents: 6990000,
+    currency: 'COP',
+    reference: 'ref-1',
+    signature: 'sig',
+    acceptanceToken: 'tok-a',
+    acceptPersonalAuth: 'tok-b',
+    paymentMethod,
+    customerEmail: 'facturacion@somosaura.dev',
+  });
+  const okTransaccion = () =>
+    (global.fetch as jest.Mock).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ data: { id: 'txn-1', status: 'PENDING', payment_method: {} } }),
+    });
+  const bodyEnviado = () => JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body);
+
+  beforeEach(() => {
+    service = new WompiClientService();
+    global.fetch = jest.fn();
+  });
+  afterEach(() => {
+    process.env.WOMPI_BASE_URL = baseOriginal;
+  });
+
+  it('en sandbox agrega sandbox_status APPROVED a BANCOLOMBIA_QR (el sandbox lo exige: 422 sandbox_status_mandatory_if_sandbox)', async () => {
+    process.env.WOMPI_BASE_URL = 'https://sandbox.wompi.co/v1';
+    okTransaccion();
+    await service.crearTransaccion(params({ type: 'BANCOLOMBIA_QR', payment_description: 'Suscripción' }));
+    expect(bodyEnviado().payment_method).toEqual({
+      type: 'BANCOLOMBIA_QR',
+      payment_description: 'Suscripción',
+      sandbox_status: 'APPROVED',
+    });
+  });
+
+  it('respeta un sandbox_status que ya venga (para probar rechazos)', async () => {
+    process.env.WOMPI_BASE_URL = 'https://sandbox.wompi.co/v1';
+    okTransaccion();
+    await service.crearTransaccion(params({ type: 'BANCOLOMBIA_QR', sandbox_status: 'DECLINED' }));
+    expect(bodyEnviado().payment_method.sandbox_status).toBe('DECLINED');
+  });
+
+  it('en producción nunca manda sandbox_status', async () => {
+    process.env.WOMPI_BASE_URL = 'https://production.wompi.co/v1';
+    okTransaccion();
+    await service.crearTransaccion(params({ type: 'BANCOLOMBIA_QR' }));
+    expect(bodyEnviado().payment_method).not.toHaveProperty('sandbox_status');
+  });
+
+  it('otros métodos en sandbox no llevan sandbox_status', async () => {
+    process.env.WOMPI_BASE_URL = 'https://sandbox.wompi.co/v1';
+    okTransaccion();
+    await service.crearTransaccion(params({ type: 'NEQUI', phone_number: '3991111111' }));
+    expect(bodyEnviado().payment_method).not.toHaveProperty('sandbox_status');
+  });
+
+  it('un error de validación anidado se lee completo, nunca como [object Object]', async () => {
+    (global.fetch as jest.Mock).mockResolvedValueOnce({
+      ok: false,
+      json: async () => ({
+        error: {
+          type: 'INPUT_VALIDATION_ERROR',
+          messages: { payment_method: { messages: { sandbox_status_mandatory_if_sandbox: ['Debe ser completado'] } } },
+        },
+      }),
+    });
+    const error = await service.crearTransaccion(params({ type: 'BANCOLOMBIA_QR' })).catch((e: Error) => e);
+    expect((error as Error).message).not.toContain('[object Object]');
+    expect((error as Error).message).toContain('sandbox_status_mandatory_if_sandbox: Debe ser completado');
+  });
+});
