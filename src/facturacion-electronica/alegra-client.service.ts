@@ -93,6 +93,8 @@ export interface CustomerAlegra {
   dv?: string;
   /** 1 persona jurídica, 2 persona natural (default de Alanube). */
   organizationType?: 1 | 2;
+  /** Correo del adquiriente (campo DIAN ElectronicMail). Alegra solo le escribe si la compañía tiene `notificationByEmail` — se crea apagado. */
+  email?: string;
 }
 
 /** Referencia a la factura original que una nota crédito/débito ajusta. */
@@ -182,6 +184,8 @@ export class AlegraClientService {
         identificationType: params.identificationType,
         organizationType: params.organizationType,
         useAlegraCertificate: params.useAlegraCertificate,
+        // AURA manda el correo de la factura (fase 7): sin esto Alegra podría mandar uno propio al customer.email.
+        notificationByEmail: { enabled: false },
         // Alegra rechaza `email: null` con un error de tipo — hay que omitir la
         // clave entera si el negocio no tiene correo cargado, no mandar null.
         ...(params.email ? { email: params.email } : {}),
@@ -390,6 +394,8 @@ export class AlegraClientService {
     errorMessages?: string[];
     urlXml?: string;
     urlZip?: string;
+    /** Contenedor DIAN (factura + aprobación) que se le entrega al adquiriente — Anexo Técnico 9.1. */
+    urlAttachedDocument?: string;
   }> {
     const res = await fetch(`${params.baseUrl}/invoices/${params.documentId}`, {
       method: 'GET',
@@ -415,6 +421,7 @@ export class AlegraClientService {
       errorMessages: invoice.governmentResponse?.errorMessages as string[] | undefined,
       urlXml: data.files?.xml as string | undefined,
       urlZip: data.files?.zip as string | undefined,
+      urlAttachedDocument: data.files?.attachedDocument as string | undefined,
     };
   }
 

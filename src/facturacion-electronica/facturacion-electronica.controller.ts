@@ -18,6 +18,7 @@ import { SuscripcionesService } from '../suscripciones/suscripciones.service';
 import { ActualizarDatosNegocioDto } from './dto/actualizar-datos-negocio.dto';
 import { CargarResolucionDto } from './dto/cargar-resolucion.dto';
 import { FiltrosFacturasDto } from './dto/filtros-facturas.dto';
+import { EnviarCorreoFacturaDto } from './dto/enviar-correo-factura.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { RequierePermiso } from '../common/decorators/requiere-permiso.decorator';
@@ -163,5 +164,17 @@ export class FacturacionElectronicaController {
   async reintentarFactura(@CurrentUser() usuario: JwtUserPayload, @Param('id', ParseUUIDPipe) id: string) {
     await this.exigirFeatureHabilitada(usuario.negocioId!);
     return this.facturacionService.reintentarFactura(id, usuario.negocioId!);
+  }
+
+  @Post('facturas/:id/enviar-correo')
+  @RequierePermiso(ModuloPermiso.FACTURACION_ELECTRONICA_DIAN, AccionPermiso.EDITAR)
+  @ApiOperation({ summary: 'Envía (o reenvía) la factura aceptada al correo del cliente: ZIP DIAN con PDF + AttachedDocument' })
+  async enviarCorreoFactura(
+    @CurrentUser() usuario: JwtUserPayload,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: EnviarCorreoFacturaDto,
+  ) {
+    await this.exigirFeatureHabilitada(usuario.negocioId!);
+    return this.facturacionService.enviarCorreoFactura(id, usuario.negocioId!, dto.correo);
   }
 }

@@ -35,6 +35,8 @@ describe('AlegraClientService', () => {
     expect(body.dv).toBe('5');
     expect(body.address).toEqual({ address: 'Calle 1 # 2-3', city: '11001', department: '11', country: 'CO' });
     expect(body.nit).toBeUndefined();
+    // Fase 7: AURA manda el correo de la factura; Alegra no debe mandar uno propio.
+    expect(body.notificationByEmail).toEqual({ enabled: false });
   });
 
   it('crearCompania omite la clave email en vez de mandar null cuando el negocio no tiene correo (confirmado en vivo: Alegra rechaza email:null)', async () => {
@@ -418,6 +420,20 @@ describe('AlegraClientService', () => {
 
       expect(resultado).toEqual(expect.objectContaining({ alegraDocumentId: 'inv-2', legalStatus: 'ACCEPTED', isFinal: true }));
       expect(fetchMock.mock.calls[0][0]).toBe('https://sandbox-api.alegra.com/e-provider/col/v1/invoices/inv-2');
+    });
+
+    it('devuelve la URL del AttachedDocument (lo que se le entrega al cliente por correo, fase 7)', async () => {
+      fetchMock.mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          invoice: { id: 'inv-2', status: 'SENT', legalStatus: 'ACCEPTED', isFinal: true },
+          files: { xml: 'https://s3/2.xml', attachedDocument: 'https://s3/2-attached.xml' },
+        }),
+      });
+
+      const resultado = await service.consultarFactura({ token: 't', baseUrl: 'https://x', documentId: 'inv-2' });
+
+      expect(resultado.urlAttachedDocument).toBe('https://s3/2-attached.xml');
     });
   });
 

@@ -19,6 +19,7 @@ import { Venta } from '../ventas/entities/venta.entity';
 import { TiendaOnline } from '../tienda-online/entities/tienda-online.entity';
 import { SuscripcionesModule } from '../suscripciones/suscripciones.module';
 import { RealtimeModule } from '../realtime/realtime.module';
+import { EmailModule } from '../email/email.module';
 
 @Module({
   imports: [
@@ -34,6 +35,7 @@ import { RealtimeModule } from '../realtime/realtime.module';
     ]),
     SuscripcionesModule,
     RealtimeModule,
+    EmailModule,
   ],
   controllers: [FacturacionElectronicaController, ContingenciaController],
   providers: [

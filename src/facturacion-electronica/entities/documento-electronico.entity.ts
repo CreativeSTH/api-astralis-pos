@@ -2,6 +2,8 @@ import { Column, Entity, Index } from 'typeorm';
 import { BaseEntity } from '../../common/entities/base.entity';
 import { EstadoDocumentoElectronico } from './estado-documento-electronico.enum';
 
+export type EstadoCorreoFactura = 'ENVIANDO' | 'ENVIADO' | 'FALLIDO';
+
 @Entity('documentos_electronicos')
 @Index('IDX_documentos_electronicos_negocio_created', ['negocioId', 'createdAt'])
 // Un número de contingencia no se reutiliza nunca (fase 6a).
@@ -115,4 +117,19 @@ export class DocumentoElectronico extends BaseEntity {
   /** true = el papel lo escribió el negocio a mano y se registró en AURA después (no lo imprimió AURA). */
   @Column({ name: 'transcrita_de_talonario', default: false })
   transcritaDeTalonario: boolean;
+
+  // ── Fase 7: último envío de la factura al correo del cliente ──
+
+  /** null = nunca se intentó; ENVIANDO = reclamado por el envío automático (evita duplicar webhook + cron). */
+  @Column({ name: 'correo_estado', type: 'varchar', nullable: true })
+  correoEstado: EstadoCorreoFactura | null;
+
+  @Column({ name: 'correo_destinatario', type: 'varchar', nullable: true })
+  correoDestinatario: string | null;
+
+  @Column({ name: 'correo_enviado_en', type: 'timestamptz', nullable: true })
+  correoEnviadoEn: Date | null;
+
+  @Column({ name: 'correo_error', type: 'text', nullable: true })
+  correoError: string | null;
 }

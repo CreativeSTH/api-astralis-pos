@@ -7,9 +7,9 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, IsNull, Repository } from 'typeorm';
 import { HabilitacionFacturacionElectronica } from './entities/habilitacion-facturacion-electronica.entity';
-import { DocumentoElectronico } from './entities/documento-electronico.entity';
+import { DocumentoElectronico, EstadoCorreoFactura } from './entities/documento-electronico.entity';
 import { EstadoHabilitacion } from './entities/estado-habilitacion.enum';
 import { EstadoDocumentoElectronico } from './entities/estado-documento-electronico.enum';
 import {
@@ -30,6 +30,9 @@ import { FacturaPdfService } from './factura-pdf.service';
 import { LogoNegocioService } from './logo-negocio.service';
 import { ContingenciaService, ResolucionContingenciaSnapshot } from './contingencia.service';
 import { contenidoQrContingencia, resolucionContingenciaDesdeDocumento } from './contingencia.util';
+import { armarZipFactura, asuntoCorreoFactura, codigoTipoDocumento, PESO_MAXIMO_ZIP_BYTES } from './correo-factura';
+import { EmailService } from '../email/email.service';
+import { construirCorreoFactura } from '../email/templates/factura-electronica.template';
 import { encriptar, desencriptar } from '../common/utils/cifrado';
 import { Negocio } from '../negocios/entities/negocio.entity';
 import { SuscripcionesService } from '../suscripciones/suscripciones.service';
@@ -40,6 +43,9 @@ import { Venta } from '../ventas/entities/venta.entity';
 import { TipoComprobanteVenta } from '../common/enums/tipo-comprobante.enum';
 import { calcularDigitoVerificacion, limpiarNit } from '../common/utils/nit';
 import { diaColombia, finDiaColombia, inicioDiaColombia } from '../common/utils/fecha-colombia';
+
+const esAceptado = (estado: EstadoDocumentoElectronico) =>
+  estado === EstadoDocumentoElectronico.ACEPTADO || estado === EstadoDocumentoElectronico.ACEPTADO_CON_OBSERVACIONES;
 
 export function baseUrlPara(ambiente: 'SANDBOX' | 'PRODUCCION'): string {
   return ambiente === 'PRODUCCION' ? process.env.ALEGRA_BASE_URL_PRODUCCION! : process.env.ALEGRA_BASE_URL_SANDBOX!;
@@ -120,6 +126,7 @@ export class FacturacionElectronicaService {
     private readonly facturaPdf: FacturaPdfService,
     private readonly logoNegocio: LogoNegocioService,
     private readonly contingencia: ContingenciaService,
+    private readonly email: EmailService,
   ) {}
 
   async obtenerOCrearHabilitacion(negocioId: string): Promise<HabilitacionFacturacionElectronica> {
@@ -588,6 +595,9 @@ export class FacturacionElectronicaService {
   private mapearCustomerAlegra(venta: Venta): CustomerAlegra {
     if (venta.cliente?.documentoIdentidad && venta.cliente.tipoDocumentoIdentidad) {
       const tipo = venta.cliente.tipoDocumentoIdentidad;
+      // Anexo Técnico 9: el emisor informa en la factura el correo del adquiriente.
+      const email = venta.cliente.email?.trim();
+      const correo = email ? { email } : {};
       if (tipo === '31') {
         // El usuario suele tipear el NIT con DV ("900.123.456-7"): el DV va aparte, en `dv`.
         const nit = limpiarNit(venta.cliente.documentoIdentidad.split('-')[0]);
@@ -597,12 +607,14 @@ export class FacturacionElectronicaService {
           dv: calcularDigitoVerificacion(nit),
           organizationType: 1,
           name: venta.cliente.nombre,
+          ...correo,
         };
       }
       return {
         identificationNumber: venta.cliente.documentoIdentidad.trim(),
         identificationType: tipo,
         name: venta.cliente.nombre,
+        ...correo,
       };
     }
     return { identificationNumber: '222222222222', identificationType: '13', name: 'Consumidor Final' };
@@ -735,13 +747,7 @@ export class FacturacionElectronicaService {
     await this.documentosRepository.save(documento);
     this.realtimeGateway.emitToNegocio(documento.negocioId, 'documentos-electronicos:cambio', documento);
 
-    if (
-      (documento.estado === EstadoDocumentoElectronico.ACEPTADO ||
-        documento.estado === EstadoDocumentoElectronico.ACEPTADO_CON_OBSERVACIONES) &&
-      habilitacion.ambiente === 'PRODUCCION'
-    ) {
-      await this.suscripcionesService.registrarConsumo(documento.negocioId, 'documentosDianPorMes');
-    }
+    await this.alTerminarEmision(documento, habilitacion);
   }
 
   /** Estado del documento según la respuesta de Alegra — compartido por la emisión normal y la de contingencia. */
@@ -815,13 +821,7 @@ export class FacturacionElectronicaService {
     }
     await this.documentosRepository.save(documento);
     this.realtimeGateway.emitToNegocio(documento.negocioId, 'documentos-electronicos:cambio', documento);
-    if (
-      (documento.estado === EstadoDocumentoElectronico.ACEPTADO ||
-        documento.estado === EstadoDocumentoElectronico.ACEPTADO_CON_OBSERVACIONES) &&
-      habilitacion.ambiente === 'PRODUCCION'
-    ) {
-      await this.suscripcionesService.registrarConsumo(documento.negocioId, 'documentosDianPorMes');
-    }
+    await this.alTerminarEmision(documento, habilitacion);
   }
 
   /** Cron: un período AUTOMATICO se cierra solo cuando Alegra vuelve a responder (los MANUAL los cierra el administrador). */
@@ -862,13 +862,7 @@ export class FacturacionElectronicaService {
     await this.documentosRepository.save(documento);
     this.realtimeGateway.emitToNegocio(documento.negocioId, 'documentos-electronicos:cambio', documento);
 
-    if (
-      (documento.estado === EstadoDocumentoElectronico.ACEPTADO ||
-        documento.estado === EstadoDocumentoElectronico.ACEPTADO_CON_OBSERVACIONES) &&
-      habilitacion?.ambiente === 'PRODUCCION'
-    ) {
-      await this.suscripcionesService.registrarConsumo(documento.negocioId, 'documentosDianPorMes');
-    }
+    await this.alTerminarEmision(documento, habilitacion);
   }
 
   /** Backoff simple: reintenta/consulta cada documento PENDIENTE que no se tocó en los últimos 5 minutos. */
@@ -927,12 +921,7 @@ export class FacturacionElectronicaService {
     await this.documentosRepository.save(documento);
     this.realtimeGateway.emitToNegocio(documento.negocioId, 'documentos-electronicos:cambio', documento);
 
-    if (
-      (documento.estado === EstadoDocumentoElectronico.ACEPTADO || documento.estado === EstadoDocumentoElectronico.ACEPTADO_CON_OBSERVACIONES) &&
-      habilitacion.ambiente === 'PRODUCCION'
-    ) {
-      await this.suscripcionesService.registrarConsumo(documento.negocioId, 'documentosDianPorMes');
-    }
+    await this.alTerminarEmision(documento, habilitacion);
   }
 
   /**
@@ -1106,13 +1095,120 @@ export class FacturacionElectronicaService {
           });
     if (!urlXml) throw new BadGatewayException('Alegra no devolvió el XML de esta factura');
 
-    // La URL es un link de S3 prefirmado (expira en 1h) — se descarga acá y nunca llega al navegador.
-    const res = await fetch(urlXml);
-    if (!res.ok) throw new BadGatewayException('No se pudo obtener el documento de Alegra, intentá en unos minutos');
     return {
       nombreArchivo: `${documento.numeroCompleto ?? documento.id}.xml`,
-      contenido: Buffer.from(await res.arrayBuffer()),
+      contenido: await this.descargarDeAlegra(urlXml),
     };
+  }
+
+  /** Contenedor DIAN (factura + aprobación) que se le entrega al cliente — Anexo Técnico 9.1. */
+  private async descargarAttachedDocument(documento: DocumentoElectronico): Promise<Buffer> {
+    const habilitacion = await this.habilitacionRepository.findOneOrFail({ where: { negocioId: documento.negocioId } });
+    const { urlAttachedDocument } = await this.alegraClient.consultarFactura({
+      token: process.env.ALEGRA_RESELLER_TOKEN!,
+      baseUrl: baseUrlPara(habilitacion.ambiente),
+      documentId: documento.alegraDocumentId!,
+    });
+    if (!urlAttachedDocument) throw new BadGatewayException('Alegra no devolvió el AttachedDocument de esta factura');
+    return this.descargarDeAlegra(urlAttachedDocument);
+  }
+
+  /** Las URLs de `files` son links de S3 prefirmados (expiran en 1 h): se descargan acá y nunca llegan al navegador. */
+  private async descargarDeAlegra(url: string): Promise<Buffer> {
+    const res = await fetch(url);
+    if (!res.ok) throw new BadGatewayException('No se pudo obtener el documento de Alegra, intenta en unos minutos');
+    return Buffer.from(await res.arrayBuffer());
+  }
+
+  // ── Fase 7: la factura al correo del cliente ──
+
+  /** Una factura recién aceptada en producción: descuenta cupo y se envía al cliente (sin esperar el correo). */
+  private async alTerminarEmision(
+    documento: DocumentoElectronico,
+    habilitacion: HabilitacionFacturacionElectronica | null,
+  ): Promise<void> {
+    if (!esAceptado(documento.estado) || habilitacion?.ambiente !== 'PRODUCCION') return;
+    await this.suscripcionesService.registrarConsumo(documento.negocioId, 'documentosDianPorMes');
+    // Dispara y olvida: el POS espera la respuesta de emisión (CUFE) y el correo nunca la demora.
+    void this.enviarCorreoAutomatico(documento).catch((e: unknown) =>
+      this.logger.error(`No se pudo enviar por correo la factura ${documento.id}`, e instanceof Error ? e.stack : String(e)),
+    );
+  }
+
+  private async enviarCorreoAutomatico(documento: DocumentoElectronico): Promise<void> {
+    if (documento.tipo !== 'FACTURA' || documento.correoEstado) return;
+    const correo = await this.correoDelCliente(documento);
+    if (!correo) return;
+    // Reclamo atómico: el webhook y el cron pueden aceptar la misma factura casi a la vez.
+    const { affected } = await this.documentosRepository.update(
+      { id: documento.id, correoEstado: IsNull() },
+      { correoEstado: 'ENVIANDO' },
+    );
+    if (!affected) return;
+    await this.ejecutarEnvioCorreo(documento, correo);
+  }
+
+  /** Reenvío manual desde el detalle de la factura; `destinatario` reemplaza (sin guardarlo) el correo del cliente. */
+  async enviarCorreoFactura(id: string, negocioId: string, destinatario?: string): Promise<DocumentoElectronico> {
+    const documento = await this.facturaDelNegocioOFallar(id, negocioId);
+    if (documento.tipo !== 'FACTURA' || !esAceptado(documento.estado)) {
+      throw new ConflictException('Solo se puede enviar una factura aceptada por la DIAN');
+    }
+    const correo = destinatario?.trim() || (await this.correoDelCliente(documento));
+    if (!correo) throw new BadRequestException('El cliente no tiene correo registrado: escríbelo para enviarle la factura');
+    await this.ejecutarEnvioCorreo(documento, correo);
+    return this.facturaDelNegocioOFallar(id, negocioId);
+  }
+
+  private async correoDelCliente(documento: DocumentoElectronico): Promise<string | null> {
+    const venta = await this.ventasRepository.findOne({ where: { id: documento.ventaId }, relations: { cliente: true } });
+    return venta?.cliente?.email?.trim() || null;
+  }
+
+  /** Arma el ZIP DIAN (PDF + AttachedDocument), lo envía y deja registrado el resultado. Nunca lanza. */
+  private async ejecutarEnvioCorreo(documento: DocumentoElectronico, correo: string): Promise<void> {
+    let estado: EstadoCorreoFactura = 'ENVIADO';
+    let error: string | null = null;
+    try {
+      const { contenido: pdf } = await this.generarPdf(documento.id, documento.negocioId);
+      const attachedDocument = await this.descargarAttachedDocument(documento);
+      const numero = documento.numeroCompleto ?? documento.id;
+      const zip = armarZipFactura({ nombreBase: numero, pdf, attachedDocument });
+      if (zip.length > PESO_MAXIMO_ZIP_BYTES) {
+        throw new Error('La factura pesa más de 2 MB (límite de la DIAN por correo). Revisa el tamaño del logo del negocio.');
+      }
+      const negocio = await this.negociosRepository.findOneOrFail({ where: { id: documento.negocioId } });
+      const venta = await this.ventasRepository.findOne({ where: { id: documento.ventaId }, relations: { cliente: true } });
+      const resultado = await this.email.enviar({
+        to: correo,
+        subject: asuntoCorreoFactura({
+          nitEmisor: documento.emisorNit ?? negocio.nit ?? '',
+          razonSocial: documento.emisorRazonSocial ?? negocio.nombre,
+          numero,
+          tipoDocumento: codigoTipoDocumento(attachedDocument.toString('utf8')),
+          nombreComercial: negocio.nombre,
+        }),
+        html: construirCorreoFactura({
+          nombreCliente: venta?.cliente?.nombre ?? documento.nombreCliente ?? 'cliente',
+          nombreNegocio: negocio.nombre,
+          numero,
+          total: Number(documento.total ?? 0),
+        }).html,
+        nombreRemitente: negocio.nombre,
+        replyTo: negocio.email ?? undefined,
+        adjuntos: [{ filename: `${numero}.zip`, content: zip, contentType: 'application/zip' }],
+      });
+      if (!resultado.ok) throw new Error(resultado.error);
+    } catch (e) {
+      estado = 'FALLIDO';
+      error = e instanceof Error ? e.message : String(e);
+      this.logger.warn(`Correo de la factura ${documento.id} a ${correo} falló: ${error}`);
+    }
+    // `update` y no `save`: solo las columnas del correo, sin pisar el resto del documento.
+    const registro = { correoEstado: estado, correoDestinatario: correo, correoEnviadoEn: new Date(), correoError: error };
+    await this.documentosRepository.update(documento.id, registro);
+    Object.assign(documento, registro);
+    this.realtimeGateway.emitToNegocio(documento.negocioId, 'documentos-electronicos:cambio', documento);
   }
 
   async reintentarFactura(id: string, negocioId: string): Promise<DocumentoElectronico> {

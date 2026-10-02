@@ -17,6 +17,9 @@ import { TipoAlerta } from '../common/enums/alerta.enum';
 import { Venta } from '../ventas/entities/venta.entity';
 import { ContingenciaService } from './contingencia.service';
 import { AlegraNoDisponibleError } from './alegra-client.service';
+import { EmailService } from '../email/email.service';
+import { randomBytes } from 'crypto';
+import { unzipSync } from 'fflate';
 
 type AlegraClientMock = {
   crearCompania: jest.Mock;
@@ -92,8 +95,10 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
     find: jest.Mock;
     create: jest.Mock;
     save: jest.Mock;
+    update: jest.Mock;
     createQueryBuilder: jest.Mock;
   };
+  let emailService: { enviar: jest.Mock };
   let negociosRepo: { findOneOrFail: jest.Mock; save: jest.Mock };
   let ventasRepo: { findOneOrFail: jest.Mock; findOne: jest.Mock };
   let facturaPdf: { generar: jest.Mock; generarQrDataUrl: jest.Mock };
@@ -126,8 +131,10 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
       find: jest.fn().mockResolvedValue([]),
       create: jest.fn((x) => x),
       save: jest.fn(async (x) => x),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
       createQueryBuilder: jest.fn().mockReturnValue(qbWhereMock),
     };
+    emailService = { enviar: jest.fn().mockResolvedValue({ ok: true }) };
     negociosRepo = {
       findOneOrFail: jest.fn().mockResolvedValue({ nit: '899999034', email: 'negocio@test.local' }),
       save: jest.fn(async (x: unknown) => x),
@@ -180,6 +187,7 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
         { provide: FacturaPdfService, useValue: facturaPdf },
         { provide: LogoNegocioService, useValue: logoNegocio },
         { provide: ContingenciaService, useValue: contingencia },
+        { provide: EmailService, useValue: emailService },
       ],
     }).compile();
 
@@ -538,6 +546,21 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
 
       expect(alegraClient.crearFactura).toHaveBeenCalledWith(
         expect.objectContaining({ customer: { identificationNumber: '1020304050', identificationType: '13', name: 'Ana Gómez' } }),
+      );
+    });
+
+    it('manda el correo del cliente a Alegra (campo DIAN ElectronicMail)', async () => {
+      const documento: any = { id: 'doc-e', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'FACTURA', estado: EstadoDocumentoElectronico.PENDIENTE, intentos: 0 };
+      ventasRepo.findOneOrFail.mockResolvedValue(
+        ventaDePrueba({ cliente: { nombre: 'Ana', documentoIdentidad: '1047', tipoDocumentoIdentidad: '13', email: ' ana@correo.co ' } } as any),
+      );
+
+      await service.intentarEmitir(documento, { ...HABILITACION_CON_RESOLUCION } as any);
+
+      expect(alegraClient.crearFactura).toHaveBeenCalledWith(
+        expect.objectContaining({
+          customer: { identificationNumber: '1047', identificationType: '13', name: 'Ana', email: 'ana@correo.co' },
+        }),
       );
     });
 
@@ -1430,6 +1453,143 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
     it('la alerta de 48 h por created_at excluye los documentos de contingencia (tienen su propio plazo)', async () => {
       await service.alertarDocumentosVencidos();
       expect(qbWhereMock.andWhere).toHaveBeenCalledWith('doc.periodo_contingencia_id IS NULL');
+    });
+  });
+
+  describe('correo de la factura (fase 7)', () => {
+    const ATTACHED = '<AttachedDocument><![CDATA[<cbc:InvoiceTypeCode>01</cbc:InvoiceTypeCode>]]></AttachedDocument>';
+    const fetchOriginal = global.fetch;
+    /** El envío automático es "dispara y olvida": hay que dejar correr las promesas pendientes. */
+    const esperarEnvio = async () => {
+      for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+    };
+    const docAceptado = (overrides: Record<string, unknown> = {}): any => ({
+      id: 'doc-1', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'FACTURA', estado: EstadoDocumentoElectronico.ACEPTADO,
+      cufe: 'cufe-1', alegraDocumentId: 'inv-1', qrContenido: 'qr', numero: 120, prefijo: 'FE', numeroCompleto: 'FE120',
+      ambiente: 'PRODUCCION', emisorNit: '900.123.456-7', emisorRazonSocial: 'El Clavo SAS', resolucionNumero: '187',
+      emisorDireccion: 'Calle 1', fechaEmision: new Date(), total: 32130, correoEstado: null, intentos: 1,
+      ...overrides,
+    });
+    const ventaConCorreo = (email: string | null = 'ana@correo.co') =>
+      ventaDePrueba({ cliente: { nombre: 'Ana', documentoIdentidad: '1047', tipoDocumentoIdentidad: '13', email } } as any);
+
+    beforeEach(() => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        arrayBuffer: async () => new TextEncoder().encode(ATTACHED).buffer,
+      }) as unknown as typeof fetch;
+      alegraClient.consultarFactura.mockResolvedValue({
+        alegraDocumentId: 'inv-1', status: 'SENT', legalStatus: 'ACCEPTED', isFinal: true, urlAttachedDocument: 'https://s3/attached.xml',
+      });
+      habilitacionRepo.findOneOrFail.mockResolvedValue({ ...HABILITACION_CON_RESOLUCION });
+      negociosRepo.findOneOrFail.mockResolvedValue({ id: 'neg-1', nombre: 'El Clavo', nit: '900123456-7', email: 'negocio@clavo.co' });
+      ventasRepo.findOne.mockResolvedValue(ventaConCorreo());
+      ventasRepo.findOneOrFail.mockResolvedValue(ventaConCorreo());
+    });
+    afterEach(() => {
+      global.fetch = fetchOriginal;
+    });
+
+    it('al aceptarse en producción envía el ZIP DIAN al correo del cliente y registra ENVIADO', async () => {
+      const documento = docAceptado({ estado: EstadoDocumentoElectronico.PENDIENTE });
+      alegraClient.crearFactura.mockResolvedValue({ alegraDocumentId: 'inv-1', status: 'SENT', legalStatus: 'ACCEPTED', isFinal: true });
+      documentosRepo.findOne.mockImplementation(async () => documento);
+
+      await service.intentarEmitir(documento, { ...HABILITACION_CON_RESOLUCION } as any);
+      await esperarEnvio();
+
+      expect(documentosRepo.update).toHaveBeenCalledWith({ id: 'doc-1', correoEstado: expect.anything() }, { correoEstado: 'ENVIANDO' });
+      expect(emailService.enviar).toHaveBeenCalledTimes(1);
+      const envio = emailService.enviar.mock.calls[0][0];
+      expect(envio.to).toBe('ana@correo.co');
+      expect(envio.subject).toBe(`900123456;${documento.emisorRazonSocial};${documento.numeroCompleto};01;El Clavo`);
+      expect(envio.replyTo).toBe('negocio@clavo.co');
+      expect(envio.nombreRemitente).toBe('El Clavo');
+      expect(envio.adjuntos[0].filename).toBe(`${documento.numeroCompleto}.zip`);
+      const archivos = unzipSync(new Uint8Array(envio.adjuntos[0].content));
+      expect(Object.keys(archivos).sort()).toEqual([`${documento.numeroCompleto}.pdf`, `${documento.numeroCompleto}.xml`]);
+      expect(documentosRepo.update).toHaveBeenCalledWith('doc-1', {
+        correoEstado: 'ENVIADO', correoDestinatario: 'ana@correo.co', correoEnviadoEn: expect.any(Date), correoError: null,
+      });
+    });
+
+    it('no envía en sandbox', async () => {
+      const documento = docAceptado({ estado: EstadoDocumentoElectronico.PENDIENTE, ambiente: 'SANDBOX' });
+      await service.intentarEmitir(documento, { ...HABILITACION_CON_RESOLUCION, ambiente: 'SANDBOX' } as any);
+      await esperarEnvio();
+      expect(emailService.enviar).not.toHaveBeenCalled();
+    });
+
+    it('no envía si el cliente no tiene correo', async () => {
+      ventasRepo.findOne.mockResolvedValue(ventaConCorreo(null));
+      documentosRepo.findOne.mockResolvedValue(docAceptado({ estado: EstadoDocumentoElectronico.PENDIENTE }));
+      habilitacionRepo.findOne.mockResolvedValue({ ...HABILITACION_CON_RESOLUCION });
+      await service.procesarWebhookAlegra({ documentId: 'inv-1', legalStatus: 'ACCEPTED' });
+      await esperarEnvio();
+      expect(documentosRepo.update).not.toHaveBeenCalled();
+      expect(emailService.enviar).not.toHaveBeenCalled();
+    });
+
+    it('no envía dos veces: si otro proceso ya reclamó el envío no llama a Resend', async () => {
+      documentosRepo.update.mockResolvedValueOnce({ affected: 0 });
+      documentosRepo.findOne.mockResolvedValue(docAceptado({ estado: EstadoDocumentoElectronico.PENDIENTE }));
+      habilitacionRepo.findOne.mockResolvedValue({ ...HABILITACION_CON_RESOLUCION });
+      await service.procesarWebhookAlegra({ documentId: 'inv-1', legalStatus: 'ACCEPTED' });
+      await esperarEnvio();
+      expect(emailService.enviar).not.toHaveBeenCalled();
+    });
+
+    it('el webhook ACCEPTED dispara el envío; si Resend falla registra FALLIDO sin lanzar', async () => {
+      emailService.enviar.mockResolvedValue({ ok: false, error: 'domain not verified' });
+      const documento = docAceptado({ estado: EstadoDocumentoElectronico.PENDIENTE });
+      documentosRepo.findOne.mockResolvedValue(documento);
+      habilitacionRepo.findOne.mockResolvedValue({ ...HABILITACION_CON_RESOLUCION });
+
+      await service.procesarWebhookAlegra({ documentId: 'inv-1', legalStatus: 'ACCEPTED' });
+      await esperarEnvio();
+
+      expect(emailService.enviar).toHaveBeenCalledTimes(1);
+      expect(documentosRepo.update).toHaveBeenCalledWith(
+        'doc-1',
+        expect.objectContaining({ correoEstado: 'FALLIDO', correoError: 'domain not verified' }),
+      );
+    });
+
+    it('si el ZIP supera 2 MB registra FALLIDO sin llamar a Resend', async () => {
+      facturaPdf.generar.mockResolvedValue(randomBytes(3 * 1024 * 1024));
+      documentosRepo.findOne.mockResolvedValue(docAceptado());
+
+      await service.enviarCorreoFactura('doc-1', 'neg-1');
+
+      expect(emailService.enviar).not.toHaveBeenCalled();
+      expect(documentosRepo.update).toHaveBeenCalledWith(
+        'doc-1',
+        expect.objectContaining({ correoEstado: 'FALLIDO', correoError: expect.stringContaining('2 MB') }),
+      );
+    });
+
+    it('reenvío manual: usa el correo escrito aunque el cliente tenga otro, y funciona en sandbox', async () => {
+      documentosRepo.findOne.mockResolvedValue(docAceptado({ ambiente: 'SANDBOX', correoEstado: 'ENVIADO' }));
+
+      await service.enviarCorreoFactura('doc-1', 'neg-1', ' otro@correo.co ');
+
+      expect(emailService.enviar).toHaveBeenCalledWith(expect.objectContaining({ to: 'otro@correo.co' }));
+      expect(documentosRepo.update).toHaveBeenCalledWith(
+        'doc-1',
+        expect.objectContaining({ correoEstado: 'ENVIADO', correoDestinatario: 'otro@correo.co' }),
+      );
+    });
+
+    it('reenvío manual: 409 si la factura no está aceptada', async () => {
+      documentosRepo.findOne.mockResolvedValue(docAceptado({ estado: EstadoDocumentoElectronico.RECHAZADO }));
+      await expect(service.enviarCorreoFactura('doc-1', 'neg-1')).rejects.toBeInstanceOf(ConflictException);
+      expect(emailService.enviar).not.toHaveBeenCalled();
+    });
+
+    it('reenvío manual: 400 si no hay correo del cliente ni escrito', async () => {
+      ventasRepo.findOne.mockResolvedValue(ventaConCorreo(null));
+      documentosRepo.findOne.mockResolvedValue(docAceptado());
+      await expect(service.enviarCorreoFactura('doc-1', 'neg-1')).rejects.toBeInstanceOf(BadRequestException);
     });
   });
 });
