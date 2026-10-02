@@ -4,7 +4,11 @@ import { Repository } from 'typeorm';
 import { createHash, randomUUID, timingSafeEqual } from 'crypto';
 import { Suscripcion } from './entities/suscripcion.entity';
 import { EstadoSuscripcion } from './entities/estado-suscripcion.enum';
-import { TransaccionSuscripcion, MetodoPagoSuscripcion } from './entities/transaccion-suscripcion.entity';
+import {
+  TransaccionSuscripcion,
+  MetodoPagoSuscripcion,
+  EstadoTransaccionSuscripcion,
+} from './entities/transaccion-suscripcion.entity';
 import { MedioPagoGuardado } from './entities/medio-pago-guardado.entity';
 import { Negocio } from '../negocios/entities/negocio.entity';
 import { Usuario } from '../usuarios/entities/usuario.entity';
@@ -16,10 +20,32 @@ import { Paquete } from '../paquetes/entities/paquete.entity';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { EmailService } from '../email/email.service';
 import { ReactivarSuscripcionDto } from './dto/reactivar-suscripcion.dto';
+import { GuardarMedioPagoDto } from './dto/guardar-medio-pago.dto';
+import { FiltrosPagosSuscripcionDto } from './dto/filtros-pagos-suscripcion.dto';
 import { construirCorreoRecordatorioProximo } from '../email/templates/recordatorio-proximo-cobro.template';
 import { construirCorreoRecordatorioDia0 } from '../email/templates/recordatorio-dia-cobro.template';
 import { construirCorreoCobroFallido } from '../email/templates/cobro-fallido.template';
 import { CicloFacturacion } from './entities/ciclo-facturacion.enum';
+
+/** Un cobro de la suscripción tal como lo ve el negocio — sin `referencia` ni `wompiTransactionId`. */
+export interface PagoSuscripcionResumen {
+  id: string;
+  fecha: Date;
+  confirmadoEn: Date | null;
+  paquete: string;
+  ciclo: CicloFacturacion;
+  metodo: MetodoPagoSuscripcion;
+  montoEnCentavos: number;
+  estado: EstadoTransaccionSuscripcion;
+  origen: 'MANUAL' | 'AUTOMATICO';
+}
+
+export interface HistorialPagos {
+  items: PagoSuscripcionResumen[];
+  total: number;
+  pagina: number;
+  porPagina: number;
+}
 
 const DIAS_PRUEBA = 20;
 const DIAS_EARLY_BIRD = 15;
@@ -319,6 +345,65 @@ export class SuscripcionesService {
 
   async obtenerMedioPago(negocioId: string): Promise<MedioPagoGuardado | null> {
     return this.medioPagoRepository.findOne({ where: { negocioId, activo: true } });
+  }
+
+  /**
+   * Guarda (o reemplaza) la tarjeta del cobro automático SIN cobrar (spec 2026-10-01 mi-plan, 3.1).
+   * Desde ese momento `cobrarAutomatico` la cobra al llegar `fechaFin`.
+   */
+  async registrarMedioPago(
+    negocioId: string,
+    dto: GuardarMedioPagoDto,
+  ): Promise<{ activo: true; ultimosCuatroDigitos: string }> {
+    const { acceptanceToken, acceptPersonalAuth } = await this.wompiClient.obtenerTokensAceptacion(
+      process.env.WOMPI_PLATAFORMA_LLAVE_PUBLICA!,
+    );
+    const fuente = await this.wompiClient.crearFuentePago({
+      llavePrivada: process.env.WOMPI_PLATAFORMA_LLAVE_PRIVADA!,
+      token: dto.token,
+      customerEmail: 'facturacion@somosaura.dev',
+      acceptanceToken,
+      acceptPersonalAuth,
+    });
+    await this.guardarMedioPago(negocioId, fuente.paymentSourceId, dto.ultimosCuatroDigitos);
+    return { activo: true, ultimosCuatroDigitos: dto.ultimosCuatroDigitos };
+  }
+
+  /** Historial de cobros de la suscripción (spec 2026-10-01 mi-plan, 3.2). Sin referencias de Wompi. */
+  async historialPagos(negocioId: string, filtros: FiltrosPagosSuscripcionDto): Promise<HistorialPagos> {
+    const pagina = filtros.pagina ?? 1;
+    const porPagina = filtros.porPagina ?? 10;
+    const [transacciones, total] = await this.transaccionesRepository.findAndCount({
+      where: { negocioId },
+      order: { createdAt: 'DESC' },
+      skip: (pagina - 1) * porPagina,
+      take: porPagina,
+    });
+    const nombres = new Map<string, string>();
+    for (const paqueteId of new Set(transacciones.map((t) => t.paqueteId))) {
+      // Un paquete borrado del catálogo no debe romper el historial.
+      const nombre = await this.paquetesService
+        .findOne(paqueteId)
+        .then((p) => p.nombre)
+        .catch(() => 'Plan anterior');
+      nombres.set(paqueteId, nombre);
+    }
+    return {
+      items: transacciones.map((t) => ({
+        id: t.id,
+        fecha: t.createdAt,
+        confirmadoEn: t.confirmedAt ?? null,
+        paquete: nombres.get(t.paqueteId) ?? 'Plan anterior',
+        ciclo: t.cicloFacturacion,
+        metodo: t.metodoPago,
+        montoEnCentavos: t.montoEnCentavos,
+        estado: t.estado,
+        origen: t.origen,
+      })),
+      total,
+      pagina,
+      porPagina,
+    };
   }
 
   async quitarMedioPago(negocioId: string): Promise<void> {

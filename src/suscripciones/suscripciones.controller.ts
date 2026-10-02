@@ -1,9 +1,11 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { SuscripcionesService } from './suscripciones.service';
 import { ReactivarSuscripcionDto } from './dto/reactivar-suscripcion.dto';
 import { CancelarSuscripcionDto } from './dto/cancelar-suscripcion.dto';
 import { CambiarPaquetePruebaDto } from './dto/cambiar-paquete-prueba.dto';
+import { GuardarMedioPagoDto } from './dto/guardar-medio-pago.dto';
+import { FiltrosPagosSuscripcionDto } from './dto/filtros-pagos-suscripcion.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { EmailVerificadoGuard } from '../common/guards/email-verificado.guard';
 import { Public } from '../common/decorators/public.decorator';
@@ -69,6 +71,24 @@ export class SuscripcionesController {
     return medioPago
       ? { activo: true, ultimosCuatroDigitos: medioPago.ultimosCuatroDigitos }
       : { activo: false, ultimosCuatroDigitos: null };
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @Get('pagos')
+  @ApiOperation({ summary: 'Historial de pagos de la suscripción del negocio, más reciente primero' })
+  pagos(@CurrentUser() usuario: JwtUserPayload, @Query() filtros: FiltrosPagosSuscripcionDto) {
+    return this.suscripcionesService.historialPagos(usuario.negocioId!, filtros);
+  }
+
+  @UseGuards(JwtAuthGuard, EmailVerificadoGuard)
+  @RequiereEmailVerificado()
+  @ApiBearerAuth('JWT-auth')
+  @Post('medio-pago')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Guarda (o reemplaza) la tarjeta del cobro automático, sin cobrar' })
+  guardarMedioPago(@CurrentUser() usuario: JwtUserPayload, @Body() dto: GuardarMedioPagoDto) {
+    return this.suscripcionesService.registrarMedioPago(usuario.negocioId!, dto);
   }
 
   @UseGuards(JwtAuthGuard)

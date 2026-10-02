@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
@@ -1311,5 +1311,152 @@ describe('SuscripcionesService — miEstado enRiesgo', () => {
     const resultado = await service.miEstado('neg-1');
 
     expect(resultado.bloqueado).toBe(false);
+  });
+});
+
+describe('SuscripcionesService — registrarMedioPago (agregar tarjeta sin pagar)', () => {
+  const armar = async (wompiClient: Record<string, jest.Mock>) => {
+    const medioPagoRepo = {
+      findOne: jest.fn().mockResolvedValue(null),
+      create: jest.fn((x: unknown) => x),
+      save: jest.fn(async (x: unknown) => x),
+    };
+    const transaccionesRepo = { save: jest.fn(), create: jest.fn() };
+    const moduleRef = await Test.createTestingModule({
+      providers: [
+        SuscripcionesService,
+        { provide: getRepositoryToken(Suscripcion), useValue: {} },
+        { provide: getRepositoryToken(TransaccionSuscripcion), useValue: transaccionesRepo },
+        { provide: getRepositoryToken(MedioPagoGuardado), useValue: medioPagoRepo },
+        { provide: WompiClientService, useValue: wompiClient },
+        { provide: PaquetesService, useValue: {} },
+        { provide: RealtimeGateway, useValue: { emitToNegocio: jest.fn() } },
+        { provide: getRepositoryToken(Negocio), useValue: {} },
+        { provide: getRepositoryToken(Usuario), useValue: {} },
+        { provide: getRepositoryToken(Alerta), useValue: {} },
+        { provide: EmailService, useValue: { enviar: jest.fn() } },
+      ],
+    }).compile();
+    return { service: moduleRef.get(SuscripcionesService), medioPagoRepo, transaccionesRepo };
+  };
+
+  it('crea la fuente de pago en Wompi y la guarda activa, sin crear transacción ni cobrar', async () => {
+    const wompiClient = {
+      obtenerTokensAceptacion: jest.fn().mockResolvedValue({ acceptanceToken: 'acc', acceptPersonalAuth: 'auth' }),
+      crearFuentePago: jest.fn().mockResolvedValue({ paymentSourceId: 777 }),
+      crearTransaccion: jest.fn(),
+      crearTransaccionConFuente: jest.fn(),
+    };
+    const { service, medioPagoRepo, transaccionesRepo } = await armar(wompiClient);
+
+    const resultado = await service.registrarMedioPago('neg-1', { token: 'tok_test_1', ultimosCuatroDigitos: '4242' });
+
+    expect(wompiClient.crearFuentePago).toHaveBeenCalledWith(
+      expect.objectContaining({ token: 'tok_test_1', acceptanceToken: 'acc', acceptPersonalAuth: 'auth' }),
+    );
+    expect(medioPagoRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ negocioId: 'neg-1', wompiPaymentSourceId: 777, ultimosCuatroDigitos: '4242', activo: true }),
+    );
+    expect(wompiClient.crearTransaccion).not.toHaveBeenCalled();
+    expect(wompiClient.crearTransaccionConFuente).not.toHaveBeenCalled();
+    expect(transaccionesRepo.save).not.toHaveBeenCalled();
+    expect(resultado).toEqual({ activo: true, ultimosCuatroDigitos: '4242' });
+  });
+
+  it('reemplaza la tarjeta existente (misma fila, nueva fuente)', async () => {
+    const wompiClient = {
+      obtenerTokensAceptacion: jest.fn().mockResolvedValue({ acceptanceToken: 'acc', acceptPersonalAuth: 'auth' }),
+      crearFuentePago: jest.fn().mockResolvedValue({ paymentSourceId: 888 }),
+    };
+    const { service, medioPagoRepo } = await armar(wompiClient);
+    const existente = { negocioId: 'neg-1', wompiPaymentSourceId: 1, ultimosCuatroDigitos: '1111', activo: false };
+    medioPagoRepo.findOne.mockResolvedValue(existente);
+
+    await service.registrarMedioPago('neg-1', { token: 'tok_test_2', ultimosCuatroDigitos: '4242' });
+
+    expect(medioPagoRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ wompiPaymentSourceId: 888, ultimosCuatroDigitos: '4242', activo: true }),
+    );
+    expect(medioPagoRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('si Wompi rechaza la tarjeta, propaga el error y no guarda nada', async () => {
+    const wompiClient = {
+      obtenerTokensAceptacion: jest.fn().mockResolvedValue({ acceptanceToken: 'acc', acceptPersonalAuth: 'auth' }),
+      crearFuentePago: jest.fn().mockRejectedValue(new Error('Tarjeta rechazada')),
+    };
+    const { service, medioPagoRepo } = await armar(wompiClient);
+
+    await expect(
+      service.registrarMedioPago('neg-1', { token: 'tok_test_3', ultimosCuatroDigitos: '4242' }),
+    ).rejects.toThrow('Tarjeta rechazada');
+    expect(medioPagoRepo.save).not.toHaveBeenCalled();
+  });
+});
+
+describe('SuscripcionesService — historialPagos', () => {
+  const armar = async (transaccionesRepo: unknown, paquetesService: unknown) => {
+    const moduleRef = await Test.createTestingModule({
+      providers: [
+        SuscripcionesService,
+        { provide: getRepositoryToken(Suscripcion), useValue: {} },
+        { provide: getRepositoryToken(TransaccionSuscripcion), useValue: transaccionesRepo },
+        { provide: getRepositoryToken(MedioPagoGuardado), useValue: {} },
+        { provide: WompiClientService, useValue: {} },
+        { provide: PaquetesService, useValue: paquetesService },
+        { provide: RealtimeGateway, useValue: { emitToNegocio: jest.fn() } },
+        { provide: getRepositoryToken(Negocio), useValue: {} },
+        { provide: getRepositoryToken(Usuario), useValue: {} },
+        { provide: getRepositoryToken(Alerta), useValue: {} },
+        { provide: EmailService, useValue: { enviar: jest.fn() } },
+      ],
+    }).compile();
+    return moduleRef.get(SuscripcionesService);
+  };
+
+  it('pagina del negocio, más reciente primero, con el nombre del paquete y sin referencias de Wompi', async () => {
+    const transaccion = {
+      id: 't-1', negocioId: 'neg-1', paqueteId: 'pro-1', referencia: 'ref-secreta', wompiTransactionId: 'wompi-secreto',
+      metodoPago: 'QR', estado: 'APROBADA', montoEnCentavos: 6990000, confirmedAt: new Date('2026-10-01T10:00:00Z'),
+      origen: 'MANUAL', cicloFacturacion: CicloFacturacion.MENSUAL, createdAt: new Date('2026-10-01T09:59:00Z'),
+    };
+    const transaccionesRepo = { findAndCount: jest.fn().mockResolvedValue([[transaccion], 11]) };
+    const paquetesService = { findOne: jest.fn().mockResolvedValue({ id: 'pro-1', nombre: 'POS Básico' }) };
+    const service = await armar(transaccionesRepo, paquetesService);
+
+    const resultado = await service.historialPagos('neg-1', { pagina: 2, porPagina: 10 });
+
+    expect(transaccionesRepo.findAndCount).toHaveBeenCalledWith({
+      where: { negocioId: 'neg-1' },
+      order: { createdAt: 'DESC' },
+      skip: 10,
+      take: 10,
+    });
+    expect(resultado).toEqual({
+      items: [
+        {
+          id: 't-1', fecha: transaccion.createdAt, confirmadoEn: transaccion.confirmedAt, paquete: 'POS Básico',
+          ciclo: CicloFacturacion.MENSUAL, metodo: 'QR', montoEnCentavos: 6990000, estado: 'APROBADA', origen: 'MANUAL',
+        },
+      ],
+      total: 11,
+      pagina: 2,
+      porPagina: 10,
+    });
+    expect(JSON.stringify(resultado)).not.toContain('secret');
+  });
+
+  it('un paquete borrado no rompe el historial', async () => {
+    const transaccionesRepo = {
+      findAndCount: jest.fn().mockResolvedValue([[{ id: 't-2', paqueteId: 'viejo', createdAt: new Date(), cicloFacturacion: CicloFacturacion.ANUAL }], 1]),
+    };
+    const paquetesService = { findOne: jest.fn().mockRejectedValue(new NotFoundException()) };
+    const service = await armar(transaccionesRepo, paquetesService);
+
+    const resultado = await service.historialPagos('neg-1', {});
+
+    expect(resultado.items[0].paquete).toBe('Plan anterior');
+    expect(resultado.pagina).toBe(1);
+    expect(resultado.porPagina).toBe(10);
   });
 });
