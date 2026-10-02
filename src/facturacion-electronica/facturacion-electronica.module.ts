@@ -17,6 +17,9 @@ import { Negocio } from '../negocios/entities/negocio.entity';
 import { Alerta } from '../alertas/entities/alerta.entity';
 import { Venta } from '../ventas/entities/venta.entity';
 import { TiendaOnline } from '../tienda-online/entities/tienda-online.entity';
+import { Devolucion } from '../devoluciones/entities/devolucion.entity';
+import { DevolucionItem } from '../devoluciones/entities/devolucion-item.entity';
+import { DevolucionReembolso } from '../devoluciones/entities/devolucion-reembolso.entity';
 import { SuscripcionesModule } from '../suscripciones/suscripciones.module';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { EmailModule } from '../email/email.module';
@@ -32,6 +35,9 @@ import { EmailModule } from '../email/email.module';
       Alerta,
       Venta,
       TiendaOnline,
+      Devolucion,
+      DevolucionItem,
+      DevolucionReembolso,
     ]),
     SuscripcionesModule,
     RealtimeModule,

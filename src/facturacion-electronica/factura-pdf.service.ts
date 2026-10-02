@@ -11,6 +11,8 @@ export interface DatosFacturaPdf {
     numeroCompleto?: string;
     fechaEmision?: Date;
     cufe?: string;
+    /** Notas crédito: su código único es CUDE (no CUFE). */
+    cude?: string;
     qrContenido?: string;
     prefijo?: string;
     resolucionNumero?: string;
@@ -35,6 +37,8 @@ export interface DatosFacturaPdf {
     pagos: { metodoPago: string; monto: number }[];
   };
   logo: Buffer | null;
+  /** Presente solo para la representación gráfica de una nota crédito. */
+  notaCredito?: { facturaAfectada: string; motivo: string };
 }
 
 export interface ContenidoFacturaPdf {
@@ -47,6 +51,7 @@ export interface ContenidoFacturaPdf {
   pago: { forma: string; medios: string[] };
   resolucion: string;
   cufe: string;
+  etiquetaCodigo: 'CUFE' | 'CUDE';
   qrContenido: string;
   pie: string[];
 }
@@ -128,7 +133,7 @@ const COLUMNAS = [
 export class FacturaPdfService {
   private readonly logger = new Logger(FacturaPdfService.name);
 
-  construirContenido({ documento: d, venta: v }: DatosFacturaPdf): ContenidoFacturaPdf {
+  construirContenido({ documento: d, venta: v, notaCredito: nc }: DatosFacturaPdf): ContenidoFacturaPdf {
     return {
       marcaDeAgua: marcaDeAguaPara(d.estado, d.ambiente),
       emisor: {
@@ -138,7 +143,7 @@ export class FacturaPdfService {
         direccion: [d.emisorDireccion, d.emisorCiudad].filter(Boolean).join(', '),
       },
       encabezado: {
-        titulo: 'FACTURA ELECTRÓNICA DE VENTA',
+        titulo: nc ? 'NOTA CRÉDITO ELECTRÓNICA' : 'FACTURA ELECTRÓNICA DE VENTA',
         numero: d.numeroCompleto ?? '',
         fechaEmision: d.fechaEmision ? fechaHoraBogota(new Date(d.fechaEmision)) : '',
       },
@@ -161,17 +166,18 @@ export class FacturaPdfService {
         ...(Number(v.descuentoTotal) > 0 ? [{ etiqueta: 'Descuentos', valor: `-${formatearPesos(v.descuentoTotal)}` }] : []),
         { etiqueta: 'Base gravable', valor: formatearPesos(Number(v.subtotal) - Number(v.descuentoTotal)) },
         { etiqueta: 'IVA', valor: formatearPesos(v.impuestoTotal) },
-        { etiqueta: 'Total a pagar', valor: formatearPesos(v.total) },
+        { etiqueta: nc ? 'Total de la nota crédito' : 'Total a pagar', valor: formatearPesos(v.total) },
       ],
       pago: {
         forma: v.tipoVenta === 'CREDITO' ? 'Crédito' : 'Contado',
         medios: v.pagos.map((p) => `${p.metodoPago}: ${formatearPesos(p.monto)}`),
       },
-      resolucion: textoResolucion(d),
-      cufe: d.cufe ?? '',
+      resolucion: nc ? `Afecta la factura electrónica ${nc.facturaAfectada} — Motivo: ${nc.motivo}` : textoResolucion(d),
+      cufe: d.cufe ?? d.cude ?? '',
+      etiquetaCodigo: nc ? 'CUDE' : 'CUFE',
       qrContenido: d.qrContenido ?? '',
       pie: [
-        'Representación gráfica de la factura electrónica de venta',
+        nc ? 'Representación gráfica de la nota crédito electrónica' : 'Representación gráfica de la factura electrónica de venta',
         PROVEEDOR_TECNOLOGICO,
         'Generada con AURA',
       ],
@@ -195,7 +201,7 @@ export class FacturaPdfService {
 
   private renderizar(c: ContenidoFacturaPdf, qr: Buffer, logo: Buffer | null): Promise<Buffer> {
     return new Promise((resolve, reject) => {
-      const doc = new PDFDocument({ size: 'LETTER', margin: MARGEN, bufferPages: true, info: { Title: `Factura ${c.encabezado.numero}` } });
+      const doc = new PDFDocument({ size: 'LETTER', margin: MARGEN, bufferPages: true, info: { Title: `${c.etiquetaCodigo === 'CUDE' ? 'Nota crédito' : 'Factura'} ${c.encabezado.numero}` } });
       const partes: Buffer[] = [];
       doc.on('data', (parte: Buffer) => partes.push(parte));
       doc.on('end', () => resolve(Buffer.concat(partes)));
@@ -320,7 +326,7 @@ export class FacturaPdfService {
     doc.image(qr, MARGEN, y, { width: 110, height: 110 });
     const x = MARGEN + 125;
     const ancho = ANCHO - 125;
-    doc.font('Helvetica-Bold').fontSize(8.5).text('CUFE', x, y, { width: ancho });
+    doc.font('Helvetica-Bold').fontSize(8.5).text(c.etiquetaCodigo, x, y, { width: ancho });
     doc.font('Courier').fontSize(7.5).text(c.cufe, x, doc.y, { width: ancho });
     doc.moveDown(0.6).font('Helvetica').fontSize(8);
     for (const linea of c.pie) doc.text(linea, x, doc.y, { width: ancho });

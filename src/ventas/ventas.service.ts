@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, EntityManager, Repository } from 'typeorm';
+import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { ClsService } from 'nestjs-cls';
 import { Venta } from './entities/venta.entity';
 import { VentaItem } from './entities/venta-item.entity';
@@ -20,8 +20,16 @@ import { MovimientoCaja } from '../caja/entities/movimiento-caja.entity';
 import { TurnoCaja } from '../caja/entities/turno-caja.entity';
 import { TipoMovimientoInventario } from '../common/enums/tipo-movimiento-inventario.enum';
 import { EstadoTurnoCaja, TipoMovimientoCaja } from '../common/enums/caja.enum';
-import { TipoVenta, EstadoVenta } from '../common/enums/venta.enum';
+import { TipoVenta, EstadoVenta, EstadoDevolucionVenta } from '../common/enums/venta.enum';
+import {
+  DocumentoElectronico,
+  TIPOS_FACTURA_DE_VENTA,
+} from '../facturacion-electronica/entities/documento-electronico.entity';
+import { EstadoDocumentoElectronico } from '../facturacion-electronica/entities/estado-documento-electronico.enum';
 import { CajaService } from '../caja/caja.service';
+import { Cliente } from '../clientes/entities/cliente.entity';
+import { MovimientoSaldoCliente } from '../clientes/entities/movimiento-saldo-cliente.entity';
+import { esSaldoAFavor, montoSaldoAFavor } from './saldo-a-favor';
 import { ClientesService } from '../clientes/clientes.service';
 import { AuthService } from '../auth/auth.service';
 import { PermisosService } from '../roles/permisos.service';
@@ -118,7 +126,9 @@ export class VentasService {
   }
 
   /** Reemplaza la garantía que antes daba `@IsEnum(MetodoPago)` — confirma que cada nombre recibido sea un método activo del negocio. */
-  private async validarMetodosPago(nombres: string[]): Promise<void> {
+  private async validarMetodosPago(todos: string[]): Promise<void> {
+    // "Saldo a favor" es un medio reservado de AURA, no una fila del catálogo del negocio.
+    const nombres = todos.filter((n) => !esSaldoAFavor(n));
     if (nombres.length === 0) return;
     const activos = new Set(
       (await this.metodosPagoService.findAll()).map((m) => m.nombre),
@@ -358,6 +368,11 @@ export class VentasService {
           `La suma de los pagos (${totalPagos}) no coincide con el total de la venta (${total})`,
         );
       }
+      const usoSaldo = await this.cobrarSaldoAFavor(manager, {
+        negocioId,
+        clienteId: dto.clienteId,
+        pagos: dto.pagos!,
+      });
 
       const comprobante = await this.resolverComprobante(
         manager,
@@ -417,8 +432,20 @@ export class VentasService {
         usuarioId,
       );
 
+      if (usoSaldo > 0) {
+        await this.registrarUsoSaldoAFavor(manager, {
+          negocioId,
+          clienteId: dto.clienteId!,
+          monto: usoSaldo,
+          ventaId: venta.id,
+          usuarioId,
+        });
+      }
+
       const movCajaRepo = manager.getRepository(MovimientoCaja);
       for (const pago of venta.pagos) {
+        // El saldo a favor no es dinero que entre a la caja: no se cuenta en el arqueo.
+        if (esSaldoAFavor(pago.metodoPago)) continue;
         await movCajaRepo.save(
           movCajaRepo.create({
             negocioId,
@@ -443,6 +470,51 @@ export class VentasService {
 
       return { venta, domicilio };
     });
+  }
+
+  /**
+   * Descuenta el saldo a favor que la venta usa como medio de pago (spec de devoluciones 3.4), con
+   * lock sobre el cliente. Devuelve cuánto se usó (0 si ningún pago es "Saldo a favor").
+   */
+  private async cobrarSaldoAFavor(
+    manager: EntityManager,
+    p: { negocioId: string; clienteId?: string; pagos: { metodoPago: string; monto: number }[] },
+  ): Promise<number> {
+    const uso = montoSaldoAFavor(p.pagos);
+    if (uso <= 0) return 0;
+    if (!p.clienteId) {
+      throw new BadRequestException('Pagar con saldo a favor necesita un cliente en la venta');
+    }
+    const repo = manager.getRepository(Cliente);
+    const cliente = await repo.findOne({
+      where: { id: p.clienteId, negocioId: p.negocioId },
+      lock: { mode: 'pessimistic_write' },
+    });
+    const disponible = Number(cliente?.saldoAFavor ?? 0);
+    if (!cliente || uso - disponible > 0.009) {
+      throw new BadRequestException(`Saldo a favor insuficiente (disponible: ${disponible})`);
+    }
+    cliente.saldoAFavor = Math.round((disponible - uso) * 100) / 100;
+    await repo.save(cliente);
+    return uso;
+  }
+
+  private async registrarUsoSaldoAFavor(
+    manager: EntityManager,
+    p: { negocioId: string; clienteId: string; monto: number; ventaId: string; usuarioId: string },
+  ): Promise<void> {
+    const repo = manager.getRepository(MovimientoSaldoCliente);
+    await repo.save(
+      repo.create({
+        negocioId: p.negocioId,
+        clienteId: p.clienteId,
+        tipo: 'USO_EN_VENTA',
+        monto: -p.monto,
+        ventaId: p.ventaId,
+        devolucionId: null,
+        creadoPor: p.usuarioId,
+      }),
+    );
   }
 
   /**
@@ -1286,6 +1358,21 @@ export class VentasService {
       }
       if (ventaActual.estado === EstadoVenta.CANCELADA) {
         throw new BadRequestException('Esta venta ya está cancelada');
+      }
+      if (ventaActual.estadoDevolucion !== EstadoDevolucionVenta.NINGUNA) {
+        throw new BadRequestException('Esta venta ya tiene devoluciones: no se puede cancelar');
+      }
+      // Cancelar no emite nota crédito: con la factura aceptada, la DIAN la seguiría viendo vigente.
+      const factura = await manager.getRepository(DocumentoElectronico).findOne({
+        where: { ventaId: ventaActual.id, negocioId, tipo: In(TIPOS_FACTURA_DE_VENTA) },
+      });
+      if (
+        factura?.estado === EstadoDocumentoElectronico.ACEPTADO ||
+        factura?.estado === EstadoDocumentoElectronico.ACEPTADO_CON_OBSERVACIONES
+      ) {
+        throw new BadRequestException(
+          'Esta venta tiene factura electrónica aceptada: usa Devolución total para que salga la nota crédito',
+        );
       }
 
       // Una venta CONTADO movió caja al crearse — cancelarla debe revertir

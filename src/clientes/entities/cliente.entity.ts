@@ -46,6 +46,16 @@ export class Cliente extends BaseEntity {
   })
   deudaActual: number;
 
+  /** Crédito en tienda por devoluciones; se usa como medio de pago "Saldo a favor". */
+  @Column({
+    name: 'saldo_a_favor',
+    type: 'numeric',
+    precision: 12,
+    scale: 2,
+    default: 0,
+  })
+  saldoAFavor: number;
+
   @Column({ default: 100 })
   score: number;
 

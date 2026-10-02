@@ -10,11 +10,15 @@ import {
 } from '../common/utils/fecha-colombia';
 
 describe('comprobantes-listado', () => {
+  it('el LATERAL de la factura excluye notas crédito', () => {
+    expect(SQL_COMPROBANTES).toMatch(/de\.tipo <> 'NOTA_CREDITO'/);
+  });
+
   it('SQL base: ventas con su último documento (LATERAL) + abonos numerados, filtrados por negocio ($1)', () => {
     expect(SQL_COMPROBANTES).toContain('LEFT JOIN LATERAL');
     expect(SQL_COMPROBANTES).toContain('UNION ALL');
     expect(SQL_COMPROBANTES).toContain('r.numero_recibo IS NOT NULL');
-    expect(SQL_COMPROBANTES.match(/negocio_id = \$1/g)).toHaveLength(2);
+    expect(SQL_COMPROBANTES.match(/negocio_id = \$1/g)).toHaveLength(3);
   });
 
   it('sin filtros → sin WHERE', () => {
@@ -71,6 +75,7 @@ describe('comprobantes-listado', () => {
         venta_id: 'v1',
         documento_id: 'd1',
         abono_id: null,
+        devolucion_id: null,
       }),
     ).toEqual({
       tipo: 'FACTURA_ELECTRONICA',
@@ -84,6 +89,7 @@ describe('comprobantes-listado', () => {
       ventaId: 'v1',
       documentoId: 'd1',
       abonoId: null,
+      devolucionId: null,
     });
   });
 
@@ -108,8 +114,29 @@ describe('comprobantes-listado', () => {
         RECIBO: 5,
         FACTURA: 0,
         RECIBO_CAJA: 2,
+        DEVOLUCION: 0,
       },
       dian: { aceptados: 4, pendientes: 3, rechazados: 1 },
     });
+  });
+
+  it('incluye devoluciones con su nota crédito (número NC si existe, si no DEV-n)', () => {
+    expect(SQL_COMPROBANTES).toContain("'DEVOLUCION'");
+    expect(SQL_COMPROBANTES).toContain('FROM devoluciones dv');
+    expect(SQL_COMPROBANTES).toMatch(/COALESCE\(nc\.numero_completo, dv\.numero_completo\)/);
+  });
+
+  it('mapearFila conserva devolucionId', () => {
+    const fila = mapearFila({
+      tipo: 'DEVOLUCION', numero: 'NC4', fecha: new Date(), cliente: 'Ana', total: '23800', estado_dian: 'ACEPTADO',
+      ambiente: 'SANDBOX', estado_venta: 'COMPLETADA', venta_id: 'v1', documento_id: 'd9', abono_id: null, devolucion_id: 'dev-1',
+    });
+    expect(fila).toMatchObject({ tipo: 'DEVOLUCION', devolucionId: 'dev-1', documentoId: 'd9', total: 23_800 });
+  });
+
+  it('resumirConteos cuenta devoluciones por tipo y su estado DIAN', () => {
+    const r = resumirConteos([{ tipo: 'DEVOLUCION', estado_dian: 'RECHAZADO', cantidad: 2 }]);
+    expect(r.porTipo.DEVOLUCION).toBe(2);
+    expect(r.dian.rechazados).toBe(2);
   });
 });

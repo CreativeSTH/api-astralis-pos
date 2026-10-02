@@ -5,6 +5,7 @@ import { ClsService } from 'nestjs-cls';
 import { Venta } from '../ventas/entities/venta.entity';
 import { VentaPago } from '../ventas/entities/venta-pago.entity';
 import { TurnoCaja } from '../caja/entities/turno-caja.entity';
+import { Devolucion } from '../devoluciones/entities/devolucion.entity';
 import { EstadoVenta, TipoVenta } from '../common/enums/venta.enum';
 import { EstadoTurnoCaja } from '../common/enums/caja.enum';
 import { ReportesQueryDto } from './dto/reportes-query.dto';
@@ -24,6 +25,8 @@ export class ReportesService {
     private readonly ventaPagosRepository: Repository<VentaPago>,
     @InjectRepository(TurnoCaja)
     private readonly turnosRepository: Repository<TurnoCaja>,
+    @InjectRepository(Devolucion)
+    private readonly devolucionesRepository: Repository<Devolucion>,
     private readonly cls: ClsService,
   ) {}
 
@@ -109,6 +112,11 @@ export class ReportesService {
         (porMetodoPagoMap.get(p.metodoPago) ?? 0) + Number(p.monto),
       );
     }
+    const devueltas = await this.devolucionesQuery(query, rango)
+      .select('COALESCE(SUM(d.total), 0)', 'total')
+      .getRawOne<{ total: string }>();
+    const totalDevoluciones = Number(devueltas?.total ?? 0);
+
     const porMetodoPago = [...porMetodoPagoMap.entries()]
       .map(([metodoPago, total]) => ({ metodoPago, total }))
       .sort((a, b) => b.total - a.total);
@@ -126,6 +134,66 @@ export class ReportesService {
       totalCredito: credito.reduce((acc, v) => acc + Number(v.total), 0),
       porDia,
       porMetodoPago,
+      // Spec de devoluciones 3.9: lo devuelto se resta en el período de la devolución, no reescribe la venta.
+      totalDevoluciones,
+      ingresosNetos: totalIngresos - totalDevoluciones,
+    };
+  }
+
+  /** Devoluciones del negocio en el rango, mismo criterio de fechas y sucursal que `ventas()`. */
+  private devolucionesQuery(query: ReportesQueryDto, rango: RangoFechas) {
+    const qb = this.devolucionesRepository
+      .createQueryBuilder('d')
+      .where('d.negocio_id = :negocioId', { negocioId: this.getNegocioId() })
+      .andWhere('d.created_at BETWEEN :desde AND :hasta', rango);
+    if (query.sucursalId) {
+      qb.andWhere('d.sucursal_id = :sucursalId', { sucursalId: query.sucursalId });
+    }
+    return qb;
+  }
+
+  async devoluciones(query: ReportesQueryDto) {
+    const rango = this.rangoFechas(query);
+    const totales = await this.devolucionesQuery(query, rango)
+      .select('COUNT(*)', 'cantidad')
+      .addSelect('COALESCE(SUM(d.total), 0)', 'total')
+      .getRawOne<{ cantidad: string; total: string }>();
+    const porForma = await this.devolucionesQuery(query, rango)
+      .innerJoin('d.reembolsos', 'r')
+      .select('r.forma', 'forma')
+      .addSelect('SUM(r.monto)', 'total')
+      .groupBy('r.forma')
+      .getRawMany<{ forma: string; total: string }>();
+    const porMotivo = await this.devolucionesQuery(query, rango)
+      .select('d.motivo', 'motivo')
+      .addSelect('COUNT(*)', 'cantidad')
+      .addSelect('SUM(d.total)', 'total')
+      .groupBy('d.motivo')
+      .orderBy('cantidad', 'DESC')
+      .limit(10)
+      .getRawMany<{ motivo: string; cantidad: string; total: string }>();
+    const topProductos = await this.devolucionesQuery(query, rango)
+      .innerJoin('d.items', 'i')
+      .select('i.nombre_producto', 'nombreProducto')
+      .addSelect('SUM(i.cantidad)', 'cantidad')
+      .addSelect('SUM(i.total)', 'total')
+      .groupBy('i.nombre_producto')
+      .orderBy('cantidad', 'DESC')
+      .limit(10)
+      .getRawMany<{ nombreProducto: string; cantidad: string; total: string }>();
+
+    return {
+      desde: rango.desde,
+      hasta: rango.hasta,
+      cantidad: Number(totales?.cantidad ?? 0),
+      total: Number(totales?.total ?? 0),
+      porForma: porForma.map((f) => ({ forma: f.forma, total: Number(f.total) })),
+      porMotivo: porMotivo.map((m) => ({ motivo: m.motivo, cantidad: Number(m.cantidad), total: Number(m.total) })),
+      topProductos: topProductos.map((p) => ({
+        nombreProducto: p.nombreProducto,
+        cantidad: Number(p.cantidad),
+        total: Number(p.total),
+      })),
     };
   }
 

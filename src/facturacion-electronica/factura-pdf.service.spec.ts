@@ -42,6 +42,22 @@ describe('FacturaPdfService', () => {
   });
 
   describe('construirContenido', () => {
+    it('nota crédito: título, CUDE, factura afectada y motivo en vez de resolución', () => {
+      const base = datos({ cufe: undefined, cude: 'cude-1', numeroCompleto: 'NC4' });
+      const c = service.construirContenido({ ...base, notaCredito: { facturaAfectada: 'DE17', motivo: 'Producto defectuoso' } });
+      expect(c.encabezado.titulo).toBe('NOTA CRÉDITO ELECTRÓNICA');
+      expect(c.encabezado.numero).toBe('NC4');
+      expect(c.etiquetaCodigo).toBe('CUDE');
+      expect(c.cufe).toBe('cude-1');
+      expect(c.resolucion).toBe('Afecta la factura electrónica DE17 — Motivo: Producto defectuoso');
+      expect(c.pie[0]).toBe('Representación gráfica de la nota crédito electrónica');
+      expect(c.totales.at(-1)?.etiqueta).toBe('Total de la nota crédito');
+    });
+
+    it('factura: etiqueta CUFE', () => {
+      expect(service.construirContenido(datos()).etiquetaCodigo).toBe('CUFE');
+    });
+
     it('emisor con NIT + dígito de verificación y régimen', () => {
       const c = service.construirContenido(datos());
       expect(c.emisor).toEqual({

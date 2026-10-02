@@ -1,12 +1,12 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { Venta } from './entities/venta.entity';
 import { RegistroPagoCuota } from './entities/registro-pago-cuota.entity';
 import { Negocio } from '../negocios/entities/negocio.entity';
 import { Sucursal } from '../sucursales/entities/sucursal.entity';
 import { TipoComprobanteVenta } from '../common/enums/tipo-comprobante.enum';
-import { DocumentoElectronico } from '../facturacion-electronica/entities/documento-electronico.entity';
+import { DocumentoElectronico, TIPOS_FACTURA_DE_VENTA } from '../facturacion-electronica/entities/documento-electronico.entity';
 import { EstadoDocumentoElectronico } from '../facturacion-electronica/entities/estado-documento-electronico.enum';
 import {
   FacturaPdfService,
@@ -18,6 +18,8 @@ import {
 import { fabricanteSoftware } from '../facturacion-electronica/contingencia.util';
 import { Cliente } from '../clientes/entities/cliente.entity';
 import { VentasService } from './ventas.service';
+import { Devolucion } from '../devoluciones/entities/devolucion.entity';
+import { ETIQUETA_FORMA } from '../devoluciones/devolucion.logic';
 
 export interface ItemComprobante {
   nombre: string;
@@ -34,7 +36,7 @@ export interface PagoComprobante {
 }
 
 export interface ReciboContenido {
-  tipo: TipoComprobanteVenta | 'RECIBO_CAJA';
+  tipo: TipoComprobanteVenta | 'RECIBO_CAJA' | 'DEVOLUCION';
   negocio: { nombre: string; nit?: string; logoUrl?: string };
   emisor: { direccion?: string; telefono?: string };
   numero: string;
@@ -53,6 +55,21 @@ export interface ReciboContenido {
   leyenda?: string;
   /** Solo en el recibo de caja de un abono a crédito. */
   abono?: AbonoComprobante;
+  /** Solo en el comprobante de una devolución. */
+  devolucion?: DevolucionComprobante;
+}
+
+/** Bloque del comprobante de devolución: venta afectada, motivo y nota crédito (si la venta tenía factura electrónica). */
+export interface DevolucionComprobante {
+  ventaAfectada: string;
+  tipoComprobanteVenta: 'Factura electrónica' | 'Recibo' | 'Factura';
+  motivo: string;
+  notaCredito: {
+    numero: string | null;
+    cude: string | null;
+    estado: EstadoDocumentoElectronico;
+    encabezado: string | null;
+  } | null;
 }
 
 export const LEYENDA_NO_FACTURA = 'Este documento no es una factura de venta.';
@@ -60,6 +77,7 @@ export const TITULO_FACTURA_ELECTRONICA = 'FACTURA ELECTRÓNICA DE VENTA';
 /** Res. DIAN 000227 de 2025, art. 1.5.1.2.2.2, num. 1: denominación expresa obligatoria (fase 6a). */
 export const TITULO_FACTURA_CONTINGENCIA = 'FACTURA DE VENTA DE TALONARIO O DE PAPEL';
 export const LEYENDA_RECIBO_CAJA = 'Recibo de caja: soporte de pago. No es una factura de venta.';
+export const LEYENDA_DEVOLUCION = 'Comprobante de devolución. No es una factura de venta.';
 
 /** Bloque del recibo de caja (spec 4.5): a qué venta y cuota se abonó y cómo quedó el saldo. */
 export interface AbonoComprobante {
@@ -108,6 +126,14 @@ export function encabezadoTirilla(doc: DocumentoElectronico | null): string | nu
   return null;
 }
 
+/** Mismo criterio que la factura, con el CUDE como código de la nota crédito. */
+export function encabezadoNotaCredito(doc: DocumentoElectronico): string | null {
+  if (doc.estado === EstadoDocumentoElectronico.RECHAZADO) return 'RECHAZADA POR LA DIAN — SIN VALIDEZ FISCAL';
+  if (!doc.cude) return 'EN VALIDACIÓN DIAN — REIMPRIMIBLE';
+  if (doc.ambiente === 'SANDBOX') return 'DOCUMENTO DE PRUEBA — SIN VALIDEZ FISCAL';
+  return null;
+}
+
 /**
  * Arma el contenido a imprimir de una venta o de un abono: datos de la venta, formato de impresión
  * del negocio (logo, mensaje de cierre, términos — fase 5b) y dirección/teléfono de la sucursal.
@@ -125,6 +151,8 @@ export class ComprobantesService {
     private readonly clientesRepository: Repository<Cliente>,
     @InjectRepository(RegistroPagoCuota)
     private readonly registrosPago: Repository<RegistroPagoCuota>,
+    @InjectRepository(Devolucion)
+    private readonly devolucionesRepository: Repository<Devolucion>,
     private readonly facturaPdf: FacturaPdfService,
     private readonly ventasService: VentasService,
   ) {}
@@ -189,11 +217,66 @@ export class ComprobantesService {
     };
   }
 
+  /**
+   * Comprobante de una devolución (DEV-n) con su nota crédito. Igual que el abono: `VentasService.findOne`
+   * filtra por tenant y su 404 se reemplaza por el de la devolución, sin revelar el id de la venta.
+   */
+  async obtenerContenidoDevolucion(devolucionId: string): Promise<ReciboContenido> {
+    const d = await this.devolucionesRepository.findOne({
+      where: { id: devolucionId },
+      relations: { items: true, reembolsos: true },
+    });
+    if (!d) throw new NotFoundException('Devolución no encontrada');
+    const venta = await this.ventasService.findOne(d.ventaId).catch((error: unknown) => {
+      if (error instanceof NotFoundException) throw new NotFoundException('Devolución no encontrada');
+      throw error;
+    });
+    const negocio = await this.negociosRepository.findOneOrFail({ where: { id: venta.negocioId } });
+    const encabezado = await this.encabezado(venta, negocio);
+    const { comprobanteVenta, tipoComprobanteVenta } = await this.comprobanteDeVenta(venta);
+    const nc = await this.documentosRepository.findOne({
+      where: { devolucionId: d.id, negocioId: venta.negocioId, tipo: 'NOTA_CREDITO' },
+    });
+    const bruto = d.items.reduce((s, i) => s + Number(i.precioUnitario) * Number(i.cantidad), 0);
+    const r2 = (v: number) => Math.round(v * 100) / 100;
+
+    return {
+      tipo: 'DEVOLUCION',
+      ...encabezado,
+      numero: d.numeroCompleto,
+      fecha: d.createdAt,
+      cliente: venta.nombreCliente,
+      items: d.items.map((i) => ({
+        nombre: i.nombreProducto,
+        cantidad: Number(i.cantidad),
+        subtotal: r2(Number(i.base) + Number(i.impuesto)),
+        baseImponible: Number(i.base),
+        impuesto: Number(i.impuesto),
+      })),
+      subtotal: r2(bruto),
+      descuento: r2(bruto - Number(d.baseTotal) + Number(d.descuentoVentaTotal)),
+      impuesto: Number(d.impuestoTotal),
+      total: Number(d.total),
+      pagos: d.reembolsos.map((r) => ({ metodo: ETIQUETA_FORMA[r.forma], monto: Number(r.monto) })),
+      leyenda: LEYENDA_DEVOLUCION,
+      devolucion: {
+        ventaAfectada: comprobanteVenta,
+        tipoComprobanteVenta,
+        motivo: d.motivo,
+        notaCredito: nc
+          ? { numero: nc.numeroCompleto ?? null, cude: nc.cude ?? null, estado: nc.estado, encabezado: encabezadoNotaCredito(nc) }
+          : null,
+      },
+    };
+  }
+
   private async comprobanteDeVenta(
     venta: Venta,
   ): Promise<Pick<AbonoComprobante, 'comprobanteVenta' | 'tipoComprobanteVenta'>> {
     if (venta.tipoComprobanteEmitido === TipoComprobanteVenta.FACTURA_ELECTRONICA) {
-      const doc = await this.documentosRepository.findOne({ where: { ventaId: venta.id, negocioId: venta.negocioId } });
+      const doc = await this.documentosRepository.findOne({
+        where: { ventaId: venta.id, negocioId: venta.negocioId, tipo: In(TIPOS_FACTURA_DE_VENTA) },
+      });
       return { comprobanteVenta: doc?.numeroCompleto ?? 'En validación DIAN', tipoComprobanteVenta: 'Factura electrónica' };
     }
     return {
@@ -204,7 +287,9 @@ export class ComprobantesService {
 
   /** Todo sale del snapshot del documento (mismos datos que el PDF — tirilla y PDF nunca se contradicen). */
   private async bloqueElectronico(venta: Venta): Promise<ElectronicaComprobante> {
-    const doc = await this.documentosRepository.findOne({ where: { ventaId: venta.id, negocioId: venta.negocioId } });
+    const doc = await this.documentosRepository.findOne({
+      where: { ventaId: venta.id, negocioId: venta.negocioId, tipo: In(TIPOS_FACTURA_DE_VENTA) },
+    });
     const cliente = venta.clienteId
       ? await this.clientesRepository.findOne({ where: { id: venta.clienteId, negocioId: venta.negocioId } })
       : null;

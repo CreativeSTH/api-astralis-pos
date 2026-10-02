@@ -6,6 +6,7 @@ import { TenantBaseService } from '../common/services/tenant-base.service';
 import { MetodoPago } from './entities/metodo-pago.entity';
 import { CreateMetodoPagoDto } from './dto/create-metodo-pago.dto';
 import { UpdateMetodoPagoDto } from './dto/update-metodo-pago.dto';
+import { esSaldoAFavor, METODO_SALDO_A_FAVOR } from '../ventas/saldo-a-favor';
 
 /** Sembrados en un negocio nuevo — mismos 6 que antes vivían como enum fijo. Efectivo queda marcado como tal. */
 const METODOS_POR_DEFECTO: { nombre: string; esEfectivo: boolean }[] = [
@@ -102,6 +103,11 @@ export class MetodosPagoService extends TenantBaseService<MetodoPago> {
     nombre: string,
     excluirId?: string,
   ): Promise<void> {
+    if (esSaldoAFavor(nombre)) {
+      throw new BadRequestException(
+        `"${METODO_SALDO_A_FAVOR}" es un medio reservado de AURA para las devoluciones: usa otro nombre`,
+      );
+    }
     const activos = await this.findAllForTenant({ activo: true });
     const duplicado = activos.some(
       (m) =>

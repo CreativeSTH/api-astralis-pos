@@ -1,7 +1,9 @@
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { In } from 'typeorm';
 import { NotFoundException } from '@nestjs/common';
-import { ComprobantesService, LEYENDA_NO_FACTURA, LEYENDA_RECIBO_CAJA } from './comprobantes.service';
+import { ComprobantesService, LEYENDA_DEVOLUCION, LEYENDA_NO_FACTURA, LEYENDA_RECIBO_CAJA } from './comprobantes.service';
+import { Devolucion } from '../devoluciones/entities/devolucion.entity';
 import { RegistroPagoCuota } from './entities/registro-pago-cuota.entity';
 import { VentasService } from './ventas.service';
 import { Negocio } from '../negocios/entities/negocio.entity';
@@ -19,6 +21,7 @@ describe('ComprobantesService — contenido imprimible', () => {
   let facturaPdf: { generarQrDataUrl: jest.Mock };
   let registros: { findOne: jest.Mock };
   let sucursales: { findOne: jest.Mock };
+  let devoluciones: { findOne: jest.Mock };
   const ventaBase = {
     id: 'venta-1', negocioId: 'neg-1', sucursalId: 'suc-1', tipoVenta: 'CONTADO', clienteId: null,
     createdAt: new Date('2026-09-29T02:01:13Z'), nombreCliente: 'Consumidor final', items: [], pagos: [],
@@ -39,6 +42,7 @@ describe('ComprobantesService — contenido imprimible', () => {
     documentos = { findOne: jest.fn().mockResolvedValue(null) };
     clientes = { findOne: jest.fn().mockResolvedValue(null) };
     registros = { findOne: jest.fn() };
+    devoluciones = { findOne: jest.fn() };
     sucursales = { findOne: jest.fn().mockResolvedValue({ direccion: 'Calle Sucursal', telefono: null }) };
     facturaPdf = { generarQrDataUrl: jest.fn().mockResolvedValue('data:image/png;base64,QR') };
     const moduleRef = await Test.createTestingModule({
@@ -59,6 +63,7 @@ describe('ComprobantesService — contenido imprimible', () => {
         { provide: getRepositoryToken(DocumentoElectronico), useValue: documentos },
         { provide: getRepositoryToken(Cliente), useValue: clientes },
         { provide: getRepositoryToken(RegistroPagoCuota), useValue: registros },
+        { provide: getRepositoryToken(Devolucion), useValue: devoluciones },
       ],
     }).compile();
     service = moduleRef.get(ComprobantesService);
@@ -91,7 +96,9 @@ describe('ComprobantesService — contenido imprimible', () => {
     });
     expect(contenido.electronica!.resolucion).toContain('Resolución No. 18760000001');
     expect(facturaPdf.generarQrDataUrl).toHaveBeenCalledWith('QR-17');
-    expect(documentos.findOne).toHaveBeenCalledWith({ where: { ventaId: 'venta-1', negocioId: 'neg-1' } });
+    expect(documentos.findOne).toHaveBeenCalledWith({
+      where: { ventaId: 'venta-1', negocioId: 'neg-1', tipo: In(['FACTURA', 'DEE_POS']) },
+    });
   });
 
   it('factura electrónica sin documento todavía → "En validación DIAN", encabezado de validación y sin QR', async () => {
@@ -277,6 +284,66 @@ describe('ComprobantesService — contenido imprimible', () => {
         mensajeCierre: '¡Gracias por su pago!',
       });
       expect(c.terminos).toBeUndefined();
+    });
+  });
+
+  describe('comprobante de devolución', () => {
+    const devolucion = {
+      id: 'dev-1', ventaId: 'venta-1', numeroCompleto: 'DEV-3', motivo: 'Defectuoso', total: 23_800,
+      baseTotal: 20_000, impuestoTotal: 3_800, descuentoVentaTotal: 0, createdAt: new Date('2026-10-02T15:00:00Z'),
+      items: [{ nombreProducto: 'Taladro', cantidad: 1, precioUnitario: 20_000, base: 20_000, impuesto: 3_800, descuentoVenta: 0, total: 23_800 }],
+      reembolsos: [{ forma: 'EFECTIVO', monto: 23_800 }],
+    };
+
+    it('DEV-n, líneas devueltas, reembolsos como pagos y bloque de nota crédito con CUDE', async () => {
+      devoluciones.findOne.mockResolvedValue(devolucion);
+      ventas.findOne.mockResolvedValue(ventaElectronica);
+      documentos.findOne
+        .mockResolvedValueOnce(docAceptado) // la factura de la venta (venta afectada)
+        .mockResolvedValueOnce({ tipo: 'NOTA_CREDITO', numeroCompleto: 'NC4', cude: 'cude-1', estado: 'ACEPTADO', ambiente: 'PRODUCCION' });
+      const c = await service.obtenerContenidoDevolucion('dev-1');
+      expect(c).toMatchObject({
+        tipo: 'DEVOLUCION',
+        numero: 'DEV-3',
+        cliente: 'Consumidor final',
+        subtotal: 20_000,
+        descuento: 0,
+        impuesto: 3_800,
+        total: 23_800,
+        items: [{ nombre: 'Taladro', cantidad: 1, subtotal: 23_800, baseImponible: 20_000, impuesto: 3_800 }],
+        pagos: [{ metodo: 'Efectivo', monto: 23_800 }],
+        leyenda: LEYENDA_DEVOLUCION,
+        devolucion: {
+          ventaAfectada: 'FE17',
+          tipoComprobanteVenta: 'Factura electrónica',
+          motivo: 'Defectuoso',
+          notaCredito: { numero: 'NC4', cude: 'cude-1', estado: 'ACEPTADO', encabezado: null },
+        },
+      });
+      expect(documentos.findOne).toHaveBeenLastCalledWith({ where: { devolucionId: 'dev-1', negocioId: 'neg-1', tipo: 'NOTA_CREDITO' } });
+    });
+
+    it('nota crédito todavía sin CUDE: encabezado de validación; venta con recibo: sin nota crédito', async () => {
+      devoluciones.findOne.mockResolvedValue(devolucion);
+      ventas.findOne.mockResolvedValue(ventaElectronica);
+      documentos.findOne
+        .mockResolvedValueOnce(docAceptado)
+        .mockResolvedValueOnce({ tipo: 'NOTA_CREDITO', numeroCompleto: null, cude: null, estado: 'PENDIENTE', ambiente: 'SANDBOX' });
+      expect((await service.obtenerContenidoDevolucion('dev-1')).devolucion?.notaCredito?.encabezado).toBe('EN VALIDACIÓN DIAN — REIMPRIMIBLE');
+
+      ventas.findOne.mockResolvedValue({ ...ventaBase, tipoComprobanteEmitido: 'RECIBO', numeroComprobante: '15' });
+      documentos.findOne.mockResolvedValue(null);
+      const c = await service.obtenerContenidoDevolucion('dev-1');
+      expect(c.devolucion).toMatchObject({ ventaAfectada: '15', tipoComprobanteVenta: 'Recibo', notaCredito: null });
+    });
+
+    it('devolución inexistente o de otro negocio → 404 sin revelar la venta', async () => {
+      devoluciones.findOne.mockResolvedValue(null);
+      await expect(service.obtenerContenidoDevolucion('nada')).rejects.toThrow('Devolución no encontrada');
+
+      devoluciones.findOne.mockResolvedValue(devolucion);
+      ventas.findOne.mockRejectedValue(new NotFoundException('Venta con ID venta-1 no encontrada'));
+      await expect(service.obtenerContenidoDevolucion('dev-1')).rejects.toThrow('Devolución no encontrada');
     });
   });
 });

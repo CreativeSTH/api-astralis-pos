@@ -3,8 +3,11 @@ import { EntityManager } from 'typeorm';
 import { NumeracionComprobante } from './entities/numeracion-comprobante.entity';
 import { TipoNumeracion } from '../common/enums/tipo-comprobante.enum';
 
-/** Prefijo con que nace una secuencia nueva: los recibos de caja salen `RC-1`, `RC-2`… (spec 4.5). */
-const PREFIJO_POR_DEFECTO: Partial<Record<TipoNumeracion, string>> = { [TipoNumeracion.RECIBO_CAJA]: 'RC' };
+/** Prefijo con que nace una secuencia nueva: recibos de caja `RC-1`… (spec 4.5) y devoluciones `DEV-1`…. */
+const PREFIJO_POR_DEFECTO: Partial<Record<TipoNumeracion, string>> = {
+  [TipoNumeracion.RECIBO_CAJA]: 'RC',
+  [TipoNumeracion.DEVOLUCION]: 'DEV',
+};
 
 function esViolacionUnicidad(err: unknown): boolean {
   return (
@@ -60,7 +63,8 @@ export class NumeracionComprobanteService {
 
     // El rango solo se exige para FACTURA (numeración de contingencia real) — RECIBO nunca se agota.
     if (numeracion.rangoHasta != null && numeracion.siguienteNumero > numeracion.rangoHasta) {
-      const etiqueta = tipo === TipoNumeracion.FACTURA ? 'facturas' : 'recibos';
+      const etiqueta =
+        tipo === TipoNumeracion.FACTURA ? 'facturas' : tipo === TipoNumeracion.DEVOLUCION ? 'devoluciones' : 'recibos';
       throw new BadRequestException(
         `Se agotó el rango autorizado para ${etiqueta} de esta sucursal — solicita una nueva resolución en Configuración > Facturación.`,
       );

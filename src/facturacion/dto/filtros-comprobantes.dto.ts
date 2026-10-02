@@ -16,6 +16,7 @@ export const TIPOS_COMPROBANTE_LISTADO: TipoComprobanteListado[] = [
   'RECIBO',
   'FACTURA',
   'RECIBO_CAJA',
+  'DEVOLUCION',
 ];
 
 export class FiltrosComprobantesDto {

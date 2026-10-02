@@ -25,6 +25,7 @@ import { Negocio } from '../negocios/entities/negocio.entity';
 import { DocumentoElectronico } from '../facturacion-electronica/entities/documento-electronico.entity';
 import { Cliente } from '../clientes/entities/cliente.entity';
 import { PoliticaFacturacionModule } from '../politica-facturacion/politica-facturacion.module';
+import { Devolucion } from '../devoluciones/entities/devolucion.entity';
 
 @Module({
   imports: [
@@ -39,6 +40,7 @@ import { PoliticaFacturacionModule } from '../politica-facturacion/politica-fact
       Negocio,
       DocumentoElectronico,
       Cliente,
+      Devolucion,
     ]),
     CajaModule,
     ClientesModule,
@@ -54,6 +56,6 @@ import { PoliticaFacturacionModule } from '../politica-facturacion/politica-fact
   ],
   controllers: [VentasSinConexionController, VentasController],
   providers: [VentasService, ComprobantesService],
-  exports: [VentasService],
+  exports: [VentasService, ComprobantesService],
 })
 export class VentasModule {}

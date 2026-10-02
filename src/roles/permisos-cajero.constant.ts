@@ -37,4 +37,6 @@ export const PERMISOS_CAJERO: Partial<Record<ModuloPermiso, AccionPermiso[]>> =
     [ModuloPermiso.ALERTAS]: [AccionPermiso.VER],
     [ModuloPermiso.METODOS_PAGO]: [AccionPermiso.VER],
     [ModuloPermiso.PAGOS]: [AccionPermiso.VER],
+    // Ve devoluciones y devuelve con el PIN de un administrador (DEVOLUCIONES:CREAR).
+    [ModuloPermiso.DEVOLUCIONES]: [AccionPermiso.VER],
   };

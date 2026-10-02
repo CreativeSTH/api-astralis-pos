@@ -20,6 +20,8 @@ import { AlegraNoDisponibleError } from './alegra-client.service';
 import { EmailService } from '../email/email.service';
 import { randomBytes } from 'crypto';
 import { unzipSync } from 'fflate';
+import { In } from 'typeorm';
+import { Devolucion } from '../devoluciones/entities/devolucion.entity';
 
 type AlegraClientMock = {
   crearCompania: jest.Mock;
@@ -29,6 +31,7 @@ type AlegraClientMock = {
   crearFactura: jest.Mock;
   consultarFactura: jest.Mock;
   crearNotaCredito: jest.Mock;
+  consultarNotaCredito: jest.Mock;
   crearNotaDebito: jest.Mock;
   crearNotaAjuste: jest.Mock;
   consultarDocumento: jest.Mock;
@@ -107,6 +110,7 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
   let suscripcionesService: { registrarConsumo: jest.Mock; miEstado: jest.Mock };
   let alertasRepo: { findOne: jest.Mock; create: jest.Mock; save: jest.Mock };
   let realtimeGateway: { emitToNegocio: jest.Mock };
+  let devolucionesRepo: { findOne: jest.Mock; findOneOrFail: jest.Mock };
   let qbWhereMock: { where: jest.Mock; andWhere: jest.Mock; getMany: jest.Mock };
   let contingencia: {
     periodoActivo: jest.Mock;
@@ -159,10 +163,12 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
       crearNotaDebito: jest.fn().mockResolvedValue({ alegraDocumentId: 'dn-1', status: 'SENT', legalStatus: 'ACCEPTED', isFinal: true }),
       crearNotaAjuste: jest.fn(),
       consultarDocumento: jest.fn(),
+      consultarNotaCredito: jest.fn(),
     };
     suscripcionesService = { registrarConsumo: jest.fn(), miEstado: jest.fn() };
     alertasRepo = { findOne: jest.fn().mockResolvedValue(null), create: jest.fn((x) => x), save: jest.fn(async (x) => x) };
     realtimeGateway = { emitToNegocio: jest.fn() };
+    devolucionesRepo = { findOne: jest.fn(), findOneOrFail: jest.fn() };
     contingencia = {
       periodoActivo: jest.fn().mockResolvedValue(null),
       asignarNumero: jest.fn(),
@@ -181,6 +187,7 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
         { provide: getRepositoryToken(Negocio), useValue: negociosRepo },
         { provide: getRepositoryToken(Alerta), useValue: alertasRepo },
         { provide: getRepositoryToken(Venta), useValue: ventasRepo },
+        { provide: getRepositoryToken(Devolucion), useValue: devolucionesRepo },
         { provide: AlegraClientService, useValue: alegraClient },
         { provide: SuscripcionesService, useValue: suscripcionesService },
         { provide: RealtimeGateway, useValue: realtimeGateway },
@@ -1018,10 +1025,12 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
   });
 
   describe('documentos por venta', () => {
-    it('obtenerDocumentoPorVenta busca por ventaId Y negocioId (nunca solo por ventaId)', async () => {
+    it('obtenerDocumentoPorVenta busca por ventaId Y negocioId (nunca solo por ventaId), y solo la factura (no notas crédito)', async () => {
       documentosRepo.findOne.mockResolvedValue({ id: 'doc-1', ventaId: 'venta-1' });
       const resultado = await service.obtenerDocumentoPorVenta('venta-1', 'neg-1');
-      expect(documentosRepo.findOne).toHaveBeenCalledWith({ where: { ventaId: 'venta-1', negocioId: 'neg-1' } });
+      expect(documentosRepo.findOne).toHaveBeenCalledWith({
+        where: { ventaId: 'venta-1', negocioId: 'neg-1', tipo: In(['FACTURA', 'DEE_POS']) },
+      });
       expect(resultado).toEqual({ id: 'doc-1', ventaId: 'venta-1' });
     });
 
@@ -1042,7 +1051,9 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
 
       await service.reintentarPorVenta('venta-1', 'neg-1');
 
-      expect(documentosRepo.findOne).toHaveBeenCalledWith({ where: { ventaId: 'venta-1', negocioId: 'neg-1' } });
+      expect(documentosRepo.findOne).toHaveBeenCalledWith({
+      where: { ventaId: 'venta-1', negocioId: 'neg-1', tipo: In(['FACTURA', 'DEE_POS']) },
+    });
       expect(alegraClient.crearFactura).toHaveBeenCalled();
     });
 
@@ -1245,7 +1256,8 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
       const mapa = await service.resumenPorVentas('neg-1', ['venta-1', 'venta-2']);
 
       expect(documentosRepo.find).toHaveBeenCalledWith({
-        where: { negocioId: 'neg-1', ventaId: expect.anything() }, select: { id: true, ventaId: true, estado: true },
+        where: { negocioId: 'neg-1', ventaId: expect.anything(), tipo: In(['FACTURA', 'DEE_POS']) },
+        select: { id: true, ventaId: true, estado: true },
       });
       expect(mapa.get('venta-1')).toEqual({ id: 'doc-1', estado: 'ACEPTADO' });
       expect(mapa.has('venta-2')).toBe(false);
@@ -1590,6 +1602,109 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
       ventasRepo.findOne.mockResolvedValue(ventaConCorreo(null));
       documentosRepo.findOne.mockResolvedValue(docAceptado());
       await expect(service.enviarCorreoFactura('doc-1', 'neg-1')).rejects.toBeInstanceOf(BadRequestException);
+    });
+  });
+  describe('notas crédito de devoluciones', () => {
+    const facturaAceptada = () => ({
+      id: 'fac-1', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'FACTURA', estado: EstadoDocumentoElectronico.ACEPTADO,
+      prefijo: 'DE', numero: 17, numeroCompleto: 'DE17', fechaEmision: new Date('2026-10-01T15:00:00Z'), cufe: 'cufe-fac',
+    });
+    const devolucion = () => ({
+      id: 'dev-1', negocioId: 'neg-1', ventaId: 'venta-1', numeroCompleto: 'DEV-1', motivo: 'Defectuoso', total: 11_900,
+      baseTotal: 10_000, impuestoTotal: 1_900, descuentoVentaTotal: 0,
+      items: [{ nombreProducto: 'Taladro', cantidad: 1, precioUnitario: 10_000, base: 10_000, impuesto: 1_900, descuentoVenta: 0, total: 11_900 }],
+      reembolsos: [{ forma: 'EFECTIVO', monto: 11_900 }],
+    });
+    const habilitacion = (over: Record<string, unknown> = {}) => ({ ...HABILITACION_CON_RESOLUCION, siguienteNumeroNotaCredito: 4, ...over });
+
+    beforeEach(() => {
+      devolucionesRepo.findOne.mockResolvedValue(devolucion());
+      devolucionesRepo.findOneOrFail.mockResolvedValue(devolucion());
+      documentosRepo.findOne.mockResolvedValue(facturaAceptada());
+      documentosRepo.findOneOrFail.mockResolvedValue(facturaAceptada());
+      habilitacionRepo.findOne.mockResolvedValue(habilitacion());
+      alegraClient.crearNotaCredito.mockResolvedValue({
+        alegraDocumentId: 'nc-1', cude: 'cude-1', fullNumber: 'NC4', number: 4, prefix: 'NC', qrCodeContent: 'qr-nc',
+        status: 'CLOSED', legalStatus: 'ACCEPTED', isFinal: true,
+      });
+    });
+
+    it('crea el documento NOTA_CREDITO ligado a la factura y lo emite con prefijo NC y su consecutivo propio', async () => {
+      await service.registrarNotaCredito('dev-1', 'neg-1', { quedaTotal: false, esPrimeraDevolucion: true });
+
+      expect(documentosRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tipo: 'NOTA_CREDITO', devolucionId: 'dev-1', facturaDocumentoId: 'fac-1', ventaId: 'venta-1', conceptoNotaCredito: '1',
+        }),
+      );
+      expect(alegraClient.crearNotaCredito).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prefix: 'NC',
+          number: 4,
+          conceptCode: '1',
+          documentoAsociado: { prefix: 'DE', number: 17, documentType: '01', date: '2026-10-01', uuid: 'cufe-fac' },
+        }),
+      );
+      expect(documentosRepo.save).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          estado: EstadoDocumentoElectronico.ACEPTADO, cude: 'cude-1', numeroCompleto: 'NC4', qrContenido: 'qr-nc', total: 11_900,
+        }),
+      );
+      expect(habilitacionRepo.save).toHaveBeenCalledWith(expect.objectContaining({ siguienteNumeroNotaCredito: 5 }));
+    });
+
+    it('concepto 2 (anulación) cuando la devolución es la primera y deja la venta en total', async () => {
+      await service.registrarNotaCredito('dev-1', 'neg-1', { quedaTotal: true, esPrimeraDevolucion: true });
+      expect(alegraClient.crearNotaCredito).toHaveBeenCalledWith(expect.objectContaining({ conceptCode: '2' }));
+    });
+
+    it('sin consecutivo previo arranca en 1', async () => {
+      habilitacionRepo.findOne.mockResolvedValue(habilitacion({ siguienteNumeroNotaCredito: null }));
+      await service.registrarNotaCredito('dev-1', 'neg-1', { quedaTotal: false, esPrimeraDevolucion: true });
+      expect(alegraClient.crearNotaCredito).toHaveBeenCalledWith(expect.objectContaining({ number: 1 }));
+    });
+
+    it('si la factura no está aceptada no crea nota crédito', async () => {
+      documentosRepo.findOne.mockResolvedValue({ ...facturaAceptada(), estado: EstadoDocumentoElectronico.PENDIENTE });
+      await service.registrarNotaCredito('dev-1', 'neg-1', { quedaTotal: false, esPrimeraDevolucion: true });
+      expect(documentosRepo.create).not.toHaveBeenCalled();
+      expect(alegraClient.crearNotaCredito).not.toHaveBeenCalled();
+    });
+
+    it('si Alegra no responde, la NC queda PENDIENTE con el error y el consecutivo no avanza', async () => {
+      alegraClient.crearNotaCredito.mockRejectedValue(new AlegraNoDisponibleError('caído'));
+      await service.registrarNotaCredito('dev-1', 'neg-1', { quedaTotal: false, esPrimeraDevolucion: true });
+      expect(documentosRepo.save).toHaveBeenLastCalledWith(
+        expect.objectContaining({ tipo: 'NOTA_CREDITO', estado: EstadoDocumentoElectronico.PENDIENTE, errorMensaje: 'caído' }),
+      );
+      expect(habilitacionRepo.save).not.toHaveBeenCalledWith(expect.objectContaining({ siguienteNumeroNotaCredito: 5 }));
+    });
+
+    it('el reintento (intentarEmitir) de un documento NOTA_CREDITO usa crearNotaCredito, nunca crearFactura', async () => {
+      const documento = {
+        id: 'nc-doc', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'NOTA_CREDITO', estado: EstadoDocumentoElectronico.RECHAZADO,
+        devolucionId: 'dev-1', facturaDocumentoId: 'fac-1', conceptoNotaCredito: '2', intentos: 1, periodoContingenciaId: null,
+      } as unknown as DocumentoElectronico;
+      await service.intentarEmitir(documento, habilitacion() as unknown as HabilitacionFacturacionElectronica);
+      expect(alegraClient.crearFactura).not.toHaveBeenCalled();
+      expect(alegraClient.crearNotaCredito).toHaveBeenCalledWith(expect.objectContaining({ conceptCode: '2' }));
+    });
+
+    it('consultarPendiente de una NC en curso consulta /credit-notes', async () => {
+      const documento = {
+        id: 'nc-doc', negocioId: 'neg-1', ventaId: 'venta-1', tipo: 'NOTA_CREDITO', estado: EstadoDocumentoElectronico.PENDIENTE,
+        trackingReference: { documentId: 'nc-1' }, ultimoIntentoEn: null, periodoContingenciaId: null,
+      };
+      documentosRepo.find.mockResolvedValue([documento]);
+      alegraClient.consultarNotaCredito.mockResolvedValue({
+        alegraDocumentId: 'nc-1', status: 'CLOSED', legalStatus: 'ACCEPTED', isFinal: true, cude: 'cude-1',
+      });
+      await service.reconciliarPendientes();
+      expect(alegraClient.consultarFactura).not.toHaveBeenCalled();
+      expect(alegraClient.consultarNotaCredito).toHaveBeenCalledWith(expect.objectContaining({ documentId: 'nc-1' }));
+      expect(documentosRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ estado: EstadoDocumentoElectronico.ACEPTADO, cude: 'cude-1' }),
+      );
     });
   });
 });

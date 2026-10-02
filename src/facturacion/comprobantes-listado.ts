@@ -5,7 +5,11 @@ import {
 } from '../common/utils/fecha-colombia';
 
 export type TipoComprobanteListado =
-  'FACTURA_ELECTRONICA' | 'RECIBO' | 'FACTURA' | 'RECIBO_CAJA';
+  | 'FACTURA_ELECTRONICA'
+  | 'RECIBO'
+  | 'FACTURA'
+  | 'RECIBO_CAJA'
+  | 'DEVOLUCION';
 
 export interface FiltrosComprobantes {
   tipo?: TipoComprobanteListado;
@@ -29,6 +33,7 @@ export interface FilaComprobante {
   ventaId: string;
   documentoId: string | null;
   abonoId: string | null;
+  devolucionId: string | null;
 }
 
 export interface ResumenComprobantes {
@@ -66,12 +71,13 @@ export const SQL_COMPROBANTES = `
     v.estado::text AS estado_venta,
     v.id::text AS venta_id,
     d.id::text AS documento_id,
-    NULL::text AS abono_id
+    NULL::text AS abono_id,
+    NULL::text AS devolucion_id
   FROM ventas v
   LEFT JOIN LATERAL (
     SELECT de.id, de.numero_completo, de.fecha_emision, de.created_at, de.estado, de.ambiente
     FROM documentos_electronicos de
-    WHERE de.venta_id = v.id::text AND de.negocio_id = v.negocio_id
+    WHERE de.venta_id = v.id::text AND de.negocio_id = v.negocio_id AND de.tipo <> 'NOTA_CREDITO'
     ORDER BY de.created_at DESC
     LIMIT 1
   ) d ON TRUE
@@ -79,11 +85,20 @@ export const SQL_COMPROBANTES = `
   UNION ALL
   SELECT
     'RECIBO_CAJA', r.numero_recibo, r.fecha AT TIME ZONE 'UTC', v.nombre_cliente, r.monto,
-    NULL, NULL, v.estado::text, v.id::text, NULL, r.id::text
+    NULL, NULL, v.estado::text, v.id::text, NULL, r.id::text, NULL
   FROM registros_pago_cuota r
   JOIN cuotas cu ON cu.id = r.cuota_id
   JOIN ventas v ON v.id = cu.venta_id
   WHERE v.negocio_id = $1 AND r.numero_recibo IS NOT NULL
+  UNION ALL
+  SELECT
+    'DEVOLUCION', COALESCE(nc.numero_completo, dv.numero_completo),
+    COALESCE(nc.fecha_emision, dv.created_at AT TIME ZONE 'UTC'), v.nombre_cliente, dv.total,
+    nc.estado::text, nc.ambiente, v.estado::text, v.id::text, nc.id::text, NULL, dv.id::text
+  FROM devoluciones dv
+  JOIN ventas v ON v.id::text = dv.venta_id
+  LEFT JOIN documentos_electronicos nc ON nc.devolucion_id = dv.id::text AND nc.tipo = 'NOTA_CREDITO'
+  WHERE dv.negocio_id = $1
 `;
 
 /** WHERE sobre el alias `c` del SQL base; los parámetros se numeran desde $2 ($1 es el negocio). */
@@ -126,6 +141,7 @@ export interface FilaCruda {
   venta_id: string;
   documento_id: string | null;
   abono_id: string | null;
+  devolucion_id: string | null;
 }
 
 export function mapearFila(raw: FilaCruda): FilaComprobante {
@@ -141,6 +157,7 @@ export function mapearFila(raw: FilaCruda): FilaComprobante {
     ventaId: raw.venta_id,
     documentoId: raw.documento_id,
     abonoId: raw.abono_id,
+    devolucionId: raw.devolucion_id,
   };
 }
 
@@ -156,6 +173,7 @@ export function resumirConteos(
     RECIBO: 0,
     FACTURA: 0,
     RECIBO_CAJA: 0,
+    DEVOLUCION: 0,
   };
   const dian = { aceptados: 0, pendientes: 0, rechazados: 0 };
   for (const { tipo, estado_dian, cantidad } of conteos) {

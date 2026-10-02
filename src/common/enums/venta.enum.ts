@@ -11,3 +11,10 @@ export enum EstadoVenta {
   EN_MORA = 'EN_MORA',
   CANCELADA = 'CANCELADA',
 }
+
+/** Cuánto de la venta se devolvió (no se mezcla con EstadoVenta, que es de cobro/crédito). */
+export enum EstadoDevolucionVenta {
+  NINGUNA = 'NINGUNA',
+  PARCIAL = 'PARCIAL',
+  TOTAL = 'TOTAL',
+}

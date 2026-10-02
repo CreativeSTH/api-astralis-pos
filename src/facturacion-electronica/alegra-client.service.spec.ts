@@ -451,23 +451,63 @@ describe('AlegraClientService', () => {
     };
     const PAGOS = [{ paymentForm: '1', paymentMethod: '10', paymentDueDate: '2026-09-01' }];
 
-    it('crearNotaCredito llama a POST /credit-notes con associatedDocuments (shape confirmado con validate_co_payload)', async () => {
+    it('crearNotaCredito llama a POST /credit-notes con prefix y associatedDocuments, y lee la raíz creditNote (confirmado con el MCP de Alanube)', async () => {
       fetchMock.mockResolvedValue({
         ok: true,
-        json: async () => ({ invoices: [{ id: 'cn-1', status: 'SENT', legalStatus: 'ACCEPTED', isFinal: true }] }),
+        json: async () => ({
+          creditNote: {
+            id: 'cn-1', cude: 'cude-1', prefix: 'NC', number: 100, fullNumber: 'NC100', date: '2026-10-02',
+            qrCodeContent: 'qr', status: 'CLOSED', legalStatus: 'REJECTED',
+            governmentResponse: { message: 'NIT no autorizado', errorMessages: ['e1'] },
+          },
+          files: { xml: 'https://x/nc.xml' },
+        }),
       });
 
       const resultado = await service.crearNotaCredito({
-        token: 't', baseUrl: 'https://sandbox-api.alegra.com/e-provider/col/v1', companyId: 'company-1',
+        token: 't', baseUrl: 'https://sandbox-api.alegra.com/e-provider/col/v1', companyId: 'company-1', prefix: 'NC',
         number: 100, conceptCode: '2', documentoAsociado: DOC_ASOCIADO, regimeCode: 'O-48', invoicePeriod: { startDate: '2026-09-01', endDate: '2026-09-01' }, customer: CUSTOMER, items: [ITEM], payments: PAGOS, totalAmounts: TOTALES,
       });
 
-      expect(resultado).toEqual({ alegraDocumentId: 'cn-1', status: 'SENT', legalStatus: 'ACCEPTED', isFinal: true });
+      expect(resultado).toMatchObject({
+        alegraDocumentId: 'cn-1', cude: 'cude-1', fullNumber: 'NC100', prefix: 'NC', number: 100, qrCodeContent: 'qr',
+        legalStatus: 'REJECTED', isFinal: true, governmentResponseMessage: 'NIT no autorizado', errorMessages: ['e1'],
+        urlXml: 'https://x/nc.xml',
+      });
       const [url, opciones] = fetchMock.mock.calls[0];
       expect(url).toBe('https://sandbox-api.alegra.com/e-provider/col/v1/credit-notes');
       const body = JSON.parse(opciones.body);
       expect(body.associatedDocuments).toEqual([DOC_ASOCIADO]);
       expect(body.conceptCode).toBe('2');
+      expect(body.prefix).toBe('NC');
+      expect(body.number).toBe(100);
+    });
+
+    it('crearNotaCredito con la DIAN en curso (isFinal false) devuelve el trackingReference para consultar después', async () => {
+      fetchMock.mockResolvedValue({ ok: true, json: async () => ({ creditNote: { id: 'cn-2', status: 'SENT', isFinal: false } }) });
+      const resultado = await service.crearNotaCredito({
+        token: 't', baseUrl: 'https://sandbox-api.alegra.com/e-provider/col/v1', companyId: 'company-1',
+        number: 1, conceptCode: '1', documentoAsociado: DOC_ASOCIADO, regimeCode: 'O-48', invoicePeriod: { startDate: '2026-09-01', endDate: '2026-09-01' }, customer: CUSTOMER, items: [ITEM], payments: PAGOS, totalAmounts: TOTALES,
+      });
+      expect(resultado.isFinal).toBe(false);
+      expect(resultado.trackingReference).toEqual({ flow: 'co.credit-note', environment: 'sandbox', documentId: 'cn-2' });
+    });
+
+    it('crearNotaCredito con Alegra caído (red) lanza AlegraNoDisponibleError', async () => {
+      fetchMock.mockRejectedValue(new Error('ECONNRESET'));
+      await expect(
+        service.crearNotaCredito({
+          token: 't', baseUrl: 'https://sandbox-api.alegra.com/e-provider/col/v1', companyId: 'company-1',
+          number: 1, conceptCode: '1', documentoAsociado: DOC_ASOCIADO, regimeCode: 'O-48', invoicePeriod: { startDate: '2026-09-01', endDate: '2026-09-01' }, customer: CUSTOMER, items: [ITEM], payments: PAGOS, totalAmounts: TOTALES,
+        }),
+      ).rejects.toBeInstanceOf(AlegraNoDisponibleError);
+    });
+
+    it('consultarNotaCredito hace GET /credit-notes/{id}', async () => {
+      fetchMock.mockResolvedValue({ ok: true, json: async () => ({ creditNote: { id: 'cn-1', status: 'CLOSED', legalStatus: 'ACCEPTED', cude: 'cude-1' } }) });
+      const r = await service.consultarNotaCredito({ token: 't', baseUrl: 'https://sandbox-api.alegra.com/e-provider/col/v1', documentId: 'cn-1' });
+      expect(fetchMock.mock.calls[0][0]).toBe('https://sandbox-api.alegra.com/e-provider/col/v1/credit-notes/cn-1');
+      expect(r).toMatchObject({ alegraDocumentId: 'cn-1', legalStatus: 'ACCEPTED', cude: 'cude-1', isFinal: true });
     });
 
     it('crearNotaDebito llama a POST /debit-notes con associatedDocuments (shape confirmado con validate_co_payload)', async () => {

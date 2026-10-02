@@ -25,6 +25,12 @@ export class ReportesController {
     return this.reportesService.ventas(query);
   }
 
+  @Get('devoluciones')
+  @ApiOperation({ summary: 'Devoluciones por rango de fechas: total, por forma de reembolso, por motivo y productos' })
+  devoluciones(@Query() query: ReportesQueryDto) {
+    return this.reportesService.devoluciones(query);
+  }
+
   @Get('margenes')
   @ApiOperation({
     summary: 'Margen bruto por rango de fechas y top productos por margen',

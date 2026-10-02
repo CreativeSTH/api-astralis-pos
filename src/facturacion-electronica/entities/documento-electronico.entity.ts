@@ -4,6 +4,9 @@ import { EstadoDocumentoElectronico } from './estado-documento-electronico.enum'
 
 export type EstadoCorreoFactura = 'ENVIANDO' | 'ENVIADO' | 'FALLIDO';
 
+/** Documentos que son "la factura de la venta" (excluye notas crédito). */
+export const TIPOS_FACTURA_DE_VENTA: ('FACTURA' | 'DEE_POS')[] = ['FACTURA', 'DEE_POS'];
+
 @Entity('documentos_electronicos')
 @Index('IDX_documentos_electronicos_negocio_created', ['negocioId', 'createdAt'])
 // Un número de contingencia no se reutiliza nunca (fase 6a).
@@ -11,17 +14,34 @@ export type EstadoCorreoFactura = 'ENVIANDO' | 'ENVIADO' | 'FALLIDO';
   unique: true,
   where: '"periodo_contingencia_id" IS NOT NULL',
 })
+// Una sola factura por venta; las notas crédito comparten venta_id (una por devolución).
+@Index('UQ_documentos_electronicos_venta_factura', ['ventaId'], {
+  unique: true,
+  where: `"tipo" <> 'NOTA_CREDITO'`,
+})
 export class DocumentoElectronico extends BaseEntity {
   @Index()
   @Column({ name: 'negocio_id' })
   negocioId: string;
 
-  @Index({ unique: true })
   @Column({ name: 'venta_id' })
   ventaId: string;
 
   @Column()
-  tipo: 'DEE_POS' | 'FACTURA';
+  tipo: 'DEE_POS' | 'FACTURA' | 'NOTA_CREDITO';
+
+  /** Solo NOTA_CREDITO: la devolución que la originó. */
+  @Index('IDX_documentos_electronicos_devolucion')
+  @Column({ name: 'devolucion_id', type: 'varchar', nullable: true })
+  devolucionId: string | null;
+
+  /** Solo NOTA_CREDITO: el documento de la factura que ajusta. */
+  @Column({ name: 'factura_documento_id', type: 'varchar', nullable: true })
+  facturaDocumentoId: string | null;
+
+  /** Solo NOTA_CREDITO: concepto DIAN ('1' parcial, '2' anulación); persistido para que el cron reintente igual. */
+  @Column({ name: 'concepto_nota_credito', type: 'varchar', length: 1, nullable: true })
+  conceptoNotaCredito: string | null;
 
   @Column({ type: 'enum', enum: EstadoDocumentoElectronico, default: EstadoDocumentoElectronico.PENDIENTE })
   estado: EstadoDocumentoElectronico;

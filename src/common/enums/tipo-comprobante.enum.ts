@@ -22,4 +22,6 @@ export enum TipoNumeracion {
   RECIBO = 'RECIBO',
   FACTURA = 'FACTURA',
   RECIBO_CAJA = 'RECIBO_CAJA',
+  /** Comprobante interno de devolución `DEV-n`, por sucursal (devoluciones + notas crédito). */
+  DEVOLUCION = 'DEVOLUCION',
 }

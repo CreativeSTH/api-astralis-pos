@@ -137,6 +137,47 @@ export class AlegraNoDisponibleError extends BadGatewayException {}
 
 export const TIMEOUT_EMISION_MS = 20_000;
 
+export interface DatosAlegraNotaCredito {
+  alegraDocumentId: string;
+  cude?: string;
+  fullNumber?: string;
+  prefix?: string;
+  number?: number;
+  fecha?: string;
+  qrCodeContent?: string;
+  status: string;
+  legalStatus?: string;
+  isFinal: boolean;
+  trackingReference?: Record<string, unknown>;
+  governmentResponseMessage?: string;
+  errorMessages?: string[];
+  urlXml?: string;
+}
+
+/** Raíz `creditNote` (MCP de Alanube 2026-10-02: `CreditNoteResponse = { creditNote, files }`). */
+function leerNotaCredito(data: Record<string, any>, baseUrl: string): DatosAlegraNotaCredito {
+  const nota = data.creditNote ?? data;
+  const isFinal = nota.isFinal !== false;
+  return {
+    alegraDocumentId: nota.id as string,
+    cude: nota.cude as string | undefined,
+    fullNumber: nota.fullNumber as string | undefined,
+    prefix: nota.prefix as string | undefined,
+    number: nota.number as number | undefined,
+    fecha: nota.date as string | undefined,
+    qrCodeContent: nota.qrCodeContent as string | undefined,
+    status: nota.status as string,
+    legalStatus: nota.legalStatus as string | undefined,
+    isFinal,
+    trackingReference: isFinal
+      ? undefined
+      : { flow: 'co.credit-note', environment: baseUrl.includes('sandbox') ? 'sandbox' : 'production', documentId: nota.id as string },
+    governmentResponseMessage: nota.governmentResponse?.message as string | undefined,
+    errorMessages: nota.governmentResponse?.errorMessages as string[] | undefined,
+    urlXml: data.files?.xml as string | undefined,
+  };
+}
+
 /**
  * "Contingencia Facturador Electrónico" en la API de Alegra/Alanube = factura tipo 03 de la DIAN
  * (transcripción de una factura de talonario o de papel). OJO: en Alegra "03" es MANDATO — nunca usar
@@ -426,16 +467,17 @@ export class AlegraClientService {
   }
 
   /**
-   * Shape confirmado con `validate_co_payload` (`co.credit-notes.create`,
-   * 2026-09-01) — usado tanto para notas crédito operativas como para la
-   * nota crédito del testset de habilitación de Factura (8 facturas + 1 NC +
-   * 1 ND, ver `confirmarTestSet`). `conceptCode` "2" = "Anulación de factura
-   * electrónica" (catálogo DIAN), el motivo usado para la nota del testset.
+   * Shape del request confirmado con `validate_co_payload` (`co.credit-notes.create`, 2026-09-01) —
+   * usado para la nota crédito del testset de habilitación (ver `confirmarTestSet`) y para las notas
+   * crédito de devoluciones. `conceptCode` "1" = devolución parcial, "2" = anulación (catálogo DIAN).
+   * La respuesta es `{ creditNote, files }` (MCP de Alanube, 2026-10-02) y trae `cude`, no `cufe`.
    */
   async crearNotaCredito(params: {
     token: string;
     baseUrl: string;
     companyId: string;
+    /** Opcional en la API; las notas de devoluciones usan PREFIJO_NOTA_CREDITO. */
+    prefix?: string;
     number: number;
     conceptCode: string;
     documentoAsociado: DocumentoAsociadoAlegra;
@@ -445,33 +487,47 @@ export class AlegraClientService {
     items: ItemFacturaAlegra[];
     payments: PaymentAlegra[];
     totalAmounts: TotalAmountsFacturaAlegra;
-  }): Promise<{ alegraDocumentId: string; status: string; legalStatus?: string; isFinal: boolean }> {
-    const res = await fetch(`${params.baseUrl}/credit-notes`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${params.token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        conceptCode: params.conceptCode,
-        number: params.number,
-        invoicePeriod: params.invoicePeriod,
-        associatedDocuments: [params.documentoAsociado],
-        company: { id: params.companyId, regimeCode: params.regimeCode },
-        customer: params.customer,
-        items: params.items,
-        payments: params.payments,
-        totalAmounts: params.totalAmounts,
-      }),
+  }): Promise<DatosAlegraNotaCredito> {
+    let res: Response;
+    try {
+      res = await fetch(`${params.baseUrl}/credit-notes`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${params.token}`, 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(TIMEOUT_EMISION_MS),
+        body: JSON.stringify({
+          conceptCode: params.conceptCode,
+          ...(params.prefix ? { prefix: params.prefix } : {}),
+          number: params.number,
+          invoicePeriod: params.invoicePeriod,
+          associatedDocuments: [params.documentoAsociado],
+          company: { id: params.companyId, regimeCode: params.regimeCode },
+          customer: params.customer,
+          items: params.items,
+          payments: params.payments,
+          totalAmounts: params.totalAmounts,
+        }),
+      });
+    } catch (error) {
+      throw new AlegraNoDisponibleError(`Alegra no respondió: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (!res.ok) {
+      const mensaje = await extraerMensajeError(res, 'Alegra rechazó la creación de la nota crédito');
+      if (res.status >= 500 || mensaje.includes('EPR5')) throw new AlegraNoDisponibleError(mensaje);
+      throw new BadGatewayException(mensaje);
+    }
+    return leerNotaCredito(await res.json(), params.baseUrl);
+  }
+
+  /** `GET /credit-notes/{id}` — resuelve una nota que quedó `isFinal: false` y da la URL del XML. */
+  async consultarNotaCredito(params: { token: string; baseUrl: string; documentId: string }): Promise<DatosAlegraNotaCredito> {
+    const res = await fetch(`${params.baseUrl}/credit-notes/${params.documentId}`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${params.token}` },
     });
     if (!res.ok) {
-      throw new BadGatewayException(await extraerMensajeError(res, 'Alegra rechazó la creación de la nota crédito'));
+      throw new BadGatewayException(await extraerMensajeError(res, 'No se pudo consultar la nota crédito en Alegra'));
     }
-    const data = await res.json();
-    const nota = data.invoices?.[0] ?? data;
-    return {
-      alegraDocumentId: nota.id as string,
-      status: nota.status as string,
-      legalStatus: nota.legalStatus as string | undefined,
-      isFinal: nota.isFinal !== false,
-    };
+    return leerNotaCredito(await res.json(), params.baseUrl);
   }
 
   /**

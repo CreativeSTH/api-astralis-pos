@@ -67,6 +67,10 @@ export class HabilitacionFacturacionElectronica extends BaseEntity {
   @Column({ name: 'siguiente_numero', nullable: true })
   siguienteNumero?: number;
 
+  /** Consecutivo de notas crédito (prefijo NC); avanza solo cuando el envío llega a Alegra, igual que las facturas. */
+  @Column({ name: 'siguiente_numero_nota_credito', type: 'int', nullable: true })
+  siguienteNumeroNotaCredito: number | null;
+
   @Column({ name: 'alegra_company_id', nullable: true })
   alegraCompanyId?: string;
 

@@ -9,7 +9,7 @@ import {
 import { BaseEntity } from '../../common/entities/base.entity';
 import { Sucursal } from '../../sucursales/entities/sucursal.entity';
 import { TurnoCaja } from '../../caja/entities/turno-caja.entity';
-import { TipoVenta, EstadoVenta } from '../../common/enums/venta.enum';
+import { TipoVenta, EstadoVenta, EstadoDevolucionVenta } from '../../common/enums/venta.enum';
 import { TipoComprobanteVenta } from '../../common/enums/tipo-comprobante.enum';
 import { VentaItem } from './venta-item.entity';
 import { VentaPago } from './venta-pago.entity';
@@ -126,6 +126,15 @@ export class Venta extends BaseEntity {
 
   @Column({ name: 'creada_por' })
   creadaPor: string;
+
+  /** Cuánto se devolvió de esta venta (spec de devoluciones 2026-10-02). */
+  @Column({
+    name: 'estado_devolucion',
+    type: 'enum',
+    enum: EstadoDevolucionVenta,
+    default: EstadoDevolucionVenta.NINGUNA,
+  })
+  estadoDevolucion: EstadoDevolucionVenta;
 
   /** Denormalizados al momento de la venta — una reimpresión siempre muestra lo realmente emitido, aunque los defaults de la sucursal cambien después. */
   @Column({ name: 'numero_comprobante', nullable: true })

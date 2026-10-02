@@ -64,6 +64,12 @@ export class ClientesController {
     return this.clientesService.findOne(id);
   }
 
+  @Get(':id/saldo-a-favor')
+  @RequierePermiso(ModuloPermiso.CLIENTES, AccionPermiso.VER)
+  saldoAFavor(@Param('id', ParseUUIDPipe) id: string) {
+    return this.clientesService.saldoAFavor(id);
+  }
+
   @Get(':id/credito')
   @RequierePermiso(ModuloPermiso.CLIENTES, AccionPermiso.VER)
   @ApiOperation({

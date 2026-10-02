@@ -19,6 +19,7 @@ import { CreateNotaClienteDto } from './dto/create-nota-cliente.dto';
 import { CreateDireccionClienteDto } from './dto/create-direccion-cliente.dto';
 import { UpdateDireccionClienteDto } from './dto/update-direccion-cliente.dto';
 import { BuscarClientesDto } from './dto/buscar-clientes.dto';
+import { MovimientoSaldoCliente } from './entities/movimiento-saldo-cliente.entity';
 
 @Injectable()
 export class ClientesService extends TenantBaseService<Cliente> {
@@ -28,6 +29,8 @@ export class ClientesService extends TenantBaseService<Cliente> {
     private readonly notasRepository: Repository<NotaCliente>,
     @InjectRepository(DireccionCliente)
     private readonly direccionesRepository: Repository<DireccionCliente>,
+    @InjectRepository(MovimientoSaldoCliente)
+    private readonly movimientosSaldoRepository: Repository<MovimientoSaldoCliente>,
     cls: ClsService,
   ) {
     super(repository, cls, 'Cliente');
@@ -39,6 +42,17 @@ export class ClientesService extends TenantBaseService<Cliente> {
 
   findOne(id: string) {
     return this.findOneForTenant(id);
+  }
+
+  /** Saldo a favor (devoluciones) y sus últimos movimientos; 404 si el cliente es de otro negocio. */
+  async saldoAFavor(clienteId: string): Promise<{ saldoAFavor: number; movimientos: MovimientoSaldoCliente[] }> {
+    const cliente = await this.findOneForTenant(clienteId);
+    const movimientos = await this.movimientosSaldoRepository.find({
+      where: { clienteId, negocioId: this.getNegocioId() },
+      order: { createdAt: 'DESC' },
+      take: 50,
+    });
+    return { saldoAFavor: Number(cliente.saldoAFavor), movimientos };
   }
 
   async buscar(filtros: BuscarClientesDto) {

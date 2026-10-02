@@ -9,12 +9,13 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, Repository } from 'typeorm';
 import { HabilitacionFacturacionElectronica } from './entities/habilitacion-facturacion-electronica.entity';
-import { DocumentoElectronico, EstadoCorreoFactura } from './entities/documento-electronico.entity';
+import { DocumentoElectronico, EstadoCorreoFactura, TIPOS_FACTURA_DE_VENTA } from './entities/documento-electronico.entity';
 import { EstadoHabilitacion } from './entities/estado-habilitacion.enum';
 import { EstadoDocumentoElectronico } from './entities/estado-documento-electronico.enum';
 import {
   AlegraClientService,
   AlegraNoDisponibleError,
+  DatosAlegraNotaCredito,
   DOCUMENT_TYPE_CONTINGENCIA_FACTURADOR,
   CustomerAlegra,
   DocumentoAsociadoAlegra,
@@ -42,6 +43,9 @@ import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { Venta } from '../ventas/entities/venta.entity';
 import { TipoComprobanteVenta } from '../common/enums/tipo-comprobante.enum';
 import { calcularDigitoVerificacion, limpiarNit } from '../common/utils/nit';
+import { Devolucion } from '../devoluciones/entities/devolucion.entity';
+import { conceptoNotaCredito, ETIQUETA_FORMA } from '../devoluciones/devolucion.logic';
+import { armarNotaCredito, PREFIJO_NOTA_CREDITO } from './nota-credito.logic';
 import { diaColombia, finDiaColombia, inicioDiaColombia } from '../common/utils/fecha-colombia';
 
 const esAceptado = (estado: EstadoDocumentoElectronico) =>
@@ -120,6 +124,8 @@ export class FacturacionElectronicaService {
     private readonly alertasRepository: Repository<Alerta>,
     @InjectRepository(Venta)
     private readonly ventasRepository: Repository<Venta>,
+    @InjectRepository(Devolucion)
+    private readonly devolucionesRepository: Repository<Devolucion>,
     private readonly alegraClient: AlegraClientService,
     private readonly suscripcionesService: SuscripcionesService,
     private readonly realtimeGateway: RealtimeGateway,
@@ -552,6 +558,126 @@ export class FacturacionElectronicaService {
   }
 
   /**
+   * Nota crédito de una devolución (spec de devoluciones 3.8). Solo sobre una factura ACEPTADA (lo
+   * garantiza DevolucionesService antes de crear la devolución). El número se asigna al emitir, igual
+   * que en las facturas. Lo llama DevolucionesService sin esperar: la devolución ya está firme y la
+   * nota se reintenta por cron si Alegra falla.
+   */
+  async registrarNotaCredito(
+    devolucionId: string,
+    negocioId: string,
+    opciones: { quedaTotal: boolean; esPrimeraDevolucion: boolean },
+  ): Promise<void> {
+    const devolucion = await this.devolucionesRepository.findOne({ where: { id: devolucionId, negocioId } });
+    if (!devolucion) return;
+    const factura = await this.documentosRepository.findOne({
+      where: { ventaId: devolucion.ventaId, negocioId, tipo: In(TIPOS_FACTURA_DE_VENTA) },
+    });
+    if (!factura || !esAceptado(factura.estado)) return;
+    const habilitacion = await this.habilitacionRepository.findOne({ where: { negocioId } });
+    if (!habilitacion || habilitacion.estado !== EstadoHabilitacion.HABILITADO) return;
+
+    const documento = await this.documentosRepository.save(
+      this.documentosRepository.create({
+        negocioId,
+        ventaId: devolucion.ventaId,
+        tipo: 'NOTA_CREDITO',
+        estado: EstadoDocumentoElectronico.PENDIENTE,
+        devolucionId,
+        facturaDocumentoId: factura.id,
+        conceptoNotaCredito: conceptoNotaCredito(opciones),
+        periodoContingenciaId: null,
+      }),
+    );
+    this.realtimeGateway.emitToNegocio(negocioId, 'documentos-electronicos:cambio', documento);
+    await this.intentarEmitir(documento, habilitacion);
+  }
+
+  /** Emisión (y reintento) de una nota crédito: mismo manejo de errores y estados que `intentarEmitir`. */
+  private async emitirNotaCredito(
+    documento: DocumentoElectronico,
+    habilitacion: HabilitacionFacturacionElectronica,
+  ): Promise<void> {
+    const token = process.env.ALEGRA_RESELLER_TOKEN!;
+    const baseUrl = baseUrlPara(habilitacion.ambiente);
+    documento.intentos += 1;
+    documento.ultimoIntentoEn = new Date();
+    const numero = habilitacion.siguienteNumeroNotaCredito ?? 1;
+
+    try {
+      const devolucion = await this.devolucionesRepository.findOneOrFail({
+        where: { id: documento.devolucionId!, negocioId: documento.negocioId },
+        relations: { items: true, reembolsos: true },
+      });
+      const factura = await this.documentosRepository.findOneOrFail({
+        where: { id: documento.facturaDocumentoId!, negocioId: documento.negocioId },
+      });
+      const venta = await this.ventasRepository.findOneOrFail({ where: { id: documento.ventaId }, relations: { cliente: true } });
+      const negocio = await this.negociosRepository.findOneOrFail({ where: { id: documento.negocioId } });
+      const nc = armarNotaCredito({
+        devolucion: {
+          total: Number(devolucion.total),
+          items: devolucion.items,
+          reembolsos: devolucion.reembolsos.map((r) => ({ forma: r.forma, monto: Number(r.monto) })),
+        },
+        factura: { prefijo: factura.prefijo ?? '', numero: factura.numero!, fechaEmision: factura.fechaEmision!, cufe: factura.cufe! },
+      });
+
+      const resultado = await this.alegraClient.crearNotaCredito({
+        token,
+        baseUrl,
+        companyId: habilitacion.alegraCompanyId!,
+        prefix: PREFIJO_NOTA_CREDITO,
+        number: numero,
+        conceptCode: documento.conceptoNotaCredito ?? '1',
+        documentoAsociado: nc.documentoAsociado,
+        regimeCode: REGIME_CODE_RESPONSABLE_IVA,
+        invoicePeriod: { startDate: diaColombia(), endDate: diaColombia() },
+        customer: this.mapearCustomerAlegra(venta),
+        items: nc.items,
+        payments: nc.payments,
+        totalAmounts: nc.totalAmounts,
+      });
+
+      documento.alegraDocumentId = resultado.alegraDocumentId;
+      // Snapshot del emisor como en congelarDatosEmision, sin resolución (las notas crédito no la llevan).
+      documento.numero = numero;
+      documento.prefijo = PREFIJO_NOTA_CREDITO;
+      documento.numeroCompleto = `${PREFIJO_NOTA_CREDITO}${numero}`;
+      documento.ambiente = habilitacion.ambiente;
+      documento.emisorRazonSocial = habilitacion.razonSocial ?? negocio.nombre;
+      documento.emisorNit = negocio.nit;
+      documento.emisorDireccion = habilitacion.direccion ?? negocio.direccion;
+      documento.emisorCiudad = habilitacion.ciudad ?? negocio.ciudadNombre;
+      documento.nombreCliente = venta.nombreCliente;
+      documento.total = Number(devolucion.total);
+      this.aplicarDatosNotaCredito(documento, resultado);
+      documento.errorMensaje = undefined;
+      documento.erroresDetalle = null;
+      this.aplicarEstadoEmision(documento, resultado);
+
+      await this.contingencia.registrarDisponibilidad(habilitacion);
+      // El envío llegó a Alegra: el número quedó consumido ante la DIAN, termine aceptada o rechazada.
+      habilitacion.siguienteNumeroNotaCredito = numero + 1;
+      await this.habilitacionRepository.save(habilitacion);
+    } catch (error) {
+      documento.errorMensaje = error instanceof Error ? error.message : String(error);
+      if (documento.errorMensaje?.includes('EPR5')) documento.intentos -= 1;
+    }
+
+    await this.documentosRepository.save(documento);
+    this.realtimeGateway.emitToNegocio(documento.negocioId, 'documentos-electronicos:cambio', documento);
+    await this.alTerminarEmision(documento, habilitacion);
+  }
+
+  private aplicarDatosNotaCredito(documento: DocumentoElectronico, resultado: DatosAlegraNotaCredito): void {
+    if (resultado.cude) documento.cude = resultado.cude;
+    if (resultado.fullNumber) documento.numeroCompleto = resultado.fullNumber;
+    if (resultado.fecha) documento.fechaEmision = new Date(resultado.fecha);
+    if (resultado.qrCodeContent) documento.qrContenido = resultado.qrCodeContent;
+  }
+
+  /**
    * `VentaItem.baseImponible`/`impuesto` ya vienen persistidos desde
    * `procesarItemsYStock` (congelados al momento de la venta) — no hace
    * falta cargar `items.producto` ni recalcular nada acá. `code` es un
@@ -675,6 +801,7 @@ export class FacturacionElectronicaService {
     habilitacion: HabilitacionFacturacionElectronica,
   ): Promise<void> {
     if (documento.periodoContingenciaId) return this.transmitirContingencia(documento, habilitacion);
+    if (documento.tipo === 'NOTA_CREDITO') return this.emitirNotaCredito(documento, habilitacion);
     const token = process.env.ALEGRA_RESELLER_TOKEN!;
     const baseUrl = baseUrlPara(habilitacion.ambiente);
 
@@ -898,13 +1025,17 @@ export class FacturacionElectronicaService {
 
     documento.ultimoIntentoEn = new Date();
     try {
-      const resultado = await this.alegraClient.consultarFactura({ token, baseUrl, documentId: trackingReference.documentId });
+      const esNotaCredito = documento.tipo === 'NOTA_CREDITO';
+      const resultado = esNotaCredito
+        ? await this.alegraClient.consultarNotaCredito({ token, baseUrl, documentId: trackingReference.documentId })
+        : await this.alegraClient.consultarFactura({ token, baseUrl, documentId: trackingReference.documentId });
       if (!resultado.isFinal) {
         await this.documentosRepository.save(documento);
         return;
       }
       documento.trackingReference = null;
-      this.aplicarDatosAlegra(documento, resultado);
+      if (esNotaCredito) this.aplicarDatosNotaCredito(documento, resultado as DatosAlegraNotaCredito);
+      else this.aplicarDatosAlegra(documento, resultado as DatosAlegraFactura);
       if (resultado.legalStatus === 'ACCEPTED') {
         documento.estado = EstadoDocumentoElectronico.ACEPTADO;
       } else if (resultado.legalStatus === 'ACCEPTED_WITH_OBSERVATIONS') {
@@ -944,7 +1075,10 @@ export class FacturacionElectronicaService {
       const existente = await this.alertasRepository.findOne({
         where: { negocioId: documento.negocioId, tipo: TipoAlerta.FACTURACION_DIAN_VENCIDA, referenciaId: documento.id, resuelta: false },
       });
-      const mensaje = `Documento electrónico de la venta ${documento.ventaId} sin emitir hace más de 48h — revisar manualmente`;
+      const mensaje =
+        documento.tipo === 'NOTA_CREDITO'
+          ? `Nota crédito de la devolución ${documento.devolucionId} sin emitir hace más de 48h — revisar manualmente`
+          : `Documento electrónico de la venta ${documento.ventaId} sin emitir hace más de 48h — revisar manualmente`;
       if (existente) {
         existente.mensaje = mensaje;
         const actualizada = await this.alertasRepository.save(existente);
@@ -972,7 +1106,7 @@ export class FacturacionElectronicaService {
    * que uno inexistente (null / 404), sin revelar que existe.
    */
   async obtenerDocumentoPorVenta(ventaId: string, negocioId: string): Promise<DocumentoElectronico | null> {
-    return this.documentosRepository.findOne({ where: { ventaId, negocioId } });
+    return this.documentosRepository.findOne({ where: { ventaId, negocioId, tipo: In(TIPOS_FACTURA_DE_VENTA) } });
   }
 
   private async documentoDelNegocioOFallar(ventaId: string, negocioId: string): Promise<DocumentoElectronico> {
@@ -1058,6 +1192,7 @@ export class FacturacionElectronicaService {
 
   async generarPdf(id: string, negocioId: string): Promise<{ nombreArchivo: string; contenido: Buffer }> {
     const documento = await this.facturaDelNegocioOFallar(id, negocioId);
+    if (documento.tipo === 'NOTA_CREDITO') return this.generarPdfNotaCredito(documento, negocioId);
     if (documento.tipo !== 'FACTURA') {
       throw new ConflictException('Documento legado sin representación gráfica disponible');
     }
@@ -1077,6 +1212,45 @@ export class FacturacionElectronicaService {
     return { nombreArchivo: `${documento.numeroCompleto ?? documento.id}.pdf`, contenido };
   }
 
+  /** La "venta" del PDF de una nota crédito son las líneas devueltas; los reembolsos van como medios de pago. */
+  private async generarPdfNotaCredito(
+    documento: DocumentoElectronico,
+    negocioId: string,
+  ): Promise<{ nombreArchivo: string; contenido: Buffer }> {
+    if (!documento.cude || !documento.qrContenido) throw new ConflictException('Esperando respuesta de la DIAN');
+    const devolucion = await this.devolucionesRepository.findOneOrFail({
+      where: { id: documento.devolucionId!, negocioId },
+      relations: { items: true, reembolsos: true },
+    });
+    const factura = await this.documentosRepository.findOneOrFail({ where: { id: documento.facturaDocumentoId!, negocioId } });
+    const venta = await this.ventasRepository.findOneOrFail({ where: { id: documento.ventaId, negocioId }, relations: { cliente: true } });
+    const logo = await this.logoNegocio.resolverLogo(negocioId);
+    const bruto = devolucion.items.reduce((s, i) => s + Number(i.precioUnitario) * Number(i.cantidad), 0);
+    const contenido = await this.facturaPdf.generar({
+      documento,
+      venta: {
+        tipoVenta: 'CONTADO',
+        subtotal: bruto,
+        descuentoTotal: bruto - Number(devolucion.baseTotal) + Number(devolucion.descuentoVentaTotal),
+        impuestoTotal: Number(devolucion.impuestoTotal),
+        total: Number(devolucion.total),
+        nombreCliente: venta.nombreCliente,
+        cliente: venta.cliente,
+        items: devolucion.items.map((i) => ({
+          nombreProducto: i.nombreProducto,
+          cantidad: Number(i.cantidad),
+          precioUnitario: Number(i.precioUnitario),
+          baseImponible: Number(i.base),
+          impuesto: Number(i.impuesto),
+        })),
+        pagos: devolucion.reembolsos.map((r) => ({ metodoPago: ETIQUETA_FORMA[r.forma], monto: Number(r.monto) })),
+      },
+      logo,
+      notaCredito: { facturaAfectada: factura.numeroCompleto ?? '', motivo: devolucion.motivo },
+    });
+    return { nombreArchivo: `${documento.numeroCompleto ?? documento.id}.pdf`, contenido };
+  }
+
   async descargarXml(id: string, negocioId: string): Promise<{ nombreArchivo: string; contenido: Buffer }> {
     const documento = await this.facturaDelNegocioOFallar(id, negocioId);
     if (!documento.alegraDocumentId) throw new ConflictException('Esta factura todavía no llegó a Alegra');
@@ -1085,7 +1259,9 @@ export class FacturacionElectronicaService {
     const baseUrl = baseUrlPara(habilitacion.ambiente);
 
     const { urlXml } =
-      documento.tipo === 'FACTURA'
+      documento.tipo === 'NOTA_CREDITO'
+        ? await this.alegraClient.consultarNotaCredito({ token, baseUrl, documentId: documento.alegraDocumentId })
+        : documento.tipo === 'FACTURA'
         ? await this.alegraClient.consultarFactura({ token, baseUrl, documentId: documento.alegraDocumentId })
         : await this.alegraClient.consultarDocumento({
             token,
@@ -1225,7 +1401,7 @@ export class FacturacionElectronicaService {
   ): Promise<Map<string, { id: string; estado: EstadoDocumentoElectronico }>> {
     if (ventaIds.length === 0) return new Map();
     const documentos = await this.documentosRepository.find({
-      where: { negocioId, ventaId: In(ventaIds) },
+      where: { negocioId, ventaId: In(ventaIds), tipo: In(TIPOS_FACTURA_DE_VENTA) },
       select: { id: true, ventaId: true, estado: true },
     });
     return new Map(documentos.map((d) => [d.ventaId, { id: d.id, estado: d.estado }]));
