@@ -8,6 +8,8 @@ export interface DatosAvisoTope {
   /** 'YYYY-MM-DD' — solo en el aviso de 100 sin facturación electrónica. */
   fechaLimiteGracia: string | null;
   linkFacturacion: string;
+  /** Artículo del Centro de ayuda en la landing que explica la obligación. */
+  linkAyuda: string;
 }
 
 const MESES = [
@@ -78,6 +80,9 @@ export function construirAvisoTopeFacturacion(p: DatosAvisoTope): {
           <a href="${p.linkFacturacion}" style="display:inline-block;padding:12px 24px;background:#6d28d9;color:#fff;text-decoration:none;border-radius:8px;">
             ${boton}
           </a>
+        </p>
+        <p style="font-size: 14px;">
+          <a href="${p.linkAyuda}">¿Por qué me pasa esto? Lee la explicación en el Centro de ayuda</a>
         </p>
       </div>
     `;

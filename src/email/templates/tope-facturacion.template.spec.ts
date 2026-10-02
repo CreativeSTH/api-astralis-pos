@@ -13,6 +13,8 @@ const base: DatosAvisoTope = {
   fechaLimiteGracia: null,
   linkFacturacion:
     'http://localhost:4200/configuracion/facturacion-electronica',
+  linkAyuda:
+    'https://somosaura.com.co/ayuda/por-que-estoy-obligado-a-facturar-electronicamente',
 };
 
 describe('construirAvisoTopeFacturacion', () => {
@@ -53,5 +55,12 @@ describe('construirAvisoTopeFacturacion', () => {
     });
     expect(mensajeAlerta).toContain('no tienes que hacer nada más');
     expect(mensajeAlerta).not.toContain('40 días');
+  });
+
+  it('incluye el enlace al artículo de ayuda en el correo (no en el mensaje de la campana)', () => {
+    const { html, mensajeAlerta } = construirAvisoTopeFacturacion(base);
+    expect(html).toContain(base.linkAyuda);
+    expect(html).toContain('¿Por qué me pasa esto?');
+    expect(mensajeAlerta).not.toContain('http');
   });
 });

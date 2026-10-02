@@ -202,6 +202,7 @@ export class TopeUvtService {
         yaFacturaElectronica,
         fechaLimiteGracia: estado?.fechaLimiteGracia ?? null,
         linkFacturacion: `${process.env.FRONTEND_URL}/facturacion/electronica`,
+        linkAyuda: `${process.env.LANDING_URL ?? 'https://somosaura.com.co'}/ayuda/por-que-estoy-obligado-a-facturar-electronicamente`,
       });
 
       const severidad =
