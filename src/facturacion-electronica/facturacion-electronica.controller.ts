@@ -11,7 +11,10 @@ import {
   Query,
   StreamableFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { OrigenAuditoriaInterceptor } from '../auditoria/origen-auditoria.interceptor';
+import { OrigenAuditoria } from '../auditoria/enums/origen-auditoria.enum';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { FacturacionElectronicaService } from './facturacion-electronica.service';
 import { SuscripcionesService } from '../suscripciones/suscripciones.service';
@@ -27,6 +30,9 @@ import { ModuloPermiso } from '../common/enums/modulo-permiso.enum';
 import { AccionPermiso } from '../common/enums/accion-permiso.enum';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { JwtUserPayload } from '../common/decorators/current-user.decorator';
+import { AuditoriaService } from '../auditoria/auditoria.service';
+import { AccionAuditoria } from '../auditoria/enums/accion-auditoria.enum';
+import { DocumentoElectronico } from './entities/documento-electronico.entity';
 
 @ApiTags('Facturación Electrónica DIAN')
 @ApiBearerAuth('JWT-auth')
@@ -36,7 +42,22 @@ export class FacturacionElectronicaController {
   constructor(
     private readonly facturacionService: FacturacionElectronicaService,
     private readonly suscripcionesService: SuscripcionesService,
+    private readonly auditoria: AuditoriaService,
   ) {}
+
+  /** Acciones manuales sobre un documento DIAN (spec auditoría §4); las emisiones automáticas no se auditan. */
+  private auditarDocumento(negocioId: string, doc: DocumentoElectronico, descripcion: (etiqueta: string) => string) {
+    const etiqueta = `${doc.tipo === 'NOTA_CREDITO' ? 'Nota crédito' : 'Factura'} ${doc.numeroCompleto ?? 'en validación'}`;
+    return this.auditoria.registrarAccion({
+      modulo: ModuloPermiso.FACTURACION_ELECTRONICA_DIAN,
+      entidad: 'DocumentoElectronico',
+      entidadId: doc.id,
+      etiqueta,
+      accion: AccionAuditoria.EMITIR,
+      descripcion: descripcion(etiqueta.charAt(0).toLowerCase() + etiqueta.slice(1)),
+      negocioId,
+    });
+  }
 
   private async exigirFeatureHabilitada(negocioId: string): Promise<void> {
     const habilitado = await this.suscripcionesService.tieneFeature(negocioId, 'facturacionDianHabilitada');
@@ -101,6 +122,7 @@ export class FacturacionElectronicaController {
   }
 
   @Public()
+  @UseInterceptors(new OrigenAuditoriaInterceptor(OrigenAuditoria.WEBHOOK))
   @Post('webhook-alegra')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -121,7 +143,9 @@ export class FacturacionElectronicaController {
   @Post('documentos/:ventaId/reintentar')
   @RequierePermiso(ModuloPermiso.VENTAS, AccionPermiso.EDITAR)
   async reintentarDocumento(@CurrentUser() usuario: JwtUserPayload, @Param('ventaId', ParseUUIDPipe) ventaId: string) {
-    return this.facturacionService.reintentarPorVenta(ventaId, usuario.negocioId!);
+    const doc = await this.facturacionService.reintentarPorVenta(ventaId, usuario.negocioId!);
+    await this.auditarDocumento(usuario.negocioId!, doc, (e) => `Reintentó el envío a la DIAN de la ${e} — estado: ${doc.estado}`);
+    return doc;
   }
 
   // ── Facturas por id de documento (spec 2026-09-28). Bajo `/facturas`, no `/documentos`:
@@ -163,7 +187,9 @@ export class FacturacionElectronicaController {
   @RequierePermiso(ModuloPermiso.FACTURACION_ELECTRONICA_DIAN, AccionPermiso.EDITAR)
   async reintentarFactura(@CurrentUser() usuario: JwtUserPayload, @Param('id', ParseUUIDPipe) id: string) {
     await this.exigirFeatureHabilitada(usuario.negocioId!);
-    return this.facturacionService.reintentarFactura(id, usuario.negocioId!);
+    const doc = await this.facturacionService.reintentarFactura(id, usuario.negocioId!);
+    await this.auditarDocumento(usuario.negocioId!, doc, (e) => `Reintentó el envío a la DIAN de la ${e} — estado: ${doc.estado}`);
+    return doc;
   }
 
   @Post('facturas/:id/enviar-correo')
@@ -175,6 +201,12 @@ export class FacturacionElectronicaController {
     @Body() dto: EnviarCorreoFacturaDto,
   ) {
     await this.exigirFeatureHabilitada(usuario.negocioId!);
-    return this.facturacionService.enviarCorreoFactura(id, usuario.negocioId!, dto.correo);
+    const doc = await this.facturacionService.enviarCorreoFactura(id, usuario.negocioId!, dto.correo);
+    await this.auditarDocumento(
+      usuario.negocioId!,
+      doc,
+      (e) => `Envió por correo la ${e}${dto.correo ? ` a ${dto.correo}` : ' al cliente'}`,
+    );
+    return doc;
   }
 }

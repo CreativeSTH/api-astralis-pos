@@ -3,7 +3,23 @@ import { BaseEntity } from '../../common/entities/base.entity';
 import { Negocio } from '../../negocios/entities/negocio.entity';
 import { Sucursal } from '../../sucursales/entities/sucursal.entity';
 import { Rol } from '../../roles/entities/rol.entity';
+import { Auditable } from '../../auditoria/auditable.decorator';
+import { ModuloPermiso } from '../../common/enums/modulo-permiso.enum';
 
+@Auditable<Usuario>({
+  modulo: ModuloPermiso.USUARIOS,
+  nombre: 'el usuario',
+  etiqueta: (u) => u.nombre,
+  campos: {
+    nombre: { label: 'Nombre' },
+    email: { label: 'Correo' },
+    rolId: { label: 'Rol', formato: 'relacion', entidad: () => Rol },
+    sucursalId: { label: 'Sucursal', formato: 'relacion', entidad: () => Sucursal },
+    emailVerificado: { label: 'Correo verificado', formato: 'booleano' },
+    activo: { label: 'Activo', formato: 'booleano' },
+  },
+  secretos: { passwordHash: 'Contraseña', pinHash: 'PIN' },
+})
 @Entity('usuarios')
 export class Usuario extends BaseEntity {
   @Index()

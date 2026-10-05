@@ -1,8 +1,24 @@
 import { Column, Entity, Index, Unique } from 'typeorm';
 import { BaseEntity } from '../../common/entities/base.entity';
 import { TipoNumeracion } from '../../common/enums/tipo-comprobante.enum';
+import { Auditable } from '../../auditoria/auditable.decorator';
+import { ModuloPermiso } from '../../common/enums/modulo-permiso.enum';
+import { Sucursal } from '../../sucursales/entities/sucursal.entity';
 
 /** Numeración secuencial por sucursal+tipo (recibos, recibos de caja y el rango de la factura convencional histórica). */
+@Auditable<NumeracionComprobante>({
+  modulo: ModuloPermiso.FACTURACION,
+  nombre: 'la numeración',
+  etiqueta: (n) =>
+    `Numeración de ${{ RECIBO: 'recibos', FACTURA: 'facturas', RECIBO_CAJA: 'recibos de caja', DEVOLUCION: 'devoluciones' }[n.tipo] ?? n.tipo}${n.prefijo ? ` (${n.prefijo})` : ''}`,
+  campos: {
+    sucursalId: { label: 'Sucursal', formato: 'relacion', entidad: () => Sucursal },
+    prefijo: { label: 'Prefijo' },
+    rangoDesde: { label: 'Rango desde', formato: 'numero' },
+    rangoHasta: { label: 'Rango hasta', formato: 'numero' },
+    resolucionDianRef: { label: 'Resolución DIAN' },
+  },
+})
 @Entity('numeraciones_comprobante')
 @Unique(['sucursalId', 'tipo'])
 export class NumeracionComprobante extends BaseEntity {

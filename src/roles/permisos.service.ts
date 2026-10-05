@@ -8,6 +8,9 @@ import { AccionPermiso } from '../common/enums/accion-permiso.enum';
 import { RolTier } from '../common/enums/rol-tier.enum';
 import { PERMISOS_CAJERO } from './permisos-cajero.constant';
 
+/** Módulos de solo lectura: el catálogo solo crea la fila VER (la matriz muestra "—" en el resto). */
+const MODULOS_SOLO_VER = new Set<ModuloPermiso>([ModuloPermiso.AUDITORIA]);
+
 @Injectable()
 export class PermisosService {
   constructor(
@@ -75,7 +78,8 @@ export class PermisosService {
         modulo === ModuloPermiso.NEGOCIOS || modulo === ModuloPermiso.PAQUETES
           ? RolTier.SISTEMA
           : RolTier.NEGOCIO;
-      for (const accion of Object.values(AccionPermiso)) {
+      const acciones = MODULOS_SOLO_VER.has(modulo) ? [AccionPermiso.VER] : Object.values(AccionPermiso);
+      for (const accion of acciones) {
         const key = `${modulo}:${accion}`;
         if (!existeSet.has(key)) {
           nuevos.push({ modulo, accion, tier });

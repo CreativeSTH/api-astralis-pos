@@ -1,6 +1,18 @@
 import { Column, Entity, Index } from 'typeorm';
 import { BaseEntity } from '../../common/entities/base.entity';
+import { Auditable } from '../../auditoria/auditable.decorator';
+import { ModuloPermiso } from '../../common/enums/modulo-permiso.enum';
 
+@Auditable<MetodoPago>({
+  modulo: ModuloPermiso.METODOS_PAGO,
+  nombre: 'el método de pago',
+  etiqueta: (m) => m.nombre,
+  campos: {
+    nombre: { label: 'Nombre' },
+    esEfectivo: { label: 'Es efectivo', formato: 'booleano' },
+    activo: { label: 'Activo', formato: 'booleano' },
+  },
+})
 @Entity('metodos_pago')
 export class MetodoPago extends BaseEntity {
   @Index()

@@ -11,6 +11,17 @@ import { SetStockMinimoDto } from './dto/set-stock-minimo.dto';
 import { KardexQueryDto } from './dto/kardex-query.dto';
 import { AlertasService } from '../alertas/alertas.service';
 import { finDiaColombia, inicioDiaColombia } from '../common/utils/fecha-colombia';
+import { Bodega } from '../bodegas/entities/bodega.entity';
+import { AuditoriaService } from '../auditoria/auditoria.service';
+import { AccionAuditoria } from '../auditoria/enums/accion-auditoria.enum';
+import { ModuloPermiso } from '../common/enums/modulo-permiso.enum';
+
+const ETIQUETA_TIPO_MOVIMIENTO: Partial<Record<TipoMovimientoInventario, string>> = {
+  [TipoMovimientoInventario.ENTRADA]: 'Entrada',
+  [TipoMovimientoInventario.SALIDA]: 'Salida',
+  [TipoMovimientoInventario.AJUSTE]: 'Ajuste',
+  [TipoMovimientoInventario.DEVOLUCION]: 'Devolución',
+};
 
 interface AjustarStockInput extends AjustarStockDto {
   ventaId?: string;
@@ -28,6 +39,7 @@ export class InventarioService {
     private readonly alertasService: AlertasService,
     private readonly cls: ClsService,
     private readonly dataSource: DataSource,
+    private readonly auditoria: AuditoriaService,
   ) {}
 
   private getNegocioId(): string {
@@ -117,8 +129,32 @@ export class InventarioService {
         cantidad: 0,
       });
     }
+    const stockMinimoAnterior = inventario.stockMinimo;
     inventario.stockMinimo = dto.stockMinimo;
-    return this.inventarioRepository.save(inventario);
+    const guardado = await this.inventarioRepository.save(inventario);
+    if (Number(stockMinimoAnterior ?? 0) !== Number(dto.stockMinimo)) {
+      const [producto, bodega] = await Promise.all([
+        this.productoRepository.findOne({ where: { id: dto.productoId }, select: { id: true, nombre: true } }),
+        this.dataSource.manager.findOne(Bodega, { where: { id: dto.bodegaId }, select: { id: true, nombre: true } }),
+      ]);
+      await this.auditoria.registrarAccion({
+        modulo: ModuloPermiso.INVENTARIO,
+        entidad: 'Producto',
+        entidadId: dto.productoId,
+        etiqueta: producto?.nombre ?? 'Producto',
+        accion: AccionAuditoria.EDITAR,
+        descripcion: `Cambió el stock mínimo de "${producto?.nombre ?? 'producto'}" en ${bodega?.nombre ?? 'bodega'}`,
+        cambios: [
+          {
+            campo: 'stockMinimo',
+            etiqueta: 'Stock mínimo',
+            antes: stockMinimoAnterior === undefined || stockMinimoAnterior === null ? null : String(Number(stockMinimoAnterior)),
+            despues: String(Number(dto.stockMinimo)),
+          },
+        ],
+      });
+    }
+    return guardado;
   }
 
   /**
@@ -201,6 +237,32 @@ export class InventarioService {
           creadoPor: usuarioId,
         }),
       );
+
+      // Las salidas por venta ya son historial de la venta; acá solo los movimientos manuales.
+      if (!input.ventaId) {
+        const [producto, bodega] = await Promise.all([
+          manager.findOne(Producto, { where: { id: input.productoId }, select: { id: true, nombre: true } }),
+          manager.findOne(Bodega, { where: { id: input.bodegaId }, select: { id: true, nombre: true } }),
+        ]);
+        const nombreBodega = bodega?.nombre ?? 'bodega';
+        await this.auditoria.registrarAccion({
+          manager,
+          modulo: ModuloPermiso.INVENTARIO,
+          entidad: 'Producto',
+          entidadId: input.productoId,
+          etiqueta: producto?.nombre ?? 'Producto',
+          accion: AccionAuditoria.AJUSTAR,
+          descripcion: `${ETIQUETA_TIPO_MOVIMIENTO[input.tipo] ?? input.tipo} de inventario de "${producto?.nombre ?? 'producto'}" en ${nombreBodega}${input.motivo ? ` — ${input.motivo}` : ''}`,
+          cambios: [
+            {
+              campo: 'cantidad',
+              etiqueta: `Stock en ${nombreBodega}`,
+              antes: String(cantidadAnterior),
+              despues: String(cantidadNueva),
+            },
+          ],
+        });
+      }
 
       return inventarioActual;
     });

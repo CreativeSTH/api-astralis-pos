@@ -58,6 +58,12 @@ import { CuponValidacionService } from '../cupones/cupon-validacion.service';
 import { Promocion } from '../cupones/entities/promocion.entity';
 import { diasDesdeFechaColombia } from '../common/utils/fecha-colombia';
 import { TOLERANCIA_REDONDEO, aplicarAbono } from './abono.logic';
+import { AuditoriaService } from '../auditoria/auditoria.service';
+import { AccionAuditoria } from '../auditoria/enums/accion-auditoria.enum';
+import { formatearMoneda } from '../auditoria/auditoria-diff';
+
+const numeroVenta = (v: { numeroComprobante?: string | null; id: string }) => v.numeroComprobante ?? v.id.slice(0, 8);
+const etiquetaVenta = (v: { numeroComprobante?: string | null; id: string }) => `Venta ${numeroVenta(v)}`;
 
 const DIAS_MORA_PARA_EN_MORA = 60;
 
@@ -115,6 +121,7 @@ export class VentasService {
     private readonly politicaFacturacion: PoliticaFacturacionService,
     private readonly contingenciaService: ContingenciaService,
     private readonly cls: ClsService,
+    private readonly auditoria: AuditoriaService,
   ) {}
 
   private getNegocioId(): string {
@@ -1203,6 +1210,16 @@ export class VentasService {
           : venta.estado;
       await ventaRepo.save(venta);
 
+      await this.auditoria.registrarAccion({
+        manager,
+        modulo: ModuloPermiso.COBROS,
+        entidad: 'Venta',
+        entidadId: venta.id,
+        etiqueta: etiquetaVenta(venta),
+        accion: AccionAuditoria.REGISTRAR,
+        descripcion: `Registró un abono de ${formatearMoneda(Number(dto.montoAbono))} a la cuota ${cuota.numero} de la venta ${numeroVenta(venta)} (recibo ${numeroRecibo}, ${dto.metodoPago})`,
+      });
+
       return {
         venta,
         cuotaAfectada: cuota,
@@ -1426,7 +1443,19 @@ export class VentasService {
       ventaActual.canceladaPor = autorizadoPor;
       ventaActual.motivoCancelacion = dto.motivo;
       ventaActual.fechaCancelacion = new Date();
-      return ventaRepo.save(ventaActual);
+      const cancelada = await ventaRepo.save(ventaActual);
+      await this.auditoria.registrarAccion({
+        manager,
+        modulo: ModuloPermiso.VENTAS,
+        entidad: 'Venta',
+        entidadId: cancelada.id,
+        etiqueta: etiquetaVenta(cancelada),
+        accion: AccionAuditoria.ANULAR,
+        descripcion: `Anuló la venta ${numeroVenta(cancelada)} por ${formatearMoneda(Number(cancelada.total))} — motivo: ${dto.motivo}${
+          autorizadoPor !== usuarioId ? ' (autorizado con PIN)' : ''
+        }${dto.devolverStock === false ? ' — sin devolver stock' : ''}`,
+      });
+      return cancelada;
     });
 
     if (venta.tipoVenta === TipoVenta.CREDITO && venta.clienteId) {

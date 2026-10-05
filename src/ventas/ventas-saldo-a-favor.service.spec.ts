@@ -20,6 +20,7 @@ import { CuponValidacionService } from '../cupones/cupon-validacion.service';
 import { FacturacionElectronicaService } from '../facturacion-electronica/facturacion-electronica.service';
 import { PoliticaFacturacionService } from '../politica-facturacion/politica-facturacion.service';
 import { ContingenciaService } from '../facturacion-electronica/contingencia.service';
+import { AuditoriaService } from '../auditoria/auditoria.service';
 
 type ConSaldo = {
   cobrarSaldoAFavor: (
@@ -67,6 +68,7 @@ describe('VentasService — saldo a favor', () => {
         { provide: FacturacionElectronicaService, useValue: {} },
         { provide: PoliticaFacturacionService, useValue: {} },
         { provide: ContingenciaService, useValue: {} },
+        { provide: AuditoriaService, useValue: { registrarAccion: jest.fn() } },
         { provide: ClsService, useValue: { get: (k: string) => (k === 'negocioId' ? 'neg-1' : 'usr-1') } },
       ],
     }).compile();

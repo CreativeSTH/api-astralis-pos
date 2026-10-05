@@ -16,6 +16,12 @@ import { ModuloPermiso } from '../common/enums/modulo-permiso.enum';
 import { AccionPermiso } from '../common/enums/accion-permiso.enum';
 import { RolTier } from '../common/enums/rol-tier.enum';
 import { PERMISOS_CAJERO } from './permisos-cajero.constant';
+import { AuditoriaService } from '../auditoria/auditoria.service';
+import { AccionAuditoria } from '../auditoria/enums/accion-auditoria.enum';
+
+const ACCION_LEGIBLE: Record<string, string> = { VER: 'Ver', CREAR: 'Crear', EDITAR: 'Editar', ELIMINAR: 'Eliminar' };
+const permisoLegible = (p: Permiso) =>
+  `${p.modulo.charAt(0)}${p.modulo.slice(1).toLowerCase().replace(/_/g, ' ')}: ${ACCION_LEGIBLE[p.accion] ?? p.accion}`;
 
 /**
  * A diferencia del resto de servicios de negocio, Rol no puede extender
@@ -31,6 +37,7 @@ export class RolesService {
     private readonly permisosRepository: Repository<Permiso>,
     private readonly permisos: PermisosService,
     private readonly cls: ClsService,
+    private readonly auditoria: AuditoriaService,
   ) {}
 
   private getTier(): RolTier {
@@ -128,8 +135,32 @@ export class RolesService {
         `El permiso de módulo "${fueraDeTier.modulo}" no corresponde al nivel de este rol`,
       );
     }
+    const idsPrevios = new Set(rol.permisos.map((p) => p.id));
+    const idsNuevos = new Set(permisosNuevos.map((p) => p.id));
+    const agregados = permisosNuevos.filter((p) => !idsPrevios.has(p.id)).map(permisoLegible);
+    const quitados = rol.permisos.filter((p) => !idsNuevos.has(p.id)).map(permisoLegible);
     rol.permisos = permisosNuevos;
-    return this.rolesRepository.save(rol);
+    const guardado = await this.rolesRepository.save(rol);
+    if (rol.negocioId && (agregados.length || quitados.length)) {
+      await this.auditoria.registrarAccion({
+        modulo: ModuloPermiso.ROLES,
+        entidad: 'Rol',
+        entidadId: rol.id,
+        etiqueta: rol.nombre,
+        accion: AccionAuditoria.CAMBIAR_PERMISOS,
+        descripcion: `Cambió los permisos del rol "${rol.nombre}"`,
+        negocioId: rol.negocioId,
+        cambios: [
+          ...(agregados.length
+            ? [{ campo: 'permisosAgregados', etiqueta: 'Permisos agregados', antes: null, despues: agregados.join(', ') }]
+            : []),
+          ...(quitados.length
+            ? [{ campo: 'permisosQuitados', etiqueta: 'Permisos quitados', antes: quitados.join(', '), despues: null }]
+            : []),
+        ],
+      });
+    }
+    return guardado;
   }
 
   /** Catálogo de permisos para armar la matriz en el frontend — solo del tier del caller. */

@@ -32,6 +32,8 @@ import { ModuloPermiso } from '../common/enums/modulo-permiso.enum';
 import { AccionPermiso } from '../common/enums/accion-permiso.enum';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { JwtUserPayload } from '../common/decorators/current-user.decorator';
+import { AuditoriaService } from '../auditoria/auditoria.service';
+import { AccionAuditoria } from '../auditoria/enums/accion-auditoria.enum';
 
 class MarcarAvisoDto {
   @IsIn(['INICIO', 'FIN'])
@@ -52,7 +54,20 @@ export class ContingenciaController {
     @InjectRepository(HabilitacionFacturacionElectronica)
     private readonly habilitaciones: Repository<HabilitacionFacturacionElectronica>,
     @InjectRepository(Negocio) private readonly negocios: Repository<Negocio>,
+    private readonly auditoria: AuditoriaService,
   ) {}
+
+  private auditarPeriodo(negocioId: string, periodoId: string, accion: AccionAuditoria, descripcion: string) {
+    return this.auditoria.registrarAccion({
+      modulo: ModuloPermiso.FACTURACION_ELECTRONICA_DIAN,
+      entidad: 'PeriodoContingencia',
+      entidadId: periodoId,
+      etiqueta: 'Contingencia DIAN',
+      accion,
+      descripcion,
+      negocioId,
+    });
+  }
 
   private async exigirFeatureHabilitada(negocioId: string): Promise<void> {
     const habilitado = await this.suscripcionesService.tieneFeature(negocioId, 'facturacionDianHabilitada');
@@ -79,13 +94,17 @@ export class ContingenciaController {
   @RequierePermiso(ModuloPermiso.FACTURACION_ELECTRONICA_DIAN, AccionPermiso.EDITAR)
   async declarar(@CurrentUser() u: JwtUserPayload, @Body() dto: DeclararContingenciaDto) {
     await this.exigirFeatureHabilitada(u.negocioId!);
-    return this.contingencia.declarar(u.negocioId!, u.sub, dto);
+    const periodo = await this.contingencia.declarar(u.negocioId!, u.sub, dto);
+    await this.auditarPeriodo(u.negocioId!, periodo.id, AccionAuditoria.ABRIR, 'Declaró contingencia de facturación electrónica');
+    return periodo;
   }
 
   @Post('finalizar')
   @RequierePermiso(ModuloPermiso.FACTURACION_ELECTRONICA_DIAN, AccionPermiso.EDITAR)
-  finalizar(@CurrentUser() u: JwtUserPayload, @Body() dto: FinalizarContingenciaDto) {
-    return this.contingencia.finalizar(u.negocioId!, u.sub, dto);
+  async finalizar(@CurrentUser() u: JwtUserPayload, @Body() dto: FinalizarContingenciaDto) {
+    const periodo = await this.contingencia.finalizar(u.negocioId!, u.sub, dto);
+    await this.auditarPeriodo(u.negocioId!, periodo.id, AccionAuditoria.CERRAR, 'Finalizó la contingencia de facturación electrónica');
+    return periodo;
   }
 
   @Post('periodos/:id/aviso')

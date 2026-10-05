@@ -14,6 +14,14 @@ import { AbrirTurnoDto } from './dto/abrir-turno.dto';
 import { CerrarTurnoDto } from './dto/cerrar-turno.dto';
 import { RegistrarMovimientoDto } from './dto/registrar-movimiento.dto';
 import { PagarDescuadreDto } from './dto/pagar-descuadre.dto';
+import { AuditoriaService } from '../auditoria/auditoria.service';
+import { AccionAuditoria } from '../auditoria/enums/accion-auditoria.enum';
+import { formatearMoneda } from '../auditoria/auditoria-diff';
+import { ModuloPermiso } from '../common/enums/modulo-permiso.enum';
+import { diaColombia } from '../common/utils/fecha-colombia';
+
+const etiquetaTurno = (t: TurnoCaja) =>
+  `Turno de caja del ${diaColombia(new Date(t.fechaApertura)).split('-').reverse().join('/')}`;
 
 export interface ResumenTurno {
   montoInicial: number;
@@ -38,6 +46,7 @@ export class CajaService {
     private readonly movimientosRepository: Repository<MovimientoCaja>,
     private readonly metodosPagoService: MetodosPagoService,
     private readonly cls: ClsService,
+    private readonly auditoria: AuditoriaService,
   ) {}
 
   private getNegocioId(): string {
@@ -107,7 +116,16 @@ export class CajaService {
       montoInicial: dto.montoInicial,
       estado: EstadoTurnoCaja.ABIERTO,
     });
-    return this.turnosRepository.save(turno);
+    const abierto = await this.turnosRepository.save(turno);
+    await this.auditoria.registrarAccion({
+      modulo: ModuloPermiso.CAJA,
+      entidad: 'TurnoCaja',
+      entidadId: abierto.id,
+      etiqueta: etiquetaTurno(abierto),
+      accion: AccionAuditoria.ABRIR,
+      descripcion: `Abrió turno de caja con base ${formatearMoneda(Number(dto.montoInicial))}`,
+    });
+    return abierto;
   }
 
   /**
@@ -224,7 +242,22 @@ export class CajaService {
     turno.diferencia = montoContadoCierre - montoEsperadoCierre;
     turno.arqueoMetodos = arqueoMetodos;
 
-    return this.turnosRepository.save(turno);
+    const cerrado = await this.turnosRepository.save(turno);
+    await this.auditoria.registrarAccion({
+      modulo: ModuloPermiso.CAJA,
+      entidad: 'TurnoCaja',
+      entidadId: cerrado.id,
+      etiqueta: etiquetaTurno(cerrado),
+      accion: AccionAuditoria.CERRAR,
+      descripcion: `Cerró turno de caja — esperado ${formatearMoneda(montoEsperadoCierre)}, contado ${formatearMoneda(montoContadoCierre)}, diferencia ${formatearMoneda(montoContadoCierre - montoEsperadoCierre)}`,
+      cambios: arqueoMetodos.map((a) => ({
+        campo: a.metodoPago,
+        etiqueta: `${a.metodoPago} (esperado → contado)`,
+        antes: formatearMoneda(a.montoEsperado),
+        despues: formatearMoneda(a.montoContado),
+      })),
+    });
+    return cerrado;
   }
 
   async pagarDescuadre(id: string, dto: PagarDescuadreDto): Promise<TurnoCaja> {
@@ -246,19 +279,37 @@ export class CajaService {
     turno.usuarioPagoDescuadreId = this.getUsuarioId();
     turno.fechaPagoDescuadre = new Date();
 
-    return this.turnosRepository.save(turno);
+    const pagado = await this.turnosRepository.save(turno);
+    await this.auditoria.registrarAccion({
+      modulo: ModuloPermiso.CAJA,
+      entidad: 'TurnoCaja',
+      entidadId: pagado.id,
+      etiqueta: etiquetaTurno(pagado),
+      accion: AccionAuditoria.REGISTRAR,
+      descripcion: `Registró el pago de un descuadre de caja por ${formatearMoneda(Number(dto.monto))}`,
+    });
+    return pagado;
   }
 
   async registrarMovimiento(
     dto: RegistrarMovimientoDto,
   ): Promise<MovimientoCaja> {
-    await this.findOne(dto.turnoId);
-    return this.registrarMovimientoInterno({
+    const turno = await this.findOne(dto.turnoId);
+    const movimiento = await this.registrarMovimientoInterno({
       turnoId: dto.turnoId,
       tipo: dto.tipo,
       monto: dto.monto,
       concepto: dto.concepto,
     });
+    await this.auditoria.registrarAccion({
+      modulo: ModuloPermiso.CAJA,
+      entidad: 'TurnoCaja',
+      entidadId: turno.id,
+      etiqueta: etiquetaTurno(turno),
+      accion: AccionAuditoria.REGISTRAR,
+      descripcion: `Registró ${dto.tipo.toLowerCase()} de caja por ${formatearMoneda(Number(dto.monto))}${dto.concepto ? ` — ${dto.concepto}` : ''}`,
+    });
+    return movimiento;
   }
 
   /** Usado por VentasService — no expuesto directamente como endpoint manual. */

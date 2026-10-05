@@ -22,6 +22,7 @@ import { FacturacionElectronicaService } from '../facturacion-electronica/factur
 import { PoliticaFacturacionService } from '../politica-facturacion/politica-facturacion.service';
 import { ContingenciaService } from '../facturacion-electronica/contingencia.service';
 import { TipoNumeracion } from '../common/enums/tipo-comprobante.enum';
+import { AuditoriaService } from '../auditoria/auditoria.service';
 
 describe('VentasService.abonarCuota — recibo de caja', () => {
   let service: VentasService;
@@ -125,6 +126,7 @@ describe('VentasService.abonarCuota — recibo de caja', () => {
         { provide: FacturacionElectronicaService, useValue: {} },
         { provide: PoliticaFacturacionService, useValue: {} },
         { provide: ContingenciaService, useValue: {} },
+        { provide: AuditoriaService, useValue: { registrarAccion: jest.fn() } },
         {
           provide: ClsService,
           useValue: {

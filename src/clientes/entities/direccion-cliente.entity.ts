@@ -1,8 +1,26 @@
 import { Column, Entity, Index, JoinColumn, ManyToOne } from 'typeorm';
 import { BaseEntity } from '../../common/entities/base.entity';
 import { Cliente } from './cliente.entity';
+import { Auditable } from '../../auditoria/auditable.decorator';
+import { ModuloPermiso } from '../../common/enums/modulo-permiso.enum';
 
 /** Direcciones guardadas de un cliente — un cliente puede tener varias (casa, trabajo, etc.). */
+@Auditable<DireccionCliente>({
+  modulo: ModuloPermiso.CLIENTES,
+  nombre: 'la dirección',
+  etiqueta: (d) => d.etiqueta || d.direccionLinea1,
+  campos: {
+    clienteId: { label: 'Cliente', formato: 'relacion', entidad: () => Cliente },
+    etiqueta: { label: 'Etiqueta' },
+    direccionLinea1: { label: 'Dirección' },
+    direccionLinea2: { label: 'Complemento' },
+    barrio: { label: 'Barrio' },
+    puntoReferencia: { label: 'Punto de referencia' },
+    telefonoContacto: { label: 'Teléfono de contacto' },
+    predeterminada: { label: 'Predeterminada', formato: 'booleano' },
+    activo: { label: 'Activa', formato: 'booleano' },
+  },
+})
 @Entity('direcciones_cliente')
 export class DireccionCliente extends BaseEntity {
   @Index()

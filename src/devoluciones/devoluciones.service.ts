@@ -44,6 +44,9 @@ import { MetodosPagoService } from '../metodos-pago/metodos-pago.service';
 import { FacturacionElectronicaService } from '../facturacion-electronica/facturacion-electronica.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { finDiaColombia, inicioDiaColombia } from '../common/utils/fecha-colombia';
+import { AuditoriaService } from '../auditoria/auditoria.service';
+import { AccionAuditoria } from '../auditoria/enums/accion-auditoria.enum';
+import { formatearMoneda } from '../auditoria/auditoria-diff';
 
 export interface LineaDevolvible {
   ventaItemId: string;
@@ -91,6 +94,7 @@ export class DevolucionesService {
     private readonly facturacionElectronica: FacturacionElectronicaService,
     private readonly realtimeGateway: RealtimeGateway,
     private readonly cls: ClsService,
+    private readonly auditoria: AuditoriaService,
   ) {}
 
   private getNegocioId(): string {
@@ -256,6 +260,18 @@ export class DevolucionesService {
       });
       const estadoDevolucion = quedaTotal ? EstadoDevolucionVenta.TOTAL : EstadoDevolucionVenta.PARCIAL;
       await manager.getRepository(Venta).update(venta.id, { estadoDevolucion });
+
+      await this.auditoria.registrarAccion({
+        manager,
+        modulo: ModuloPermiso.DEVOLUCIONES,
+        entidad: 'Venta',
+        entidadId: venta.id,
+        etiqueta: `Venta ${venta.numeroComprobante ?? venta.id.slice(0, 8)}`,
+        accion: AccionAuditoria.REGISTRAR,
+        descripcion: `Registró la devolución ${devolucion.numeroCompleto} por ${formatearMoneda(total)} — ${dto.motivo.trim()}${
+          autorizadoPor !== usuarioId ? ' (autorizada con PIN)' : ''
+        }`,
+      });
 
       return { devolucion, factura, quedaTotal, esPrimeraDevolucion };
     });

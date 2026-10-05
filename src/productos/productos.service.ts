@@ -19,6 +19,7 @@ import { TipoMovimientoInventario } from '../common/enums/tipo-movimiento-invent
 import { InventarioService } from '../inventario/inventario.service';
 import { ProveedoresService } from '../proveedores/proveedores.service';
 import { tieneFirmaValida } from '../common/utils/file-signature.util';
+import { AuditoriaService } from '../auditoria/auditoria.service';
 
 @Injectable()
 export class ProductosService extends TenantBaseService<Producto> {
@@ -29,6 +30,7 @@ export class ProductosService extends TenantBaseService<Producto> {
     cls: ClsService,
     private readonly inventarioService: InventarioService,
     private readonly proveedoresService: ProveedoresService,
+    private readonly auditoria: AuditoriaService,
   ) {
     super(repository, cls, 'Producto');
   }
@@ -165,6 +167,7 @@ export class ProductosService extends TenantBaseService<Producto> {
     // no solo insertar los nuevos — ver nota de riesgo en el plan de esta fase.
     const producto = await this.findOneForTenant(id, { categorias: true });
     const imagenAnterior = producto.imagenUrl;
+    const categoriasAntes = producto.categorias;
     Object.assign(producto, resto);
     if (categorias !== undefined) {
       producto.categorias = categorias;
@@ -173,6 +176,9 @@ export class ProductosService extends TenantBaseService<Producto> {
       producto.imagenUrl = this.buildImagenUrl(imagen);
     }
     const actualizado = await this.repository.save(producto);
+    if (categorias !== undefined) {
+      await this.auditoria.registrarRelacionesMultiples(Producto, { ...actualizado, categorias: categoriasAntes }, actualizado);
+    }
 
     if (imagen && imagenAnterior) {
       await this.eliminarArchivoImagen(imagenAnterior);

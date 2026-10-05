@@ -1,7 +1,25 @@
 import { Column, Entity, Index } from 'typeorm';
 import { Exclude } from 'class-transformer';
 import { BaseEntity } from '../../common/entities/base.entity';
+import { Auditable } from '../../auditoria/auditable.decorator';
+import { ModuloPermiso } from '../../common/enums/modulo-permiso.enum';
 
+@Auditable<Cliente>({
+  modulo: ModuloPermiso.CLIENTES,
+  nombre: 'el cliente',
+  etiqueta: (c) => c.nombre,
+  campos: {
+    nombre: { label: 'Nombre' },
+    telefono: { label: 'Teléfono' },
+    email: { label: 'Correo' },
+    direccion: { label: 'Dirección' },
+    documentoIdentidad: { label: 'Documento' },
+    tipoDocumentoIdentidad: { label: 'Tipo de documento' },
+    limiteCredito: { label: 'Cupo de crédito', formato: 'moneda' },
+    activo: { label: 'Activo', formato: 'booleano' },
+  },
+  secretos: { passwordHash: 'Contraseña de la tienda online' },
+})
 @Entity('clientes')
 @Index(['negocioId', 'telefono'], { unique: true })
 export class Cliente extends BaseEntity {

@@ -23,6 +23,7 @@ import { FacturacionElectronicaService } from '../facturacion-electronica/factur
 import { PoliticaFacturacionService } from '../politica-facturacion/politica-facturacion.service';
 import { ContingenciaService } from '../facturacion-electronica/contingencia.service';
 import { EstadoDocumentoElectronico } from '../facturacion-electronica/entities/estado-documento-electronico.enum';
+import { AuditoriaService } from '../auditoria/auditoria.service';
 
 /** Cancelar ya no puede dejar vigente ante la DIAN una factura aceptada (spec de devoluciones 3.7). */
 describe('VentasService.cancelar — devoluciones y factura electrónica', () => {
@@ -30,6 +31,8 @@ describe('VentasService.cancelar — devoluciones y factura electrónica', () =>
   let venta: Record<string, unknown>;
   let documentos: { findOne: jest.Mock };
   let ventas: { findOne: jest.Mock; save: jest.Mock };
+  let auditoria: { registrarAccion: jest.Mock };
+  let manager: unknown;
 
   beforeEach(async () => {
     venta = {
@@ -53,7 +56,8 @@ describe('VentasService.cancelar — devoluciones y factura electrónica', () =>
       [TurnoCaja, { findOne: jest.fn().mockResolvedValue({ id: 'turno-1', estado: 'ABIERTO' }) }],
       [DocumentoElectronico, documentos],
     ]);
-    const manager = { getRepository: (entidad: unknown) => repos.get(entidad) };
+    manager = { getRepository: (entidad: unknown) => repos.get(entidad) };
+    auditoria = { registrarAccion: jest.fn() };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -74,6 +78,7 @@ describe('VentasService.cancelar — devoluciones y factura electrónica', () =>
         { provide: FacturacionElectronicaService, useValue: {} },
         { provide: PoliticaFacturacionService, useValue: {} },
         { provide: ContingenciaService, useValue: {} },
+        { provide: AuditoriaService, useValue: auditoria },
         { provide: ClsService, useValue: { get: (k: string) => (k === 'negocioId' ? 'neg-1' : 'usr-1') } },
       ],
     }).compile();
@@ -96,5 +101,27 @@ describe('VentasService.cancelar — devoluciones y factura electrónica', () =>
     documentos.findOne.mockResolvedValue({ estado: EstadoDocumentoElectronico.RECHAZADO });
     await service.cancelar('venta-1', { motivo: 'Error' });
     expect(ventas.save).toHaveBeenCalledWith(expect.objectContaining({ estado: 'CANCELADA' }));
+  });
+
+  it('registra la anulación en la auditoría dentro de la misma transacción', async () => {
+    venta.total = '25000.00';
+    venta.numeroComprobante = 'R-15';
+    await service.cancelar('venta-1', { motivo: 'Cliente se arrepintió' });
+    expect(auditoria.registrarAccion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        manager,
+        accion: 'ANULAR',
+        entidad: 'Venta',
+        entidadId: 'venta-1',
+        etiqueta: 'Venta R-15',
+        descripcion: 'Anuló la venta R-15 por $25.000 — motivo: Cliente se arrepintió',
+      }),
+    );
+  });
+
+  it('si la cancelación falla no registra nada', async () => {
+    venta.estadoDevolucion = 'PARCIAL';
+    await expect(service.cancelar('venta-1', { motivo: 'Error' })).rejects.toThrow();
+    expect(auditoria.registrarAccion).not.toHaveBeenCalled();
   });
 });

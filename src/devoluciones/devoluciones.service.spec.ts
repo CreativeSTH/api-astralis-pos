@@ -24,6 +24,7 @@ import { MetodosPagoService } from '../metodos-pago/metodos-pago.service';
 import { FacturacionElectronicaService } from '../facturacion-electronica/facturacion-electronica.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { TipoNumeracion } from '../common/enums/tipo-comprobante.enum';
+import { AuditoriaService } from '../auditoria/auditoria.service';
 
 /** Repositorio falso con lo que usa el servicio; `create` devuelve lo mismo y `save` asigna id. */
 function repo(extra: Record<string, unknown> = {}) {
@@ -111,6 +112,7 @@ describe('DevolucionesService', () => {
         { provide: MetodosPagoService, useValue: { findAll: jest.fn().mockResolvedValue([{ nombre: 'Efectivo', esEfectivo: true }]) } },
         { provide: FacturacionElectronicaService, useValue: facturacion },
         { provide: RealtimeGateway, useValue: { emitToNegocio: jest.fn() } },
+        { provide: AuditoriaService, useValue: { registrarAccion: jest.fn() } },
         { provide: ClsService, useValue: { get: (k: string) => ({ negocioId: 'neg-1', usuarioId: 'usr-1', rolId: 'rol-1' })[k] } },
       ],
     }).compile();

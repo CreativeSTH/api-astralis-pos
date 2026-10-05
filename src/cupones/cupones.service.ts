@@ -12,6 +12,7 @@ import { Producto } from '../productos/entities/producto.entity';
 import { TipoPromocion } from '../common/enums/tipo-promocion.enum';
 import { CreatePromocionDto } from './dto/create-promocion.dto';
 import { UpdatePromocionDto } from './dto/update-promocion.dto';
+import { AuditoriaService } from '../auditoria/auditoria.service';
 
 export type EstadoPromocion = 'PROGRAMADA' | 'ACTIVA' | 'EXPIRADA' | 'AGOTADA' | 'INACTIVA';
 
@@ -30,6 +31,7 @@ export class CuponesService extends TenantBaseService<Promocion> {
     @InjectRepository(PromocionUso)
     private readonly usoRepository: Repository<PromocionUso>,
     cls: ClsService,
+    private readonly auditoria: AuditoriaService,
   ) {
     super(repository, cls, 'Cupón/Promoción');
   }
@@ -67,12 +69,21 @@ export class CuponesService extends TenantBaseService<Promocion> {
     if (tipoFinal === TipoPromocion.CUPON && !(dto.codigo ?? actual.codigo)) {
       throw new BadRequestException('Un cupón requiere código');
     }
+    const alcanceAntes = {
+      sucursales: actual.sucursales,
+      bodegas: actual.bodegas,
+      categorias: actual.categorias,
+      productos: actual.productos,
+    };
     Object.assign(actual, this.mapearCampos(dto));
+    let guardada: Promocion;
     try {
-      return await this.repository.save(actual);
+      guardada = await this.repository.save(actual);
     } catch (error) {
       throw this.traducirErrorCodigo(error);
     }
+    await this.auditoria.registrarRelacionesMultiples(Promocion, { ...guardada, ...alcanceAntes }, guardada);
+    return guardada;
   }
 
   async remove(id: string): Promise<void> {

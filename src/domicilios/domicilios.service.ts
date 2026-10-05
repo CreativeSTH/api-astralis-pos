@@ -6,6 +6,9 @@ import { TenantBaseService } from '../common/services/tenant-base.service';
 import { Domicilio } from './entities/domicilio.entity';
 import { EstadoDomicilio } from '../common/enums/estado-domicilio.enum';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
+import { AuditoriaService } from '../auditoria/auditoria.service';
+import { AccionAuditoria } from '../auditoria/enums/accion-auditoria.enum';
+import { ModuloPermiso } from '../common/enums/modulo-permiso.enum';
 
 @Injectable()
 export class DomiciliosService extends TenantBaseService<Domicilio> {
@@ -13,6 +16,7 @@ export class DomiciliosService extends TenantBaseService<Domicilio> {
     @InjectRepository(Domicilio) repository: Repository<Domicilio>,
     cls: ClsService,
     private readonly realtimeGateway: RealtimeGateway,
+    private readonly auditoria: AuditoriaService,
   ) {
     super(repository, cls, 'Domicilio');
   }
@@ -70,6 +74,14 @@ export class DomiciliosService extends TenantBaseService<Domicilio> {
       estado: EstadoDomicilio.CANCELADO,
       motivoCancelacion: motivo,
       fechaCancelado: new Date(),
+    });
+    await this.auditoria.registrarAccion({
+      modulo: ModuloPermiso.DOMICILIOS,
+      entidad: 'Domicilio',
+      entidadId: actualizado.id,
+      etiqueta: `Domicilio ${actualizado.id.slice(0, 8)}`,
+      accion: AccionAuditoria.CANCELAR,
+      descripcion: `Canceló el domicilio${motivo ? ` — ${motivo}` : ''}`,
     });
     this.emitir(actualizado);
     return actualizado;

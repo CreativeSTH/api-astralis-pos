@@ -1,6 +1,28 @@
 import { Column, Entity, Index } from 'typeorm';
 import { BaseEntity } from '../../common/entities/base.entity';
+import { Auditable } from '../../auditoria/auditable.decorator';
+import { ModuloPermiso } from '../../common/enums/modulo-permiso.enum';
 
+@Auditable<Proveedor>({
+  modulo: ModuloPermiso.PROVEEDORES,
+  nombre: 'el proveedor',
+  etiqueta: (p) => p.nombre,
+  campos: {
+    nombre: { label: 'Nombre' },
+    nit: { label: 'NIT' },
+    contactoNombre: { label: 'Contacto' },
+    telefono: { label: 'Teléfono' },
+    email: { label: 'Correo' },
+    direccion: { label: 'Dirección' },
+    rutNumero: { label: 'RUT' },
+    rutDocumentoUrl: { label: 'Documento RUT' },
+    camaraComercioNumero: { label: 'Cámara de comercio' },
+    camaraComercioUrl: { label: 'Documento cámara de comercio' },
+    certificacionBancariaInfo: { label: 'Certificación bancaria' },
+    certificacionBancariaUrl: { label: 'Documento certificación bancaria' },
+    activo: { label: 'Activo', formato: 'booleano' },
+  },
+})
 @Entity('proveedores')
 export class Proveedor extends BaseEntity {
   @Index()

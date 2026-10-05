@@ -1,4 +1,6 @@
-import { Body, Controller, Get, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Patch, Post, UseGuards, UseInterceptors } from '@nestjs/common';
+import { OrigenAuditoriaInterceptor } from '../auditoria/origen-auditoria.interceptor';
+import { OrigenAuditoria } from '../auditoria/enums/origen-auditoria.enum';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
@@ -56,6 +58,7 @@ export class PagosController {
   }
 
   @Public()
+  @UseInterceptors(new OrigenAuditoriaInterceptor(OrigenAuditoria.WEBHOOK))
   @Post('webhook')
   @ApiOperation({
     summary: 'Webhook de eventos de Wompi (sin JWT, autenticado por firma)',

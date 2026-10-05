@@ -23,6 +23,7 @@ import { FacturacionElectronicaService } from '../facturacion-electronica/factur
 import { PoliticaFacturacionService } from '../politica-facturacion/politica-facturacion.service';
 import { ContingenciaService } from '../facturacion-electronica/contingencia.service';
 import { SincronizarSinConexionDto } from './dto/sincronizar-sin-conexion.dto';
+import { AuditoriaService } from '../auditoria/auditoria.service';
 
 /** Fase 6b: registrar lo que una caja vendió sin conexión. */
 describe('VentasService — ventas sin conexión', () => {
@@ -76,6 +77,7 @@ describe('VentasService — ventas sin conexión', () => {
         { provide: FacturacionElectronicaService, useValue: {} },
         { provide: PoliticaFacturacionService, useValue: {} },
         { provide: ContingenciaService, useValue: contingencia },
+        { provide: AuditoriaService, useValue: { registrarAccion: jest.fn() } },
         { provide: ClsService, useValue: { get: (k: string) => (k === 'negocioId' ? 'neg-1' : 'usr-1') } },
       ],
     }).compile();

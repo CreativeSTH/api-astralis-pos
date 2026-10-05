@@ -5,7 +5,34 @@ import { Marca } from '../../marcas/entities/marca.entity';
 import { Linea } from '../../lineas/entities/linea.entity';
 import { UnidadMedida } from '../../common/enums/unidad-medida.enum';
 import { TipoImpuesto } from '../../common/enums/tipo-impuesto.enum';
+import { Auditable } from '../../auditoria/auditable.decorator';
+import { ModuloPermiso } from '../../common/enums/modulo-permiso.enum';
 
+@Auditable<Producto>({
+  modulo: ModuloPermiso.PRODUCTOS,
+  nombre: 'el producto',
+  etiqueta: (p) => p.nombre,
+  campos: {
+    nombre: { label: 'Nombre' },
+    descripcion: { label: 'Descripción' },
+    sku: { label: 'SKU' },
+    codigoBarras: { label: 'Código de barras' },
+    unidadMedida: {
+      label: 'Unidad de medida',
+      formato: 'enum',
+      opciones: { KG: 'Kilogramo', MILILITRO: 'Mililitro' },
+    },
+    precioVenta: { label: 'Precio de venta', formato: 'moneda' },
+    costo: { label: 'Costo', formato: 'moneda' },
+    tipoImpuesto: { label: 'Tipo de impuesto', formato: 'enum' },
+    porcentajeImpuesto: { label: 'Impuesto', formato: 'porcentaje' },
+    marcaId: { label: 'Marca', formato: 'relacion', entidad: () => Marca },
+    lineaId: { label: 'Línea', formato: 'relacion', entidad: () => Linea },
+    categorias: { label: 'Categorías', formato: 'relacionMultiple', entidad: () => Categoria },
+    imagenUrl: { label: 'Imagen' },
+    activo: { label: 'Activo', formato: 'booleano' },
+  },
+})
 @Entity('productos')
 @Index(['negocioId', 'codigoBarras'], {
   unique: true,

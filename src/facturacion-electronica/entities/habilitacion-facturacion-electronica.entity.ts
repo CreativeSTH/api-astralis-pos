@@ -1,7 +1,40 @@
 import { Column, Entity, Index } from 'typeorm';
 import { BaseEntity } from '../../common/entities/base.entity';
 import { EstadoHabilitacion } from './estado-habilitacion.enum';
+import { Auditable } from '../../auditoria/auditable.decorator';
+import { ModuloPermiso } from '../../common/enums/modulo-permiso.enum';
 
+@Auditable<HabilitacionFacturacionElectronica>({
+  modulo: ModuloPermiso.FACTURACION_ELECTRONICA_DIAN,
+  nombre: 'la habilitación DIAN',
+  etiqueta: () => 'Facturación electrónica DIAN',
+  campos: {
+    estado: { label: 'Estado', formato: 'enum' },
+    razonSocial: { label: 'Razón social' },
+    direccion: { label: 'Dirección' },
+    ciudad: { label: 'Ciudad' },
+    useAlegraCertificate: { label: 'Certificado de Alegra', formato: 'booleano' },
+    resolucionNumero: { label: 'Resolución' },
+    resolucionPrefijo: { label: 'Prefijo' },
+    resolucionFechaInicio: { label: 'Vigencia desde' },
+    resolucionFechaFin: { label: 'Vigencia hasta' },
+    resolucionRangoDesde: { label: 'Rango desde', formato: 'numero' },
+    resolucionRangoHasta: { label: 'Rango hasta', formato: 'numero' },
+    ambiente: { label: 'Ambiente', formato: 'enum', opciones: { SANDBOX: 'Pruebas', PRODUCCION: 'Producción' } },
+    esHabilitacionDePrueba: { label: 'Habilitación de prueba', formato: 'booleano' },
+    contingenciaResolucionNumero: { label: 'Resolución de contingencia' },
+    contingenciaPrefijo: { label: 'Prefijo de contingencia' },
+    contingenciaFechaInicio: { label: 'Contingencia desde' },
+    contingenciaFechaFin: { label: 'Contingencia hasta' },
+    contingenciaRangoDesde: { label: 'Rango contingencia desde', formato: 'numero' },
+    contingenciaRangoHasta: { label: 'Rango contingencia hasta', formato: 'numero' },
+  },
+  secretos: {
+    certificadoPfxCifrado: 'Certificado digital',
+    certificadoPasswordCifrado: 'Contraseña del certificado',
+    resolucionTechnicalKey: 'Clave técnica',
+  },
+})
 @Entity('habilitaciones_facturacion_electronica')
 export class HabilitacionFacturacionElectronica extends BaseEntity {
   @Index({ unique: true })

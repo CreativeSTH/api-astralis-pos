@@ -6,6 +6,8 @@ import { Sucursal } from '../../sucursales/entities/sucursal.entity';
 import { Bodega } from '../../bodegas/entities/bodega.entity';
 import { Categoria } from '../../categorias/entities/categoria.entity';
 import { Producto } from '../../productos/entities/producto.entity';
+import { Auditable } from '../../auditoria/auditable.decorator';
+import { ModuloPermiso } from '../../common/enums/modulo-permiso.enum';
 
 /**
  * Cupón y Promoción son el mismo concepto de negocio (descuento con alcance,
@@ -14,6 +16,32 @@ import { Producto } from '../../productos/entities/producto.entity';
  * ingrese `codigo` en el carrito. Compartir la entidad evita duplicar todo
  * el motor de alcance/vigencia/límite dos veces.
  */
+@Auditable<Promocion>({
+  modulo: ModuloPermiso.CUPONES,
+  nombre: 'la promoción',
+  etiqueta: (p) => (p.codigo ? `${p.nombre} (${p.codigo})` : p.nombre),
+  campos: {
+    tipo: { label: 'Tipo', formato: 'enum', opciones: { CUPON: 'Cupón', PROMOCION: 'Promoción' } },
+    nombre: { label: 'Nombre' },
+    descripcion: { label: 'Descripción' },
+    codigo: { label: 'Código' },
+    tipoDescuento: {
+      label: 'Tipo de descuento',
+      formato: 'enum',
+      opciones: { PORCENTAJE: 'Porcentaje', MONTO_FIJO: 'Monto fijo' },
+    },
+    valor: { label: 'Valor', formato: 'numero' },
+    montoMinimoCompra: { label: 'Compra mínima', formato: 'moneda' },
+    fechaInicio: { label: 'Desde', formato: 'fecha' },
+    fechaFin: { label: 'Hasta', formato: 'fecha' },
+    usoMaximo: { label: 'Usos máximos', formato: 'numero' },
+    sucursales: { label: 'Sucursales', formato: 'relacionMultiple', entidad: () => Sucursal },
+    bodegas: { label: 'Bodegas', formato: 'relacionMultiple', entidad: () => Bodega },
+    categorias: { label: 'Categorías', formato: 'relacionMultiple', entidad: () => Categoria },
+    productos: { label: 'Productos', formato: 'relacionMultiple', entidad: () => Producto },
+    activo: { label: 'Activa', formato: 'booleano' },
+  },
+})
 @Entity('promociones')
 @Index(['negocioId', 'codigo'], { unique: true, where: '"codigo" IS NOT NULL' })
 export class Promocion extends BaseEntity {

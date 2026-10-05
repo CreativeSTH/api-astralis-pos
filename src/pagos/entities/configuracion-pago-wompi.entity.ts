@@ -5,7 +5,27 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
+import { Auditable } from '../../auditoria/auditable.decorator';
+import { ModuloPermiso } from '../../common/enums/modulo-permiso.enum';
 
+@Auditable<ConfiguracionPagoWompi>({
+  modulo: ModuloPermiso.PAGOS,
+  nombre: 'la configuración de Wompi',
+  etiqueta: () => 'Pagos con Wompi',
+  campos: {
+    llavePublica: { label: 'Llave pública' },
+    activo: { label: 'Activo', formato: 'booleano' },
+    qrHabilitado: { label: 'QR', formato: 'booleano' },
+    nequiHabilitado: { label: 'Nequi', formato: 'booleano' },
+    pseHabilitado: { label: 'PSE', formato: 'booleano' },
+    tarjetaHabilitado: { label: 'Tarjeta', formato: 'booleano' },
+  },
+  secretos: {
+    llavePrivadaCifrada: 'Llave privada',
+    llaveSecretaEventosCifrada: 'Secreto de eventos',
+    llaveIntegridadCifrada: 'Llave de integridad',
+  },
+})
 @Entity('configuraciones_pago_wompi')
 export class ConfiguracionPagoWompi {
   @PrimaryGeneratedColumn('uuid')

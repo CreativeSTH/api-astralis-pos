@@ -1,6 +1,18 @@
 import { Column, Entity, Index, JoinColumn, ManyToOne } from 'typeorm';
 import { BaseEntity } from '../../common/entities/base.entity';
+import { Auditable } from '../../auditoria/auditable.decorator';
+import { ModuloPermiso } from '../../common/enums/modulo-permiso.enum';
 
+@Auditable<Categoria>({
+  modulo: ModuloPermiso.CATEGORIAS,
+  nombre: 'la categoría',
+  etiqueta: (c) => c.nombre,
+  campos: {
+    nombre: { label: 'Nombre' },
+    categoriaPadreId: { label: 'Categoría padre', formato: 'relacion', entidad: () => Categoria },
+    activo: { label: 'Activa', formato: 'booleano' },
+  },
+})
 @Entity('categorias')
 export class Categoria extends BaseEntity {
   @Index()

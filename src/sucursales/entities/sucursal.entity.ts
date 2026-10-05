@@ -2,7 +2,22 @@ import { Column, Entity, Index, JoinColumn, ManyToOne } from 'typeorm';
 import { BaseEntity } from '../../common/entities/base.entity';
 import { Negocio } from '../../negocios/entities/negocio.entity';
 import { Bodega } from '../../bodegas/entities/bodega.entity';
+import { Auditable } from '../../auditoria/auditable.decorator';
+import { ModuloPermiso } from '../../common/enums/modulo-permiso.enum';
 
+@Auditable<Sucursal>({
+  modulo: ModuloPermiso.SUCURSALES,
+  nombre: 'la sucursal',
+  etiqueta: (s) => s.nombre,
+  campos: {
+    nombre: { label: 'Nombre' },
+    direccion: { label: 'Dirección' },
+    telefono: { label: 'Teléfono' },
+    metaVentasDiaria: { label: 'Meta de ventas diaria', formato: 'moneda' },
+    bodegaOperativaId: { label: 'Bodega operativa', formato: 'relacion', entidad: () => Bodega },
+    activo: { label: 'Activa', formato: 'booleano' },
+  },
+})
 @Entity('sucursales')
 export class Sucursal extends BaseEntity {
   @Index()

@@ -20,6 +20,7 @@ import { FacturacionElectronicaService } from '../facturacion-electronica/factur
 import { PoliticaFacturacionService } from '../politica-facturacion/politica-facturacion.service';
 import { ContingenciaService } from '../facturacion-electronica/contingencia.service';
 import { CreateVentaDto } from './dto/create-venta.dto';
+import { AuditoriaService } from '../auditoria/auditoria.service';
 
 /** Fase 6a: registro de una factura de talonario escrita a mano durante una contingencia. */
 describe('VentasService — transcripción de talonario', () => {
@@ -55,6 +56,7 @@ describe('VentasService — transcripción de talonario', () => {
         { provide: FacturacionElectronicaService, useValue: {} },
         { provide: PoliticaFacturacionService, useValue: politica },
         { provide: ContingenciaService, useValue: contingencia },
+        { provide: AuditoriaService, useValue: { registrarAccion: jest.fn() } },
         { provide: ClsService, useValue: { get: (k: string) => (k === 'negocioId' ? 'neg-1' : 'usr-1') } },
       ],
     }).compile();

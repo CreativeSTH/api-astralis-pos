@@ -28,4 +28,6 @@ export enum ModuloPermiso {
   PAQUETES = 'PAQUETES',
   FACTURACION_ELECTRONICA_DIAN = 'FACTURACION_ELECTRONICA_DIAN',
   DEVOLUCIONES = 'DEVOLUCIONES',
+  /** Solo acción VER (ver `MODULOS_SOLO_VER` en permisos.service.ts): la auditoría no se edita. */
+  AUDITORIA = 'AUDITORIA',
 }

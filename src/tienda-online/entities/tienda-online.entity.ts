@@ -2,7 +2,24 @@ import { Column, Entity, Index, JoinColumn, ManyToOne } from 'typeorm';
 import { BaseEntity } from '../../common/entities/base.entity';
 import { Bodega } from '../../bodegas/entities/bodega.entity';
 import { PlantillaTienda } from '../../common/enums/plantilla-tienda.enum';
+import { Auditable } from '../../auditoria/auditable.decorator';
+import { ModuloPermiso } from '../../common/enums/modulo-permiso.enum';
 
+@Auditable<TiendaOnline>({
+  modulo: ModuloPermiso.TIENDA_ONLINE,
+  nombre: 'la tienda online',
+  etiqueta: () => 'Tienda online',
+  campos: {
+    bodegaId: { label: 'Bodega', formato: 'relacion', entidad: () => Bodega },
+    activo: { label: 'Activa', formato: 'booleano' },
+    plantilla: { label: 'Plantilla', formato: 'enum' },
+    logoUrl: { label: 'Logo' },
+    banners: { label: 'Banners' },
+    terminos: { label: 'Términos' },
+    tratamientoDatos: { label: 'Tratamiento de datos' },
+    politicaEnvios: { label: 'Política de envíos' },
+  },
+})
 @Entity('tiendas_online')
 export class TiendaOnline extends BaseEntity {
   @Index({ unique: true })

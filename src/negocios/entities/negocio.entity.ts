@@ -1,6 +1,8 @@
 import { Column, Entity } from 'typeorm';
 import { BaseEntity } from '../../common/entities/base.entity';
 import { OrigenObligacion, ResponsabilidadIva, TipoPersona } from './perfil-fiscal.enum';
+import { Auditable } from '../../auditoria/auditable.decorator';
+import { ModuloPermiso } from '../../common/enums/modulo-permiso.enum';
 
 export enum PlanNegocio {
   FREE = 'FREE',
@@ -8,6 +10,39 @@ export enum PlanNegocio {
   PRO = 'PRO',
 }
 
+@Auditable<Negocio>({
+  modulo: ModuloPermiso.NEGOCIO,
+  nombre: 'los datos del negocio',
+  etiqueta: (n) => n.nombre,
+  negocioIdDe: (n) => n.id,
+  campos: {
+    nombre: { label: 'Nombre' },
+    nit: { label: 'NIT' },
+    tipoNegocio: { label: 'Tipo de negocio' },
+    email: { label: 'Correo' },
+    telefono: { label: 'Teléfono' },
+    direccion: { label: 'Dirección' },
+    ciudadNombre: { label: 'Ciudad' },
+    logoUrl: { label: 'Logo' },
+    mensajeCierreComprobante: { label: 'Mensaje al pie del comprobante' },
+    terminosComprobante: { label: 'Términos del comprobante' },
+    tipoPersona: {
+      label: 'Tipo de persona',
+      formato: 'enum',
+      opciones: { NATURAL: 'Persona natural', JURIDICA: 'Persona jurídica' },
+    },
+    responsabilidadIva: {
+      label: 'Responsabilidad de IVA',
+      formato: 'enum',
+      opciones: {
+        RESPONSABLE: 'Responsable de IVA',
+        NO_RESPONSABLE: 'No responsable de IVA',
+        REGIMEN_SIMPLE: 'Régimen Simple de Tributación',
+      },
+    },
+    activo: { label: 'Activo', formato: 'booleano' },
+  },
+})
 @Entity('negocios')
 export class Negocio extends BaseEntity {
   @Column()

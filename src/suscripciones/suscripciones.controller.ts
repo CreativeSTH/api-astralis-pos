@@ -1,4 +1,6 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Patch, Post, Query, UseGuards, UseInterceptors } from '@nestjs/common';
+import { OrigenAuditoriaInterceptor } from '../auditoria/origen-auditoria.interceptor';
+import { OrigenAuditoria } from '../auditoria/enums/origen-auditoria.enum';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { SuscripcionesService } from './suscripciones.service';
 import { ReactivarSuscripcionDto } from './dto/reactivar-suscripcion.dto';
@@ -12,11 +14,29 @@ import { Public } from '../common/decorators/public.decorator';
 import { RequiereEmailVerificado } from '../common/decorators/requiere-email-verificado.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { JwtUserPayload } from '../common/decorators/current-user.decorator';
+import { AuditoriaService } from '../auditoria/auditoria.service';
+import { AccionAuditoria } from '../auditoria/enums/accion-auditoria.enum';
+import { ModuloPermiso } from '../common/enums/modulo-permiso.enum';
 
 @ApiTags('Suscripción')
 @Controller('suscripcion')
 export class SuscripcionesController {
-  constructor(private readonly suscripcionesService: SuscripcionesService) {}
+  constructor(
+    private readonly suscripcionesService: SuscripcionesService,
+    private readonly auditoria: AuditoriaService,
+  ) {}
+
+  private auditar(negocioId: string, entidadId: string, etiqueta: string, accion: AccionAuditoria, descripcion: string) {
+    return this.auditoria.registrarAccion({
+      modulo: ModuloPermiso.NEGOCIO,
+      entidad: 'Suscripcion',
+      entidadId,
+      etiqueta,
+      accion,
+      descripcion,
+      negocioId,
+    });
+  }
 
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth('JWT-auth')
@@ -41,8 +61,11 @@ export class SuscripcionesController {
   @Post('cancelar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Cancela la suscripción — sigue con acceso hasta fechaFin, ya pagado' })
-  cancelar(@CurrentUser() usuario: JwtUserPayload, @Body() dto: CancelarSuscripcionDto) {
-    return this.suscripcionesService.cancelar(usuario.negocioId!, dto.motivo);
+  async cancelar(@CurrentUser() usuario: JwtUserPayload, @Body() dto: CancelarSuscripcionDto) {
+    const s = await this.suscripcionesService.cancelar(usuario.negocioId!, dto.motivo);
+    const motivo = dto.motivo ? ` — ${dto.motivo}` : '';
+    await this.auditar(usuario.negocioId!, s.id, 'Suscripción', AccionAuditoria.CANCELAR, `Canceló la suscripción${motivo}`);
+    return s;
   }
 
   @UseGuards(JwtAuthGuard)
@@ -50,16 +73,20 @@ export class SuscripcionesController {
   @Post('revertir-cancelacion')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Revierte una cancelación mientras el período pagado no venció — gratis' })
-  revertirCancelacion(@CurrentUser() usuario: JwtUserPayload) {
-    return this.suscripcionesService.revertirCancelacion(usuario.negocioId!);
+  async revertirCancelacion(@CurrentUser() usuario: JwtUserPayload) {
+    const s = await this.suscripcionesService.revertirCancelacion(usuario.negocioId!);
+    await this.auditar(usuario.negocioId!, s.id, 'Suscripción', AccionAuditoria.REACTIVAR, 'Revirtió la cancelación de la suscripción');
+    return s;
   }
 
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth('JWT-auth')
   @Patch('paquete-prueba')
   @ApiOperation({ summary: 'Cambia de plan sin pagar, solo mientras dure la prueba gratis' })
-  cambiarPaqueteEnPrueba(@CurrentUser() usuario: JwtUserPayload, @Body() dto: CambiarPaquetePruebaDto) {
-    return this.suscripcionesService.cambiarPaqueteEnPrueba(usuario.negocioId!, dto.paqueteId);
+  async cambiarPaqueteEnPrueba(@CurrentUser() usuario: JwtUserPayload, @Body() dto: CambiarPaquetePruebaDto) {
+    const s = await this.suscripcionesService.cambiarPaqueteEnPrueba(usuario.negocioId!, dto.paqueteId);
+    await this.auditar(usuario.negocioId!, s.id, 'Suscripción', AccionAuditoria.EDITAR, 'Cambió el plan durante la prueba gratis');
+    return s;
   }
 
   @UseGuards(JwtAuthGuard)
@@ -87,8 +114,16 @@ export class SuscripcionesController {
   @Post('medio-pago')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Guarda (o reemplaza) la tarjeta del cobro automático, sin cobrar' })
-  guardarMedioPago(@CurrentUser() usuario: JwtUserPayload, @Body() dto: GuardarMedioPagoDto) {
-    return this.suscripcionesService.registrarMedioPago(usuario.negocioId!, dto);
+  async guardarMedioPago(@CurrentUser() usuario: JwtUserPayload, @Body() dto: GuardarMedioPagoDto) {
+    const r = await this.suscripcionesService.registrarMedioPago(usuario.negocioId!, dto);
+    await this.auditar(
+      usuario.negocioId!,
+      usuario.negocioId!,
+      'Tarjeta de cobro automático',
+      AccionAuditoria.EDITAR,
+      `Guardó la tarjeta terminada en ${r.ultimosCuatroDigitos} para el cobro automático`,
+    );
+    return r;
   }
 
   @UseGuards(JwtAuthGuard)
@@ -98,10 +133,18 @@ export class SuscripcionesController {
   @ApiOperation({ summary: 'Quita el medio de pago guardado — vuelve a reactivación manual' })
   async quitarMedioPago(@CurrentUser() usuario: JwtUserPayload) {
     await this.suscripcionesService.quitarMedioPago(usuario.negocioId!);
+    await this.auditar(
+      usuario.negocioId!,
+      usuario.negocioId!,
+      'Tarjeta de cobro automático',
+      AccionAuditoria.ELIMINAR,
+      'Quitó la tarjeta del cobro automático',
+    );
     return { mensaje: 'Medio de pago quitado' };
   }
 
   @Public()
+  @UseInterceptors(new OrigenAuditoriaInterceptor(OrigenAuditoria.WEBHOOK))
   @Post('webhook-wompi')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Webhook de Wompi para confirmaciones de reactivación — endpoint público, verificado por firma' })

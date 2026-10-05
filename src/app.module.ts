@@ -49,6 +49,7 @@ import { SuscripcionesModule } from './suscripciones/suscripciones.module';
 import { FacturacionElectronicaModule } from './facturacion-electronica/facturacion-electronica.module';
 import { PoliticaFacturacionModule } from './politica-facturacion/politica-facturacion.module';
 import { OnboardingModule } from './onboarding/onboarding.module';
+import { AuditoriaModule } from './auditoria/auditoria.module';
 
 @Module({
   imports: [
@@ -114,6 +115,7 @@ import { OnboardingModule } from './onboarding/onboarding.module';
     FacturacionElectronicaModule,
     PoliticaFacturacionModule,
     OnboardingModule,
+    AuditoriaModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },

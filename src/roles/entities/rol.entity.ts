@@ -11,7 +11,19 @@ import { BaseEntity } from '../../common/entities/base.entity';
 import { Negocio } from '../../negocios/entities/negocio.entity';
 import { RolTier } from '../../common/enums/rol-tier.enum';
 import { Permiso } from './permiso.entity';
+import { Auditable } from '../../auditoria/auditable.decorator';
+import { ModuloPermiso } from '../../common/enums/modulo-permiso.enum';
 
+@Auditable<Rol>({
+  modulo: ModuloPermiso.ROLES,
+  nombre: 'el rol',
+  etiqueta: (r) => r.nombre,
+  campos: {
+    nombre: { label: 'Nombre' },
+    descripcion: { label: 'Descripción' },
+    activo: { label: 'Activo', formato: 'booleano' },
+  },
+})
 @Entity('roles')
 export class Rol extends BaseEntity {
   @Column()
