@@ -4,6 +4,7 @@ import { ConflictException } from '@nestjs/common';
 import { ClsService } from 'nestjs-cls';
 import { BodegasService } from './bodegas.service';
 import { Bodega } from './entities/bodega.entity';
+import { Sucursal } from '../sucursales/entities/sucursal.entity';
 import { TiendaOnlineService } from '../tienda-online/tienda-online.service';
 
 describe('BodegasService — bloqueo por tienda online', () => {
@@ -21,6 +22,7 @@ describe('BodegasService — bloqueo por tienda online', () => {
       providers: [
         BodegasService,
         { provide: getRepositoryToken(Bodega), useValue: repo },
+        { provide: getRepositoryToken(Sucursal), useValue: { exists: jest.fn().mockResolvedValue(false) } },
         { provide: TiendaOnlineService, useValue: tiendaOnlineService },
         { provide: ClsService, useValue: { get: jest.fn().mockReturnValue('negocio-1') } },
       ],
