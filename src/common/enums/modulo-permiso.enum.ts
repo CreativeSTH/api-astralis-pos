@@ -31,4 +31,5 @@ export enum ModuloPermiso {
   /** Solo acción VER (ver `MODULOS_SOLO_VER` en permisos.service.ts): la auditoría no se edita. */
   AUDITORIA = 'AUDITORIA',
   TRASLADOS = 'TRASLADOS',
+  EMPLEADOS = 'EMPLEADOS',
 }
