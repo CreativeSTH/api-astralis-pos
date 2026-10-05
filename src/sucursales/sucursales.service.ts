@@ -5,6 +5,7 @@ import { ClsService } from 'nestjs-cls';
 import { TenantBaseService } from '../common/services/tenant-base.service';
 import { Sucursal } from './entities/sucursal.entity';
 import { Bodega } from '../bodegas/entities/bodega.entity';
+import { bodegaAsociadaASucursal } from '../bodegas/bodega-asociacion';
 import { CreateSucursalDto } from './dto/create-sucursal.dto';
 import { UpdateSucursalDto } from './dto/update-sucursal.dto';
 
@@ -32,11 +33,14 @@ export class SucursalesService extends TenantBaseService<Sucursal> {
 
   async update(id: string, dto: UpdateSucursalDto) {
     if (dto.bodegaOperativaId) {
-      const bodega = await this.bodegaRepo.findOne({
-        where: { id: dto.bodegaOperativaId, negocioId: this.getNegocioId(), sucursalId: id },
-      });
-      if (!bodega) {
-        throw new NotFoundException('La bodega operativa debe pertenecer a esta sucursal');
+      const asociada = await bodegaAsociadaASucursal(
+        this.bodegaRepo.manager,
+        this.getNegocioId(),
+        dto.bodegaOperativaId,
+        id,
+      );
+      if (!asociada) {
+        throw new NotFoundException('La bodega operativa debe estar asociada a esta sucursal');
       }
     }
     return this.updateForTenant(id, dto);

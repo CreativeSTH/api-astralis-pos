@@ -1,4 +1,4 @@
-import { Column, Entity, Index, JoinColumn, ManyToOne } from 'typeorm';
+import { Column, Entity, Index, JoinTable, ManyToMany } from 'typeorm';
 import { BaseEntity } from '../../common/entities/base.entity';
 import { Sucursal } from '../../sucursales/entities/sucursal.entity';
 import { Auditable } from '../../auditoria/auditable.decorator';
@@ -10,7 +10,7 @@ import { ModuloPermiso } from '../../common/enums/modulo-permiso.enum';
   etiqueta: (b) => b.nombre,
   campos: {
     nombre: { label: 'Nombre' },
-    sucursalId: { label: 'Sucursal', formato: 'relacion', entidad: () => Sucursal },
+    sucursales: { label: 'Sucursales', formato: 'relacionMultiple', entidad: () => Sucursal },
     activo: { label: 'Activa', formato: 'booleano' },
   },
 })
@@ -20,12 +20,17 @@ export class Bodega extends BaseEntity {
   @Column({ name: 'negocio_id' })
   negocioId: string;
 
-  @Column({ name: 'sucursal_id' })
-  sucursalId: string;
-
-  @ManyToOne(() => Sucursal, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'sucursal_id' })
-  sucursal: Sucursal;
+  /**
+   * Sucursales que venden de esta bodega (spec 2026-10-04). Vacío = bodega central (CEDI): guarda
+   * stock y despacha traslados, pero ningún punto de venta vende de ella. Dos o más = compartida.
+   */
+  @ManyToMany(() => Sucursal)
+  @JoinTable({
+    name: 'sucursal_bodegas',
+    joinColumn: { name: 'bodega_id' },
+    inverseJoinColumn: { name: 'sucursal_id' },
+  })
+  sucursales: Sucursal[];
 
   @Column()
   nombre: string;

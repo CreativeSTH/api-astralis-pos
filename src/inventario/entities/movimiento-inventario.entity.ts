@@ -46,6 +46,10 @@ export class MovimientoInventario {
   @Column({ name: 'venta_id', nullable: true })
   ventaId?: string;
 
+  /** Traslado que originó el movimiento (TRASLADO_SALIDA/ENTRADA, FALTANTE_TRASLADO). */
+  @Column({ name: 'traslado_id', type: 'uuid', nullable: true })
+  trasladoId?: string | null;
+
   @Column({ name: 'creado_por', nullable: true })
   creadoPor?: string;
 

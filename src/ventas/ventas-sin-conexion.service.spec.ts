@@ -132,10 +132,11 @@ describe('VentasService — ventas sin conexión', () => {
   });
 
   describe('procesarItemsYStock sin conexión', () => {
-    function managerFalso(inventario: Record<string, unknown> | null) {
+    function managerFalso(inventario: Record<string, unknown> | null, bodega: Record<string, unknown> | null = { id: 'bod-1' }) {
       const guardados: unknown[] = [];
+      const bodegaRepo = { findOne: jest.fn().mockResolvedValue(bodega) };
       const repos: Record<string, unknown> = {
-        [Bodega.name]: { findOne: jest.fn().mockResolvedValue({ id: 'bod-1' }) },
+        [Bodega.name]: bodegaRepo,
         [Producto.name]: {
           findOne: jest.fn().mockResolvedValue({ id: 'prod-1', nombre: 'Arenita', precioVenta: 30000, costo: 10000, porcentajeImpuesto: 5 }),
         },
@@ -146,7 +147,7 @@ describe('VentasService — ventas sin conexión', () => {
         },
         [VentaItem.name]: { create: jest.fn((x) => x) },
       };
-      return { manager: { getRepository: (e: { name: string }) => repos[e.name] }, guardados };
+      return { manager: { getRepository: (e: { name: string }) => repos[e.name] }, guardados, bodegaRepo };
     }
     const procesar = (manager: unknown, cantidad: number) =>
       (service as unknown as { procesarItemsYStock: (...a: unknown[]) => Promise<any> }).procesarItemsYStock(
@@ -169,6 +170,21 @@ describe('VentasService — ventas sin conexión', () => {
       const { manager, guardados } = managerFalso({ cantidad: 1 });
       await procesar(manager, 3);
       expect(guardados).toEqual([expect.objectContaining({ cantidad: -2 })]);
+    });
+
+    it('valida la bodega por su asociación a la sucursal (bodega compartida)', async () => {
+      const { manager, bodegaRepo } = managerFalso({ cantidad: 10 });
+      await procesar(manager, 1);
+      expect(bodegaRepo.findOne).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'bod-1', negocioId: 'neg-1', activo: true, sucursales: { id: 'suc-1' } },
+        }),
+      );
+    });
+
+    it('rechaza una bodega no asociada a la sucursal (o un CEDI)', async () => {
+      const { manager } = managerFalso({ cantidad: 10 }, null);
+      await expect(procesar(manager, 1)).rejects.toThrow('La bodega indicada no pertenece a la sucursal de la venta');
     });
 
     it('sin fila de inventario la crea en negativo', async () => {

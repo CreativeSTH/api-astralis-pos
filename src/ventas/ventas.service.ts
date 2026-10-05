@@ -13,7 +13,7 @@ import { VentaPago } from './entities/venta-pago.entity';
 import { Cuota } from './entities/cuota.entity';
 import { RegistroPagoCuota } from './entities/registro-pago-cuota.entity';
 import { Producto } from '../productos/entities/producto.entity';
-import { Bodega } from '../bodegas/entities/bodega.entity';
+import { bodegaAsociadaASucursal } from '../bodegas/bodega-asociacion';
 import { Inventario } from '../inventario/entities/inventario.entity';
 import { MovimientoInventario } from '../inventario/entities/movimiento-inventario.entity';
 import { MovimientoCaja } from '../caja/entities/movimiento-caja.entity';
@@ -884,16 +884,10 @@ export class VentasService {
     // realmente pertenece a la `sucursalId` de la venta — el frontend ya lo garantiza
     // (ver `PuntoVenta.bodega`), pero acá es donde se protege de verdad. Sin esto, un
     // `bodegaId` de otra sucursal del mismo negocio pasaba sin ningún control y la venta
-    // terminaba descontando stock de la bodega equivocada.
-    const bodega = await manager.getRepository(Bodega).findOne({
-      where: {
-        id: dto.bodegaId,
-        negocioId,
-        sucursalId: dto.sucursalId,
-        activo: true,
-      },
-    });
-    if (!bodega) {
+    // terminaba descontando stock de la bodega equivocada. Con bodegas compartidas
+    // (spec 2026-10-04) "es de la sucursal" = está asociada en `sucursal_bodegas`; un CEDI
+    // no está asociado a ninguna, así que nunca se vende de él.
+    if (!(await bodegaAsociadaASucursal(manager, negocioId, dto.bodegaId, dto.sucursalId))) {
       throw new BadRequestException(
         'La bodega indicada no pertenece a la sucursal de la venta',
       );

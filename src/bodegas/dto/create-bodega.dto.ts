@@ -1,10 +1,11 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsUUID } from 'class-validator';
+import { IsArray, IsString, IsUUID } from 'class-validator';
 
 export class CreateBodegaDto {
-  @ApiProperty()
-  @IsUUID()
-  sucursalId: string;
+  @ApiProperty({ type: [String], description: 'Sucursales que venden de esta bodega. Vacío = bodega central (CEDI).' })
+  @IsArray()
+  @IsUUID('all', { each: true })
+  sucursalIds: string[];
 
   @ApiProperty()
   @IsString()

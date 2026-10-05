@@ -7,12 +7,14 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { BodegasService } from './bodegas.service';
 import { CreateBodegaDto } from './dto/create-bodega.dto';
 import { UpdateBodegaDto } from './dto/update-bodega.dto';
+import { FiltrosBodegasDto } from './dto/filtros-bodegas.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { RequierePermiso } from '../common/decorators/requiere-permiso.decorator';
@@ -34,8 +36,8 @@ export class BodegasController {
 
   @Get()
   @RequierePermiso(ModuloPermiso.BODEGAS, AccionPermiso.VER)
-  findAll() {
-    return this.bodegasService.findAll();
+  findAll(@Query() filtros: FiltrosBodegasDto) {
+    return this.bodegasService.findAll(filtros.sucursalId);
   }
 
   @Get(':id')
