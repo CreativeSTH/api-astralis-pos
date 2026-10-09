@@ -25,6 +25,7 @@ import { FiltrosPagosSuscripcionDto } from './dto/filtros-pagos-suscripcion.dto'
 import { construirCorreoRecordatorioProximo } from '../email/templates/recordatorio-proximo-cobro.template';
 import { construirCorreoRecordatorioDia0 } from '../email/templates/recordatorio-dia-cobro.template';
 import { construirCorreoCobroFallido } from '../email/templates/cobro-fallido.template';
+import { DatosPlanCorreo } from '../email/templates/comun';
 import { CicloFacturacion } from './entities/ciclo-facturacion.enum';
 
 /** Un cobro de la suscripción tal como lo ve el negocio — sin `referencia` ni `wompiTransactionId`. */
@@ -802,12 +803,18 @@ export class SuscripcionesService {
       if (!negocio || !admin) return;
 
       const paquete = await this.paquetesService.findOne(actual.paqueteId);
-      const { subject, html } = construirCorreoCobroFallido(
-        paquete.nombre,
-        actual.intentosFallidosCobro,
-        `${process.env.FRONTEND_URL}/suscripcion-vencida`,
-      );
-      await this.emailService.enviar({ to: admin.email, subject, html });
+      const medioPago = await this.medioPagoRepository.findOne({ where: { negocioId, activo: true } });
+      const { subject, html, text } = construirCorreoCobroFallido({
+        nombre: admin.nombre,
+        nombreNegocio: negocio.nombre,
+        plan: paquete.nombre,
+        valor: calcularMontoCiclo(paquete, actual.cicloFacturacion, false) / 100,
+        ultimosCuatro: medioPago?.ultimosCuatroDigitos ?? null,
+        intento: actual.intentosFallidosCobro,
+        linkMiPlan: `${process.env.FRONTEND_URL}/configuracion/mi-plan`,
+        linkReactivar: `${process.env.FRONTEND_URL}/suscripcion-vencida`,
+      });
+      await this.emailService.enviar({ to: admin.email, subject, html, text });
       await this.crearOActualizarAlerta(
         negocioId,
         actual.id,
@@ -857,17 +864,24 @@ export class SuscripcionesService {
           where: { negocioId: suscripcion.negocioId, activo: true },
         });
 
-        const { subject, html } =
+        const datos: DatosPlanCorreo = {
+          nombre: admin.nombre,
+          nombreNegocio: negocio.nombre,
+          plan: paquete.nombre,
+          ciclo: suscripcion.cicloFacturacion,
+          valor: calcularMontoCiclo(paquete, suscripcion.cicloFacturacion, false) / 100,
+          fechaFin: suscripcion.fechaFin,
+          enPrueba: suscripcion.estado === EstadoSuscripcion.PRUEBA,
+          tieneTarjeta: !!medioPago,
+          ultimosCuatro: medioPago?.ultimosCuatroDigitos ?? null,
+          linkMiPlan: `${process.env.FRONTEND_URL}/configuracion/mi-plan`,
+        };
+        const { subject, html, text } =
           diasRestantes === 0
-            ? construirCorreoRecordatorioDia0(
-                paquete.nombre,
-                !!medioPago,
-                `${process.env.FRONTEND_URL}/suscripcion-vencida`,
-                medioPago?.ultimosCuatroDigitos,
-              )
-            : construirCorreoRecordatorioProximo(paquete.nombre, diasRestantes, !!medioPago, medioPago?.ultimosCuatroDigitos);
+            ? construirCorreoRecordatorioDia0(datos)
+            : construirCorreoRecordatorioProximo({ ...datos, dias: diasRestantes });
 
-        await this.emailService.enviar({ to: admin.email, subject, html });
+        await this.emailService.enviar({ to: admin.email, subject, html, text });
 
         await this.crearOActualizarAlerta(
           suscripcion.negocioId,

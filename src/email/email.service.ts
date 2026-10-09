@@ -25,6 +25,8 @@ export class EmailService {
     to: string;
     subject: string;
     html: string;
+    /** Versión en texto plano (la arman las plantillas). */
+    text?: string;
     /** Nombre visible del remitente (p. ej. el negocio); la dirección sigue siendo la de AURA. */
     nombreRemitente?: string;
     replyTo?: string;
@@ -45,6 +47,7 @@ export class EmailService {
       to: [params.to],
       subject: params.subject,
       html: params.html,
+      ...(params.text ? { text: params.text } : {}),
       ...(params.replyTo ? { replyTo: params.replyTo } : {}),
       ...(params.adjuntos?.length ? { attachments: params.adjuntos } : {}),
     });

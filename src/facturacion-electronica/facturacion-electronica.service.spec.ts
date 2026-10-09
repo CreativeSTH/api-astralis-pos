@@ -1517,6 +1517,8 @@ describe('FacturacionElectronicaService — wizard pasos 1-3', () => {
       expect(envio.subject).toBe(`900123456;${documento.emisorRazonSocial};${documento.numeroCompleto};01;El Clavo`);
       expect(envio.replyTo).toBe('negocio@clavo.co');
       expect(envio.nombreRemitente).toBe('El Clavo');
+      expect(envio.text).toContain('El Clavo');
+      expect(envio.html).toContain('te envía tu factura electrónica');
       expect(envio.adjuntos[0].filename).toBe(`${documento.numeroCompleto}.zip`);
       const archivos = unzipSync(new Uint8Array(envio.adjuntos[0].content));
       expect(Object.keys(archivos).sort()).toEqual([`${documento.numeroCompleto}.pdf`, `${documento.numeroCompleto}.xml`]);

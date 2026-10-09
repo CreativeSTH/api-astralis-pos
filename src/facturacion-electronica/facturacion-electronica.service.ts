@@ -1355,6 +1355,14 @@ export class FacturacionElectronicaService {
       }
       const negocio = await this.negociosRepository.findOneOrFail({ where: { id: documento.negocioId } });
       const venta = await this.ventasRepository.findOne({ where: { id: documento.ventaId }, relations: { cliente: true } });
+      const correoFactura = construirCorreoFactura({
+        tipo: documento.tipo === 'NOTA_CREDITO' ? 'NOTA_CREDITO' : 'FACTURA',
+        nombreCliente: venta?.cliente?.nombre ?? documento.nombreCliente ?? 'cliente',
+        negocio: { nombre: negocio.nombre, logoUrl: negocio.logoUrl ?? null },
+        numero,
+        fecha: documento.fechaEmision ?? documento.createdAt ?? null,
+        total: Number(documento.total ?? 0),
+      });
       const resultado = await this.email.enviar({
         to: correo,
         subject: asuntoCorreoFactura({
@@ -1364,12 +1372,8 @@ export class FacturacionElectronicaService {
           tipoDocumento: codigoTipoDocumento(attachedDocument.toString('utf8')),
           nombreComercial: negocio.nombre,
         }),
-        html: construirCorreoFactura({
-          nombreCliente: venta?.cliente?.nombre ?? documento.nombreCliente ?? 'cliente',
-          nombreNegocio: negocio.nombre,
-          numero,
-          total: Number(documento.total ?? 0),
-        }).html,
+        html: correoFactura.html,
+        text: correoFactura.text,
         nombreRemitente: negocio.nombre,
         replyTo: negocio.email ?? undefined,
         adjuntos: [{ filename: `${numero}.zip`, content: zip, contentType: 'application/zip' }],

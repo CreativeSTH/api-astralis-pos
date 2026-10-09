@@ -485,7 +485,7 @@ describe('SuscripcionesService — aviso de cobro fallido', () => {
     await service.cobrarAutomatico();
 
     expect(emailService.enviar).toHaveBeenCalledWith(
-      expect.objectContaining({ subject: expect.stringContaining('bloqueada') }),
+      expect.objectContaining({ subject: expect.stringContaining('en pausa') }),
     );
   });
 
@@ -503,7 +503,7 @@ describe('SuscripcionesService — aviso de cobro fallido', () => {
     await service.cobrarAutomatico();
 
     expect(emailService.enviar).toHaveBeenCalledWith(
-      expect.objectContaining({ subject: 'No pudimos cobrar tu tarjeta' }),
+      expect.objectContaining({ subject: 'No pudimos cobrar tu plan Profesional' }),
     );
   });
 
@@ -944,10 +944,23 @@ describe('SuscripcionesService — enviarRecordatorios', () => {
     await service.enviarRecordatorios();
 
     expect(emailService.enviar).toHaveBeenCalledWith(
-      expect.objectContaining({ subject: expect.stringContaining('Hoy te cobramos') }),
+      expect.objectContaining({ subject: expect.stringContaining('Hoy renovamos tu plan') }),
     );
     const guardado = suscripcionesRepo.save.mock.calls.at(-1)![0];
     expect(guardado.recordatoriosEnviados).toContain('DIA_0');
+  });
+
+  it('en prueba sin tarjeta el recordatorio no habla de cobro', async () => {
+    suscripcionesRepo.find.mockResolvedValue([
+      { id: 'sus-1', negocioId: 'neg-1', paqueteId: 'pro-1', estado: 'PRUEBA', fechaFin: enDias(1), recordatoriosEnviados: [] },
+    ]);
+    medioPagoRepo.findOne.mockResolvedValue(null);
+
+    await service.enviarRecordatorios();
+
+    expect(emailService.enviar).toHaveBeenCalledWith(
+      expect.objectContaining({ subject: 'Tu prueba gratis de AURA termina mañana', text: expect.stringContaining('Elegir mi plan') }),
+    );
   });
 
   it('no manda nada si fechaFin no está a 2, 1 o 0 días', async () => {

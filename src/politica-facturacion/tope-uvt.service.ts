@@ -193,7 +193,11 @@ export class TopeUvtService {
       const estado =
         nivel === 100 ? await this.politica.estado(negocio.id) : null;
       const yaFacturaElectronica = estado?.modo === 'ELECTRONICA';
-      const { subject, html, mensajeAlerta } = construirAvisoTopeFacturacion({
+      const admin = await this.usuarios.findOne({
+        where: { negocioId: negocio.id, activo: true },
+        order: { createdAt: 'ASC' },
+      });
+      const { subject, html, text, mensajeAlerta } = construirAvisoTopeFacturacion({
         nivel,
         anio: medicion.anio,
         ingresos: medicion.ingresos,
@@ -203,6 +207,8 @@ export class TopeUvtService {
         fechaLimiteGracia: estado?.fechaLimiteGracia ?? null,
         linkFacturacion: `${process.env.FRONTEND_URL}/facturacion/electronica`,
         linkAyuda: `${process.env.LANDING_URL ?? 'https://somosaura.com.co'}/ayuda/por-que-estoy-obligado-a-facturar-electronicamente`,
+        nombre: admin?.nombre,
+        nombreNegocio: negocio.nombre,
       });
 
       const severidad =
@@ -217,12 +223,8 @@ export class TopeUvtService {
         mensajeAlerta,
       );
 
-      const admin = await this.usuarios.findOne({
-        where: { negocioId: negocio.id, activo: true },
-        order: { createdAt: 'ASC' },
-      });
       if (admin)
-        await this.emailService.enviar({ to: admin.email, subject, html });
+        await this.emailService.enviar({ to: admin.email, subject, html, text });
     } catch (error) {
       this.logger.error(
         `Error avisando el tope de UVT al negocio ${negocio.id}`,

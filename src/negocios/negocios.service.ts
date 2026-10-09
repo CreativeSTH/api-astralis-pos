@@ -160,8 +160,12 @@ export class NegociosService {
     }
 
     const linkVerificacion = `${process.env.FRONTEND_URL}/verificar-email?token=${tokenVerificacion}`;
-    const { subject, html } = construirCorreoConfirmacion(dto.adminNombre, linkVerificacion);
-    await this.emailService.enviar({ to: dto.adminEmail, subject, html });
+    const { subject, html, text } = construirCorreoConfirmacion({
+      nombre: dto.adminNombre,
+      nombreNegocio: dto.nombreNegocio,
+      linkVerificacion,
+    });
+    await this.emailService.enviar({ to: dto.adminEmail, subject, html, text });
 
     return { mensaje: 'Cuenta creada — revisá tu correo para confirmarla.' };
   }

@@ -45,3 +45,6 @@ temp
 
 # Worktrees locales de skills de desarrollo (no versionar)
 .worktrees/
+
+# Vista previa de correos (npm run correos:preview)
+/correos-preview

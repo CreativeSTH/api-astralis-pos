@@ -1,25 +1,44 @@
-const pesos = (valor: number) =>
-  new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(valor);
+import { fuerte, nota, parrafo, resumen } from '../diseno/bloques';
+import { fechaLarga, pesos } from '../diseno/formato';
+import { CorreoRenderizado, correoNegocio } from '../diseno/layout';
 
-const escapar = (texto: string) =>
-  texto.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-
-/** Correo al cliente final con su factura electrónica (el ZIP DIAN va adjunto). Cuerpo no reglamentado por la DIAN. */
-export function construirCorreoFactura(p: {
+export interface DatosCorreoFactura {
+  tipo: 'FACTURA' | 'NOTA_CREDITO';
   nombreCliente: string;
-  nombreNegocio: string;
+  negocio: { nombre: string; logoUrl?: string | null };
   numero: string;
+  fecha?: Date | string | null;
   total: number;
-}): { html: string } {
-  const negocio = escapar(p.nombreNegocio);
-  return {
-    html: `
-      <div style="font-family: Arial, sans-serif; color: #1f2937; max-width: 560px;">
-        <p>Hola ${escapar(p.nombreCliente)},</p>
-        <p><strong>${negocio}</strong> te envía tu factura electrónica <strong>${escapar(p.numero)}</strong> por <strong>${pesos(p.total)}</strong>.</p>
-        <p>En el archivo .zip adjunto encuentras el PDF de la factura y el XML validado por la DIAN. Guárdalos: son el soporte de tu compra.</p>
-        <p>Si tienes alguna pregunta sobre tu compra, responde este correo y le llegará a ${negocio}.</p>
-        <p style="color: #6b7280; font-size: 12px;">Enviado con AURA.</p>
-      </div>`,
-  };
+}
+
+/**
+ * Correo al cliente final con su factura electrónica o nota crédito; el ZIP DIAN va adjunto.
+ * El asunto lo arma `asuntoCorreoFactura` (formato DIAN), no esta plantilla. Spec 2026-10-08 §5.6.
+ */
+export function construirCorreoFactura(d: DatosCorreoFactura): CorreoRenderizado {
+  const negocio = d.negocio.nombre;
+  const total = pesos(d.total);
+  const fecha = d.fecha ? fechaLarga(d.fecha) : null;
+  const esNota = d.tipo === 'NOTA_CREDITO';
+  return correoNegocio({
+    negocio: d.negocio,
+    preheader: esNota
+      ? `Nota crédito ${d.numero} de ${negocio} por ${total}.`
+      : `Tu factura ${d.numero} de ${negocio} por ${total}.`,
+    bloques: [
+      parrafo(`Hola, ${d.nombreCliente.trim() || 'cliente'}.`),
+      esNota
+        ? parrafo(fuerte(negocio), ' te envía la nota crédito ', fuerte(d.numero), ' de tu devolución.')
+        : parrafo(fuerte(negocio), ' te envía tu factura electrónica.'),
+      resumen([
+        ['Número', d.numero],
+        ['Fecha', fecha],
+        [esNota ? 'Valor devuelto' : 'Total', total],
+      ]),
+      esNota
+        ? parrafo('En el .zip adjunto están el PDF y el XML validado por la DIAN.')
+        : parrafo('En el .zip adjunto están el PDF y el XML validado por la DIAN. Guárdalos: son el soporte de tu compra.'),
+      nota('Si tienes preguntas, responde este correo y le llegará a ', fuerte(negocio), '.'),
+    ],
+  });
 }

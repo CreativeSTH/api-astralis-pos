@@ -39,6 +39,13 @@ describe('EmailService', () => {
     );
   });
 
+  it('pasa la versión en texto plano', async () => {
+    process.env.RESEND_API_KEY = 're_test';
+    send.mockResolvedValue({ error: null });
+    await new EmailService().enviar({ to: 'a@b.co', subject: 's', html: 'h', text: 'texto plano' });
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ html: 'h', text: 'texto plano' }));
+  });
+
   it('un error de Resend se devuelve, no se lanza', async () => {
     process.env.RESEND_API_KEY = 're_test';
     send.mockResolvedValue({ error: { message: 'domain not verified' } });

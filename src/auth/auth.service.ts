@@ -208,8 +208,15 @@ export class AuthService {
     await this.usuariosRepository.save(usuario);
 
     const linkVerificacion = `${process.env.FRONTEND_URL}/verificar-email?token=${usuario.tokenVerificacion}`;
-    const { subject, html } = construirCorreoConfirmacion(usuario.nombre, linkVerificacion);
-    await this.emailService.enviar({ to: usuario.email, subject, html });
+    const negocio = usuario.negocioId
+      ? await this.negociosRepository.findOne({ where: { id: usuario.negocioId } })
+      : null;
+    const { subject, html, text } = construirCorreoConfirmacion({
+      nombre: usuario.nombre,
+      nombreNegocio: negocio?.nombre,
+      linkVerificacion,
+    });
+    await this.emailService.enviar({ to: usuario.email, subject, html, text });
   }
 
   private async emitirSesion(usuario: Usuario) {

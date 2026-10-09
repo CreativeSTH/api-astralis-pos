@@ -57,6 +57,21 @@ describe('construirAvisoTopeFacturacion', () => {
     expect(mensajeAlerta).not.toContain('40 días');
   });
 
+  it('mismo mensaje de la campana, con resumen de ventas, tope y porcentaje', () => {
+    const { html, text } = construirAvisoTopeFacturacion({ ...base, nombre: 'Ana', nombreNegocio: 'Mi Tienda' });
+    expect(html).toContain('Hola, Ana.');
+    expect(html).toContain('Ventas 2026 en AURA');
+    expect(html).toContain('72 %');
+    expect(html).toContain('administras Mi Tienda en AURA');
+    expect(text).toContain(`Ver facturación electrónica: ${base.linkFacturacion}`);
+  });
+
+  it('100 sin facturación electrónica muestra la fecha límite en el resumen', () => {
+    const { html } = construirAvisoTopeFacturacion({ ...base, nivel: 100, porcentaje: 101.3, fechaLimiteGracia: '2026-11-07' });
+    expect(html).toContain('Fecha límite para activarla');
+    expect(html).toContain('7 de noviembre de 2026');
+  });
+
   it('incluye el enlace al artículo de ayuda en el correo (no en el mensaje de la campana)', () => {
     const { html, mensajeAlerta } = construirAvisoTopeFacturacion(base);
     expect(html).toContain(base.linkAyuda);
